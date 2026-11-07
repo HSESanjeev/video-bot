@@ -520,6 +520,16 @@ def chunk_times(text, speech_dur, scene_dur):
 
 # --------------------------------------------------------------------------- visuals
 _last_polli = [0.0]
+IMG_FAILS = {}
+
+
+def note_fail(provider, why):
+    key = f"{provider}: {why}"
+    IMG_FAILS[key] = IMG_FAILS.get(key, 0) + 1
+
+
+def fail_summary():
+    return "; ".join(f"{k} x{v}" for k, v in IMG_FAILS.items()) or "no details"
 
 
 def fit_image(raw_bytes, out_png):
@@ -542,18 +552,25 @@ def img_pollinations(prompt, out):
         time.sleep(wait - gap)
     url = f"https://image.pollinations.ai/prompt/{quote(prompt[:450], safe='')}"
     headers = {"Authorization": f"Bearer {POLLI_KEY}"} if POLLI_KEY else {}
-    for a in range(3):
+    for a in range(4):
         _last_polli[0] = time.time()
-        r = requests.get(url, headers=headers, timeout=150,
-                         params={"width": 1280, "height": 720, "model": "flux", "nologo": "true",
-                                 "seed": random.randint(1, 10**6)})
-        if r.status_code == 429:
-            time.sleep(20 * (a + 1))
+        try:
+            r = requests.get(url, headers=headers, timeout=150,
+                             params={"width": 1280, "height": 720, "model": "flux", "nologo": "true",
+                                     "seed": random.randint(1, 10**6)})
+        except requests.RequestException as e:
+            note_fail("pollinations", type(e).__name__)
+            time.sleep(15)
             continue
         if r.ok and r.headers.get("content-type", "").startswith("image"):
-            fit_image(r.content, out)
-            return True
-        time.sleep(5)
+            try:
+                fit_image(r.content, out)
+                return True
+            except Exception:  # noqa
+                note_fail("pollinations", "unreadable image")
+        else:
+            note_fail("pollinations", f"HTTP {r.status_code}")
+        time.sleep(min(60, 20 * (a + 1)))
     return False
 
 
@@ -564,12 +581,14 @@ def img_cloudflare(prompt, out):
     r = requests.post(url, headers={"Authorization": f"Bearer {CF_TOKEN}"},
                       json={"prompt": prompt[:2000], "steps": 6}, timeout=120)
     if not r.ok:
+        note_fail("cloudflare", f"HTTP {r.status_code}")
         return False
     if r.headers.get("content-type", "").startswith("image"):
         fit_image(r.content, out)
         return True
     b64 = (r.json().get("result") or {}).get("image")
     if not b64:
+        note_fail("cloudflare", "no image in reply")
         return False
     fit_image(base64.b64decode(b64), out)
     return True
@@ -599,6 +618,7 @@ def gen_image(prompt, out, fallback_query=""):
                     log("  (image fallback: pexels photo)")
                 return True
         except Exception as e:  # noqa
+            note_fail(name, type(e).__name__)
             log(f"  image source {name} failed: {type(e).__name__}: {str(e)[:120]}")
     return False
 
@@ -967,7 +987,8 @@ def pipeline():
         if i % 5 == 0:
             log(f"visuals {i + 1}/{len(scenes)} (failed so far: {failed})")
     if failed > len(scenes) * 0.35:
-        raise RuntimeError(f"too many scenes without fresh visuals ({failed}/{len(scenes)}); not publishing junk")
+        raise RuntimeError(f"too many scenes without fresh visuals ({failed}/{len(scenes)}); not publishing junk. "
+                           f"Image problems: {fail_summary()}")
 
     silent = build_video(scenes, WORK / "build")
     music = WORK / "music.wav"
