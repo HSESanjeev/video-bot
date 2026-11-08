@@ -858,24 +858,33 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
     im.save(out_png)
 
 
+CF_STATE = {"dead": False, "used": 0}
+MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "30"))
+
+
 def img_cloudflare(prompt, out, size=(1920, 1080)):
-    if not (CF_ACCOUNT and CF_TOKEN):
+    if not (CF_ACCOUNT and CF_TOKEN) or CF_STATE["dead"]:
         return False
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT}/ai/run/@cf/black-forest-labs/flux-1-schnell"
     for a in range(3):
         try:
             r = requests.post(url, headers={"Authorization": f"Bearer {CF_TOKEN}"},
-                              json={"prompt": prompt[:2000], "steps": 5}, timeout=120)
+                              json={"prompt": prompt[:2000], "steps": 4}, timeout=120)
         except requests.RequestException as e:
             note_fail("cloudflare", type(e).__name__)
             time.sleep(8)
             continue
+        body = re.sub(r"\s+", " ", r.text or "")[:150]
+        if r.status_code == 429 and re.search(r"daily|neuron|allocation|quota|4006", body, re.I):
+            CF_STATE["dead"] = True
+            note_fail("cloudflare", "DAILY FREE LIMIT OVER (resets 05:30 AM IST): " + body[:90])
+            return False
         if r.status_code in (429, 500, 502, 503, 504):
-            note_fail("cloudflare", f"HTTP {r.status_code}")
+            note_fail("cloudflare", f"HTTP {r.status_code} {body[:90]}")
             time.sleep(15 * (a + 1))
             continue
         if not r.ok:
-            note_fail("cloudflare", f"HTTP {r.status_code}")
+            note_fail("cloudflare", f"HTTP {r.status_code} {body[:90]}")
             return False
         if r.headers.get("content-type", "").startswith("image"):
             fit_image(r.content, out, size)
@@ -2453,8 +2462,12 @@ def make_visuals(scenes, imgdir):
     for i, sc in enumerate(scenes):
         if sc["type"] == "photo":
             for k, sh in enumerate(sc["shots"]):
-                requested += 1
                 p = imgdir / f"{i:03d}_s{k}.png"
+                if prev_img and CF_STATE["used"] >= MAX_IMAGES:
+                    sh["image"] = prev_img  # free-quota saver: reuse the previous picture with a new camera move
+                    continue
+                requested += 1
+                CF_STATE["used"] += 1
                 if gen_image(sh["prompt_en"], p, "photo"):
                     sh["image"] = p
                     prev_img = p
