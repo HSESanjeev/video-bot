@@ -8,10 +8,10 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: "full = make a video, check = health check only"
+        description: "full = make a video, check = health check, voices = send voice samples"
         default: "full"
         type: choice
-        options: [full, check]
+        options: [full, check, voices]
 
 permissions:
   contents: write
@@ -36,7 +36,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y ffmpeg fonts-noto-core libraqm0 libfribidi0
-          pip install -r requirements.txt
+          pip install -r requirements.txt numpy scipy
           ffmpeg -version | head -1
           # nicer Hindi fonts (free, Google Fonts). If a download fails the bot uses the Noto font instead.
           mkdir -p fonts
@@ -68,12 +68,14 @@ jobs:
         run: |
           if [ "${{ github.event.inputs.mode }}" = "check" ]; then
             python bot.py --check
+          elif [ "${{ github.event.inputs.mode }}" = "voices" ]; then
+            python bot.py --voices
           else
             python bot.py
           fi
 
       - name: Keep a copy of the video for 3 days
-        if: success() && github.event.inputs.mode != 'check'
+        if: success() && github.event.inputs.mode != 'check' && github.event.inputs.mode != 'voices'
         uses: actions/upload-artifact@v4
         with:
           name: video
@@ -82,7 +84,7 @@ jobs:
           if-no-files-found: ignore
 
       - name: Save progress (so topics never repeat)
-        if: success() && github.event.inputs.mode != 'check'
+        if: success() && github.event.inputs.mode != 'check' && github.event.inputs.mode != 'voices'
         run: |
           git config user.name "video-bot"
           git config user.email "video-bot@users.noreply.github.com"
