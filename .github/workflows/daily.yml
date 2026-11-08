@@ -38,6 +38,13 @@ jobs:
           sudo apt-get install -y ffmpeg fonts-noto-core libraqm0 libfribidi0
           pip install -r requirements.txt
           ffmpeg -version | head -1
+          # nicer Hindi fonts (free, Google Fonts). If a download fails the bot uses the Noto font instead.
+          mkdir -p fonts
+          B=https://raw.githubusercontent.com/google/fonts/main/ofl
+          for f in mukta/Mukta-ExtraBold.ttf mukta/Mukta-Bold.ttf yatraone/YatraOne-Regular.ttf khand/Khand-Bold.ttf; do
+            curl -fsSL --retry 2 -o "fonts/$(basename $f)" "$B/$f" || echo "font $f not downloaded"
+          done
+          ls -la fonts
 
       - name: Run bot
         env:
@@ -53,6 +60,8 @@ jobs:
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
           FB_PAGE_ID: ${{ secrets.FB_PAGE_ID }}
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
+          TTS_PROVIDER: ${{ vars.TTS_PROVIDER || 'auto' }}
+          GEMINI_VOICE: ${{ vars.GEMINI_VOICE || 'Charon' }}
           # telegram = video comes to you on Telegram (safe default)
           # youtube  = bot uploads to YouTube as private (only after YouTube API audit passes)
           UPLOAD_MODE: ${{ vars.UPLOAD_MODE || 'telegram' }}
