@@ -189,13 +189,13 @@ def gemini(prompt, json_mode=False, temperature=0.8, search=False):
         body["tools"] = [{"google_search": {}}]
     last = None
     for model in gemini_models():
-        for attempt in range(3):
+        for attempt in range(2):
             try:
                 r = requests.post(f"{GBASE}/models/{model}:generateContent",
                                   headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=240)
                 if r.status_code in (429, 500, 503):
                     last = f"{model} HTTP {r.status_code}"
-                    time.sleep(25 * (attempt + 1))
+                    time.sleep(15 * (attempt + 1))
                     continue
                 if r.status_code in (400, 403, 404):
                     last = f"{model} HTTP {r.status_code}: {r.text[:300]}"
@@ -770,7 +770,7 @@ def text_layer(text, font, fill=(255, 255, 255), fill2=None, stroke=0, stroke_fi
     bb = probe.multiline_textbbox((0, 0), text, font=font, stroke_width=stroke, spacing=spacing, align=align)
     ex = extrude[0] if extrude else 0
     pad = stroke + 6 + ex + (int(shadow[2] * 2 + abs(shadow[0]) + abs(shadow[1])) if shadow else 0)
-    w, h = bb[2] - bb[0] + 2 * pad, bb[3] - bb[1] + 2 * pad
+    w, h = int(math.ceil(bb[2] - bb[0])) + 2 * pad, int(math.ceil(bb[3] - bb[1])) + 2 * pad
     ox, oy = pad - bb[0], pad - bb[1]
     layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
     outline = None
