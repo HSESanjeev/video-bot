@@ -877,7 +877,7 @@ def img_cloudflare(prompt, out, size=(1920, 1080)):
         body = re.sub(r"\s+", " ", r.text or "")[:150]
         if r.status_code == 429 and re.search(r"daily|neuron|allocation|quota|4006", body, re.I):
             CF_STATE["dead"] = True
-            note_fail("cloudflare", "DAILY FREE LIMIT OVER (resets 05:30 AM IST): " + body[:90])
+            note_fail("cloudflare", "LIMIT MESSAGE FROM CLOUDFLARE: " + re.sub(r"\s+", " ", r.text or "")[:420])
             return False
         if r.status_code in (429, 500, 502, 503, 504):
             note_fail("cloudflare", f"HTTP {r.status_code} {body[:90]}")
@@ -2644,9 +2644,9 @@ def check():
 
     def t(name, fn):
         try:
-            res.append((name, True, str(fn() or "ok")[:90]))
+            res.append((name, True, str(fn() or "ok")[:300]))
         except Exception as e:  # noqa
-            res.append((name, False, f"{type(e).__name__}: {str(e)[:110]}"))
+            res.append((name, False, f"{type(e).__name__}: {str(e)[:600]}"))
 
     t("ffmpeg", lambda: run(["ffmpeg", "-version"]).stdout.splitlines()[0])
     t("hindi-shaping(raqm)", lambda: "ok" if features.check("raqm") else (_ for _ in ()).throw(RuntimeError("raqm missing: Hindi letters will break")))
