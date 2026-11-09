@@ -57,6 +57,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-09T16:45:13+00:00",
+   "topic_en": "Why did Mammoths go extinct while other animals survived?",
+   "title_hi": "मैमथ क्यों विलुप्त हुए और बाकी जानवर क्यों बच गए?",
+   "category": "extinct_life",
+   "style": "b",
+   "theme": "mint",
+   "mood": "wonder",
+   "seconds": 64,
+   "voice": "edge (Gemini voice f",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
