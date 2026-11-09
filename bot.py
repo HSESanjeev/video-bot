@@ -48,7 +48,7 @@ WPM_FILE = STATE / "wpm.json"
 
 W, H, FPS = 1280, 720, 30
 VOICE = os.environ.get("TTS_VOICE", "hi-IN-MadhurNeural")
-TTS_RATE = os.environ.get("TTS_RATE", "-8%")
+TTS_RATE = os.environ.get("TTS_RATE", "+6%")
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "auto").strip().lower()  # auto | gemini | edge
 GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 GEMINI_TTS_MODELS = [m for m in os.environ.get(
@@ -58,7 +58,7 @@ WPM = float(os.environ.get("WPM_ESTIMATE", "130"))  # spoken Hindi words per min
 MIN_SEC, MAX_SEC = 180, 300
 TEST_SEC = int(os.environ.get("TEST_SECONDS", "0") or 0)  # >0 = short test video of about this many seconds
 UPLOAD_MODE = os.environ.get("UPLOAD_MODE", "telegram").strip().lower()
-SCENE_GAP = 0.30
+SCENE_GAP = 0.18
 HOOK_GAP = 0.70
 SFX_ON = os.environ.get("SFX", "0") == "1"  # sound effects are off by default
 ALLOW_POLLI = os.environ.get("ALLOW_POLLINATIONS", "") == "1"  # watermarked + very slow, off by default
@@ -322,7 +322,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) when the phrase names a NEW thing (an animal, object, place, event, person, process), give it a new "prompt_en" showing exactly that thing (one clear subject, cinematic, no text in the image); (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part; never keep a picture on screen after the narrator moved to something else. Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
+- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
@@ -551,11 +551,11 @@ def rescale_script(script, target_words):
 
 # --------------------------------------------------------------------------- voice
 TONES = {
-    "suspense": ("-14%", "-8Hz", "slow, hushed and suspenseful, building curiosity, with dramatic pauses"),
-    "wonder": ("-6%", "+2Hz", "full of awe and wonder, warm and expressive"),
-    "serious": ("-8%", "-3Hz", "serious, deep and authoritative"),
-    "excited": ("-2%", "+4Hz", "energetic and excited, revealing something amazing"),
-    "calm": ("-10%", "-2Hz", "calm, gentle and friendly, explaining clearly"),
+    "suspense": ("+2%", "-2Hz", "intense, urgent and gripping, building curiosity fast, punchy emphasis on key words"),
+    "wonder": ("+8%", "+4Hz", "bursting with awe and excitement, bright, lively and expressive"),
+    "serious": ("+4%", "+0Hz", "strong, confident and dramatic, driving the story forward"),
+    "excited": ("+14%", "+6Hz", "highly energetic and thrilled, fast, revealing something amazing"),
+    "calm": ("+5%", "+2Hz", "upbeat, friendly and lively, explaining clearly with energy"),
 }
 
 
@@ -591,7 +591,7 @@ def tts_gemini(text, out_path, tone=None):
     if gap < GEMINI_TTS_GAP:
         time.sleep(GEMINI_TTS_GAP - gap)
     style = TONES.get(tone or "", TONES["calm"])[2]
-    prompt = (f"Say in a deep, warm, confident male voice, like a premium Hindi nature-documentary narrator, "
+    prompt = (f"Say in an ENERGETIC, enthusiastic, high-energy male voice with a fast lively pace, like a top Hindi YouTube storyteller who is excited about every fact, "
               f"{style}, with natural pauses at commas and full stops: {text}")
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
@@ -1841,6 +1841,8 @@ def shot_frame(shot, tl):
         cx, cy = min(0.5 + m, max(0.5 - m, cx)), min(0.5 + m, max(0.5 - m, cy))
     else:
         z, cx, cy = cam_state(shot["cam"], p, tl)
+    if tl < 0.3 and shot["cam"] != "focus":
+        z *= 1 + 0.10 * (1 - e_out(tl / 0.3))  # quick punch-in on the beat the word is spoken
     fr = src.resize((W, H), Image.BILINEAR, box=crop_box(z, cx, cy))
     if shot.get("par"):
         fg = src.resize((W, H), Image.BILINEAR, box=crop_box(z * (1 + 0.07 * p), cx, cy))
