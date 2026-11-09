@@ -859,17 +859,23 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
 
 
 CF_STATE = {"dead": False, "used": 0}
-MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "30"))
+MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "16"))
 
 
-def img_cloudflare(prompt, out, size=(1920, 1080)):
+def img_cloudflare(prompt, out, size=(1920, 1080), dims=None):
     if not (CF_ACCOUNT and CF_TOKEN) or CF_STATE["dead"]:
         return False
     url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT}/ai/run/@cf/black-forest-labs/flux-1-schnell"
     for a in range(3):
         try:
-            r = requests.post(url, headers={"Authorization": f"Bearer {CF_TOKEN}"},
-                              json={"prompt": prompt[:2000], "steps": 4}, timeout=120)
+            payload = {"prompt": prompt[:2000], "steps": 4}
+            if dims and not CF_STATE.get("nosize"):
+                payload["width"], payload["height"] = dims  # smaller picture = fewer neurons of the free quota
+            r = requests.post(url, headers={"Authorization": f"Bearer {CF_TOKEN}"}, json=payload, timeout=120)
+            if r.status_code in (400, 422) and "width" in payload:
+                CF_STATE["nosize"] = True
+                payload.pop("width"), payload.pop("height")
+                r = requests.post(url, headers={"Authorization": f"Bearer {CF_TOKEN}"}, json=payload, timeout=120)
         except requests.RequestException as e:
             note_fail("cloudflare", type(e).__name__)
             time.sleep(8)
@@ -939,7 +945,8 @@ def gen_image(prompt, out, kind="photo", fallback_query=""):
     suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB}[kind]
     size = (1080, 1080) if kind == "card" else (1920, 1080)
     full = f"{prompt}, {suffix}"
-    chain = [("cloudflare", lambda: img_cloudflare(full, out, size))]
+    dims = {"photo": (1024, 576), "thumb": (1024, 576), "card": (512, 512)}[kind]
+    chain = [("cloudflare", lambda: img_cloudflare(full, out, size, dims))]
     if ALLOW_POLLI:
         chain.append(("pollinations", lambda: img_pollinations(full, out, size)))
     if kind != "card":
