@@ -56,9 +56,11 @@ GEMINI_TTS_MODELS = [m for m in os.environ.get(
 GEMINI_TTS_GAP = float(os.environ.get("GEMINI_TTS_GAP", "4"))
 WPM = float(os.environ.get("WPM_ESTIMATE", "130"))  # spoken Hindi words per minute (default estimate)
 MIN_SEC, MAX_SEC = 180, 300
+TEST_SEC = int(os.environ.get("TEST_SECONDS", "0") or 0)  # >0 = short test video of about this many seconds
 UPLOAD_MODE = os.environ.get("UPLOAD_MODE", "telegram").strip().lower()
 SCENE_GAP = 0.30
 HOOK_GAP = 0.70
+SFX_ON = os.environ.get("SFX", "0") == "1"  # sound effects are off by default
 ALLOW_POLLI = os.environ.get("ALLOW_POLLINATIONS", "") == "1"  # watermarked + very slow, off by default
 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -320,7 +322,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. Give 2-3 "shots": split the scene narration into 2-3 consecutive parts ("text_hi", together EXACTLY the scene narration) and give each part its own "prompt_en" showing precisely what that part says (one clear subject, cinematic). The picture changes about every 3-5 seconds (roughly 8-12 words). Optional "headline_hi" (2-4 Hindi words) shown as a chapter label when a new section starts.
+- "photo": a cinematic full-screen picture with camera movement. Give 2-3 "shots": split the scene narration into 2-3 consecutive parts ("text_hi", together EXACTLY the scene narration) and give each part its own "prompt_en" showing precisely what that part says (one clear subject, cinematic). The picture changes every 2-4 seconds (roughly 6-10 words), so give 2-4 shots. Whatever the narrator says must APPEAR on screen at that moment: the exact animal, object, place or event named in that part of the sentence. Each shot may also have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) shown as a chapter label when a new section starts.
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
@@ -331,21 +333,26 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 Use an explainer/data type (merge, split, steps, compare, counter, bars) for AT LEAST 40% of the scenes wherever the topic has a cause->effect, combination, breakup, sequence, comparison or a striking number. Include at least 2 "kinetic" scenes. Use "photo" for the hook, atmosphere, scale and the closing scene.
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
 Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in any picture, no real people.
+Every scene also has "grade" (colour grading that fits the scene: warm for fire/desert/sunrise/early Earth, cool for ocean/ice/night/space, cinematic for dramatic reveals, vivid for lively nature and animals, dark for danger and mystery, natural for calm facts) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
 "mood" of the whole video's background music: one of mystery, epic, wonder, calm, tense, life, space.
 """
 
+GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural"]
+TRANS_NAMES = ["fade", "zoom", "whip", "wipe", "circle", "flash", "cut"]
+TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
 MOOD_NAMES = ["mystery", "epic", "wonder", "calm", "tense", "life", "space"]
 TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
 
 
 def build_script_prompt(topic, cat, style, target_sec, facts, words):
-    n_scenes = max(14, round(words / 21))
+    n_scenes = max(5 if TEST_SEC else 14, round(words / 21))
+    test_note = ("\nTEST MODE: this is a very short test video. Use only about 5-6 scenes, a hook of 15-18 words, no long recap. "
+                 "Ignore the minimum counts below but include at least one explainer scene (merge/split/steps/compare/counter/bars) and one kinetic scene.\n") if TEST_SEC else ""
     return f"""You are a script writer and film editor for a Hindi nature & science explainer YouTube channel.
 TOPIC: {topic}
 CATEGORY: {cat}
 STRUCTURE STYLE: {style[1]}
-TARGET: about {words} Hindi words of narration in total ({target_sec} seconds), around {n_scenes} scenes.
-
+TARGET: about {words} Hindi words of narration in total ({target_sec} seconds), around {n_scenes} scenes.{test_note}
 {SCRIPT_RULES}
 
 VERIFIED FACTS TO PREFER (may be empty):
@@ -355,8 +362,8 @@ Return ONLY JSON in exactly this shape:
 {{
  "title_hi": "Hindi title, max 60 characters, curious but TRUTHFUL, no clickbait lies",
  "mood": "wonder",
- "thumb_text_hi": "3-5 powerful Hindi words for the thumbnail",
- "thumb_sub_hi": "a short Hindi line under the headline, 2-5 words (e.g. 4 अरब साल पहले...)",
+ "thumb_text_hi": "3-5 Hindi words that create a CURIOSITY GAP: a shocking true claim or an unanswered question that makes the viewer need to click to learn the answer; never reveal the answer, never a lie",
+ "thumb_sub_hi": "a short Hindi teaser line, 2-5 words, that adds intrigue without spoiling (e.g. जवाब चौंका देगा / 4 अरब साल पहले...)",
  "thumb_badge_hi": "one short Hindi word like रहस्य / सच / विज्ञान",
  "thumb_prompt_en": "one striking, dramatic hero subject for the thumbnail (a single subject, glowing, cinematic)",
  "thumb_prompt2_en": "the contrasting counterpart for a then/now thumbnail (e.g. molten young Earth vs today's blue Earth); empty string if the topic has no natural contrast",
@@ -364,8 +371,8 @@ Return ONLY JSON in exactly this shape:
  "description_hi": "3-4 short Hindi lines telling what the viewer will learn",
  "tags": ["8-12 tags mixing Hindi and English"],
  "scenes": [
-  {{"narration_hi": "...", "type": "photo", "tone": "suspense", "headline_hi": "",
-    "shots": [{{"text_hi": "first part of the narration", "prompt_en": "..."}}, {{"text_hi": "second part", "prompt_en": "..."}}]}},
+  {{"narration_hi": "...", "type": "photo", "tone": "suspense", "grade": "dark", "transition": "fade", "headline_hi": "",
+    "shots": [{{"text_hi": "first part of the narration", "prompt_en": "...", "label_hi": "key word"}}, {{"text_hi": "second part", "prompt_en": "...", "label_hi": ""}}]}},
   {{"narration_hi": "...", "type": "merge", "tone": "wonder", "headline_hi": "...",
     "items": [{{"label_hi": "...", "prompt_en": "..."}}, {{"label_hi": "...", "prompt_en": "..."}}, {{"label_hi": "...", "prompt_en": "..."}}]}},
   {{"narration_hi": "...", "type": "counter", "tone": "excited", "headline_hi": "...", "counter": {{"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "..."}}}},
@@ -398,7 +405,7 @@ def to_num(x, default=None):
 
 
 def validate_script(s):
-    if not isinstance(s, dict) or not isinstance(s.get("scenes"), list) or len(s["scenes"]) < 8:
+    if not isinstance(s, dict) or not isinstance(s.get("scenes"), list) or len(s["scenes"]) < (4 if TEST_SEC else 8):
         raise ValueError("script has too few scenes")
     for idx, sc in enumerate(s["scenes"]):
         sc["narration_hi"] = clean_narration(sc.get("narration_hi", ""))
@@ -449,20 +456,26 @@ def validate_script(s):
                 typ = "photo"
         else:
             typ = "photo"
+        gr = str(sc.get("grade") or "").lower().strip()
+        sc["grade"] = gr if gr in GRADES else TONE_GRADE.get(sc["tone"], "natural")
+        tr = str(sc.get("transition") or "").lower().strip()
+        sc["transition"] = tr if tr in TRANS_NAMES else ""
         if idx == 0:
             typ = "photo"
             sc["tone"] = "suspense"
+            sc["transition"] = "fade"
         sc["type"] = typ
         sc["headline_hi"] = clean_short(sc.get("headline_hi"), 36) if typ != "kinetic" else ""
         base_prompt = clean_short(sc.get("image_prompt_en"), 400)
         shots = []
         for sh in (sc.get("shots") or []):
             if isinstance(sh, dict) and str(sh.get("prompt_en") or "").strip():
-                shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh["prompt_en"], 400)})
+                shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh["prompt_en"], 400),
+                              "label_hi": clean_short(sh.get("label_hi"), 18)})
         if typ == "photo":
             if not shots:
-                shots = [{"text_hi": sc["narration_hi"], "prompt_en": base_prompt or "a dramatic wide nature landscape"}]
-            shots = shots[:4]
+                shots = [{"text_hi": sc["narration_hi"], "prompt_en": base_prompt or "a dramatic wide nature landscape", "label_hi": ""}]
+            shots = shots[:5]
             nw = len(sc["narration_hi"].split())
             sw = sum(len(x["text_hi"].split()) for x in shots)
             if len(shots) > 1 and (abs(sw - nw) > max(2, 0.15 * nw) or any(not x["text_hi"] for x in shots)):
@@ -509,7 +522,7 @@ Improve this explainer-video script JSON:
 - Replace difficult words with simple ones; make sure a 15-year-old understands everything on first listen.
 - Keep scene 1 a truthful suspense hook (25-30 words, type "photo") that does not reveal the answer.
 - Check that every picture matches the words spoken at that moment (each shot's prompt_en must show exactly what its text_hi says; a merge scene must really show A and B combining into the result named in the narration; counter/bars numbers must be correct and round). Fix types/items/labels/headlines/shots where they do not teach.
-- Keep at least 40% of scenes as merge/split/steps/compare/counter/bars and at least 2 kinetic scenes.
+- Keep many scenes as merge/split/steps/compare/counter/bars (about 40%) and kinetic scenes, and a grade + transition on every scene. Every shot must show what is spoken at that moment.
 - Keep roughly the same number of scenes (+/-2) and total narration length (+/-10%, now about {word_count(script)} words).
 - Keep numbers in narration written in Hindi words, no English letters in narration, keep every field and the exact JSON shape.
 Return ONLY the improved JSON.
@@ -710,6 +723,7 @@ FONT_NAMES = {
     "label": ["Mukta-ExtraBold.ttf", "Hind-Bold.ttf", "Mukta-Bold.ttf"],
     "head": ["YatraOne-Regular.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
     "title": ["Khand-Bold.ttf", "YatraOne-Regular.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
+    "thumb": ["RozhaOne-Regular.ttf", "Khand-Bold.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
 }
 SYS_FONTS = [
     "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
@@ -811,7 +825,7 @@ def text_layer(text, font, fill=(255, 255, 255), fill2=None, stroke=0, stroke_fi
     return Image.alpha_composite(layer, f)
 
 
-def chunk_words(text, n=5):
+def chunk_words(text, n=4):
     w = text.split()
     ch = [" ".join(w[i:i + n]) for i in range(0, len(w), n)]
     if len(ch) > 1 and len(ch[-1].split()) <= 1:
@@ -1332,10 +1346,14 @@ def soft_circle(r, color, alpha):
 
 
 def glow_sprite(size, color, alpha):
-    g = ImageOps.invert(Image.radial_gradient("L")).resize((size, size)).point(lambda v: int(v * alpha))
-    s = Image.new("RGBA", (size, size), tuple(color) + (255,))
-    s.putalpha(g)
-    return s
+    np = _np()
+    c = size / 2.0
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    d = np.sqrt(((xx - c) / c) ** 2 + ((yy - c) / c) ** 2)
+    a = (np.clip(1 - d, 0, 1) ** 1.8 * alpha * 255).astype(np.uint8)
+    sp = Image.new("RGBA", (size, size), tuple(color) + (255,))
+    sp.putalpha(Image.fromarray(a))
+    return sp
 
 
 CARD = 300
@@ -1457,7 +1475,7 @@ def make_explainer(sc, dur, pal, events):
     rnd = random.Random(hash(sc["narration_hi"]) & 0xFFFF)
     cards = [make_card(it.get("image"), it["label_hi"], pal) for it in sc["items"]]
     typ = sc["type"]
-    cy = 348
+    cy = 335
     fl = lambda t, ph: 5.0 * math.sin(t * 2.0 + ph)  # noqa
     actors, fx = [], []
 
@@ -1871,14 +1889,35 @@ def draw_sub(frame, items, t):
 
 
 # ---- scene drawers: each returns draw(t) -> PIL frame (before subtitles / scene transition)
-def graded_image(ctx, path):
-    if path not in ctx["imgs"]:
+def apply_grade(im, grade):
+    """Scene colour grading: warm / cool / cinematic (teal-orange) / vivid / dark / natural."""
+    np = _np()
+    sat = {"vivid": 1.35, "natural": 1.1, "warm": 1.15, "cool": 1.1, "cinematic": 1.2, "dark": 0.92}.get(grade, 1.1)
+    im = ImageEnhance.Contrast(ImageEnhance.Color(im).enhance(sat)).enhance(1.06)
+    if grade in ("warm", "cool", "cinematic", "dark"):
+        a = np.asarray(im, dtype=np.float32)
+        if grade == "warm":
+            a[..., 0] *= 1.08
+            a[..., 2] *= 0.88
+        elif grade == "cool":
+            a[..., 0] *= 0.90
+            a[..., 2] *= 1.10
+        elif grade == "cinematic":
+            lum = a.mean(2, keepdims=True) / 255.0
+            a = a + (1 - lum) ** 2 * np.array([-14, 6, 16], dtype=np.float32) + lum ** 2 * np.array([16, 6, -14], dtype=np.float32)
+        else:
+            a = (a * 0.84 - 128) * 1.14 + 128
+        im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+    return im
+
+
+def graded_image(ctx, path, grade="natural"):
+    key = (path, grade)
+    if key not in ctx["imgs"]:
         im = Image.open(path).convert("RGB")
         im = ImageOps.fit(im, (SW, SH), Image.LANCZOS)
-        im = ImageEnhance.Color(im).enhance(1.12)
-        im = ImageEnhance.Contrast(im).enhance(1.06)
-        ctx["imgs"][path] = im
-    return ctx["imgs"][path]
+        ctx["imgs"][key] = apply_grade(im, grade)
+    return ctx["imgs"][key]
 
 
 def pick_cam(ctx):
@@ -1905,10 +1944,9 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
         for j in range(n):
             cam = "push" if (not shots) else pick_cam(ctx)
             first_of_img = (j == 0)
-            trans = "none" if not shots else (rnd.choice(["fade", "zoom", "whip", "wipe", "circle"] +
-                                                         (["glitch"] if tone == "suspense" else []))
+            trans = "none" if not shots else (rnd.choice(["fade", "fade", "zoom", "wipe", "whip"])
                                               if first_of_img else "zoom")
-            shots.append({"img": graded_image(ctx, s["image"]), "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd,
+            shots.append({"img": graded_image(ctx, s["image"], sc.get("grade", "natural")), "label": (s.get("label_hi") or "") if j == 0 else "", "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd,
                           "cam": cam, "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
                           "focus": (not shots), "trans": trans, "tdur": 0.3 if trans == "fade" else 0.42,
                           "phase": rnd.uniform(0, 6)})
@@ -1920,6 +1958,8 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     shots = build_shots(sc, dur, speech_dur, ctx, sc.get("tone"))
     dust = Dust(ctx["rnd"].random())
     lt = lower_third(sc["headline_hi"], pal) if sc.get("headline_hi") else None
+    for sh in shots:
+        sh["lab"] = lower_third(sh["label"], pal) if sh.get("label") else None
     for sh in shots[1:]:
         nm, g = TRANS_SFX.get(sh["trans"], (None, 0))
         if nm:
@@ -1942,6 +1982,11 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             fr = blend_trans(ends[idx - 1], fr, tl / sh["tdur"], sh["trans"])
         fr = fx_apply(fr, t, int(t * FPS), sh["phase"])
         dust.draw(fr, t)
+        if sh.get("lab") is not None and 0.2 < tl < min(sh["dur"] - 0.15, 3.2):
+            lq = e_back((tl - 0.2) / 0.45)
+            lo = 1 - cl((tl - (min(sh["dur"] - 0.15, 3.2) - 0.3)) / 0.3)
+            lab = sh["lab"]
+            put(fr, lab, 60 + lab.width / 2 - (1 - cl(lq)) * 380, H - 190, 1.0, cl((tl - 0.2) * 5) * lo)
         if lt is not None:
             q = e_back((t - 0.2) / 0.5)
             out = 1 - cl((t - (dur - 0.45)) / 0.35)
@@ -1951,11 +1996,11 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
 
 
 def make_kinetic_draw(sc, dur, speech_dur, ctx, events, pal):
-    img = graded_image(ctx, sc["image"])
+    img = graded_image(ctx, sc["image"], sc.get("grade", "natural"))
     shot = {"img": img, "dur": dur, "cam": "push", "par": False, "focus": False}
     words = sc["keywords_hi"]
     n = len(words)
-    size = 150 if n <= 2 else 118
+    size = min(150 if n <= 2 else 118, int(430 / (n * 1.22)))
     probe = ImageDraw.Draw(Image.new("L", (4, 4)))
     while size > 60 and max(probe.textlength(w, font=load_font(size, "title")) for w in words) > W * 0.82:
         size -= 8
@@ -1984,7 +2029,7 @@ def make_kinetic_draw(sc, dur, speech_dur, ctx, events, pal):
             q = t - t_i[i]
             if q < 0:
                 continue
-            put(fr, sp, W / 2, H * 0.43 + (i - (n - 1) / 2) * lh, lerp(2.3, 1.0, e_out(q / 0.2)), cl(q * 9))
+            put(fr, sp, W / 2, H * 0.40 + (i - (n - 1) / 2) * lh, lerp(2.3, 1.0, e_out(q / 0.2)), cl(q * 9))
         for ti in t_i:
             q = t - ti
             if 0 <= q < 0.28:
@@ -2101,12 +2146,16 @@ def pick_transition(i, sc, prev_sc, ctx):
     rnd = ctx["rnd"]
     if i == 0:
         return "fade", 0.7
+    hint = sc.get("transition")
+    if hint == "cut":
+        return "none", 0.0
+    if hint in ("fade", "zoom", "whip", "wipe", "circle", "flash"):
+        return hint, 0.55 if hint == "flash" else 0.5
     if i == 1:
         return "flash", 0.55
     if sc["type"] in EXPLAINERS or (prev_sc and prev_sc["type"] in EXPLAINERS):
-        return rnd.choice(["wipe", "circle", "fade", "zoom"]), 0.5
-    pool = ["whip", "fade", "zoom", "flash"] + (["glitch"] if sc.get("tone") == "suspense" else [])
-    return rnd.choice(pool), 0.45
+        return rnd.choice(["wipe", "fade", "fade", "zoom"]), 0.5
+    return rnd.choice(["fade", "fade", "zoom", "wipe", "whip"]), 0.45
 
 
 def render_scene(i, sc, out, pal, ctx, prev_sc, last):
@@ -2175,7 +2224,8 @@ def build_video(scenes, tdir, pal):
         out = tdir / f"scene_{i:03d}.mp4"
         render_scene(i, sc, out, pal, ctx, scenes[i - 1] if i else None, i == len(scenes) - 1)
         parts.append(out)
-        ctx["imgs"] = {k: v for k, v in ctx["imgs"].items() if k in {s.get("image") for s in sc.get("shots", [])} or k == sc.get("image")}
+        keep = {s.get("image") for s in sc.get("shots", [])} | {sc.get("image")}
+        ctx["imgs"] = {k: v for k, v in ctx["imgs"].items() if k[0] in keep}
         if i % 4 == 0:
             log(f"video scene {i + 1}/{len(scenes)} ({sc['type']})")
     lst = tdir / "shots.txt"
@@ -2190,16 +2240,17 @@ def mux_final(silent, voice, music, sfx, out, max_mb=None):
     fc = ("[1:a]highpass=f=70,aresample=44100,asplit=2[v][vsc];"
           "[2:a]volume=0.30[m];"
           "[m][vsc]sidechaincompress=threshold=0.04:ratio=9:attack=15:release=500[duck];"
-          "[3:a]aresample=44100,aformat=channel_layouts=stereo,volume=0.55[fx];"
-          "[v]aformat=channel_layouts=stereo[vst];"
-          "[vst][duck][fx]amix=inputs=3:duration=first:dropout_transition=0:normalize=0[mix];"
+          + ("[3:a]aresample=44100,aformat=channel_layouts=stereo,volume=0.55[fx];" if sfx else "")
+          + "[v]aformat=channel_layouts=stereo[vst];"
+          + ("[vst][duck][fx]amix=inputs=3:" if sfx else "[vst][duck]amix=inputs=2:")
+          + "duration=first:dropout_transition=0:normalize=0[mix];"
           "[mix]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100[a]")
     vopts = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
     if max_mb:
         kbps = int(max(500, min(5000, (max_mb * 8 * 1024) / dur - 136)))
         vopts = ["-c:v", "libx264", "-preset", "veryfast", "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k",
                  "-bufsize", f"{2 * kbps}k"]
-    run(["ffmpeg", "-y", "-i", silent, "-i", voice, "-i", music, "-i", sfx, "-filter_complex", fc,
+    run(["ffmpeg", "-y", "-i", silent, "-i", voice, "-i", music, *(["-i", sfx] if sfx else []), "-filter_complex", fc,
          "-map", "0:v", "-map", "[a]", *vopts, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
          "-movflags", "+faststart", "-shortest", out])
     if max_mb and Path(out).stat().st_size > max_mb * 1024 * 1024:
@@ -2251,28 +2302,73 @@ def split_lines(text):
     return [" ".join(w[:a]), " ".join(w[a:b]), " ".join(w[b:])]
 
 
-def title_layers(lines, max_w, max_h, key_last=True, start=210):
-    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
-    size = start
-    while size > 60:
-        f = load_font(size, "title")
-        if max(probe.textlength(l, font=f) for l in lines) <= max_w and size * 1.2 * len(lines) <= max_h:
-            break
-        size -= 6
-    f = load_font(size, "title")
+def ov_of(size):
+    return -int(size * 0.06)  # negative overlap = small gap between tight-cropped lines
+
+
+def tight(lay):
+    box = lay.getchannel("A").point(lambda v: 255 if v > 60 else 0).getbbox()
+    return lay.crop(box) if box else lay
+
+
+def _style_line(l, f, key, size):
     stroke = max(6, min(15, int(size * 0.075)))
     ext = max(4, int(size * 0.05))
-    layers = []
-    for k, l in enumerate(lines):
-        key = key_last and k == len(lines) - 1
-        if key:
-            lay = text_layer(l, f, fill=(255, 245, 90), fill2=(255, 160, 0), stroke=stroke, stroke_fill=(10, 12, 32),
-                             shadow=(6, 10, 8, 0.8), extrude=(ext, (150, 65, 0)))
-        else:
-            lay = text_layer(l, f, fill=(255, 255, 255), fill2=(205, 225, 255), stroke=stroke, stroke_fill=(10, 12, 32),
-                             shadow=(6, 10, 8, 0.8), extrude=(ext, (30, 45, 110)))
-        layers.append((lay, key))
-    return layers, size
+    return tight(_style_line_raw(l, f, key, size))
+
+
+def _style_line_raw(l, f, key, size):
+    stroke = max(6, min(15, int(size * 0.075)))
+    ext = max(4, int(size * 0.05))
+    if key:
+        return text_layer(l, f, fill=(255, 245, 90), fill2=(255, 160, 0), stroke=stroke, stroke_fill=(10, 12, 32),
+                          shadow=(6, 10, 8, 0.8), extrude=(ext, (150, 65, 0)))
+    return text_layer(l, f, fill=(255, 255, 255), fill2=(205, 225, 255), stroke=stroke, stroke_fill=(10, 12, 32),
+                      shadow=(6, 10, 8, 0.8), extrude=(ext, (30, 45, 110)))
+
+
+def _partitions(words, k):
+    n = len(words)
+    if k == 1:
+        yield [" ".join(words)]
+        return
+    import itertools
+    for cuts in itertools.combinations(range(1, n), k - 1):
+        c = (0,) + cuts + (n,)
+        yield [" ".join(words[c[x]:c[x + 1]]) for x in range(k)]
+
+
+def title_layers(lines, max_w, max_h, key_last=True, start=210, text=None, max_lines=3):
+    """Largest bold headline that REALLY fits the box (measured on the finished layers).
+    If `text` is given, the best 1..max_lines line-split is searched; otherwise `lines` is used as is."""
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    words = (text or " ".join(lines)).split()
+    options = [lines]
+    if text:
+        options = []
+        for k in range(1, min(max_lines, len(words)) + 1):
+            best = min(_partitions(words, k), key=lambda p: max(len(x) for x in p))
+            options.append(best)
+    best = None
+    for opt in options:
+        size = start
+        while size >= 56:
+            f = load_font(size, "thumb")
+            if max(probe.textlength(l, font=f) for l in opt) + 2 * (size * 0.1) <= max_w:
+                layers = [(_style_line(l, f, key_last and k == len(opt) - 1, size), key_last and k == len(opt) - 1)
+                          for k, l in enumerate(opt)]
+                ov = ov_of(size)
+                tot = sum(l.height for l, _ in layers) - ov * (len(layers) - 1)
+                if tot <= max_h and max(l.width for l, _ in layers) <= max_w + 40:
+                    if best is None or size > best[1]:
+                        best = (layers, size)
+                    break
+            size -= 6
+    if best is None:
+        f = load_font(56, "thumb")
+        opt = options[-1]
+        best = ([(_style_line(l, f, key_last and k == len(opt) - 1, 56), key_last and k == len(opt) - 1) for k, l in enumerate(opt)], 56)
+    return best
 
 
 def pill(text, size, bg, border=(255, 255, 255), fg=(255, 255, 255), role="label"):
@@ -2289,78 +2385,159 @@ def pill(text, size, bg, border=(255, 255, 255), fg=(255, 255, 255), role="label
     return out
 
 
-def make_thumb_hero(img_path, text, sub, badge, out):
+THUMB_FONTS = ["RozhaOne-Regular.ttf", "Khand-Bold.ttf", "YatraOne-Regular.ttf", "Modak-Regular.ttf", "Mukta-ExtraBold.ttf"]
+
+
+def shuffle_thumb_font():
+    """Pick a different stylish bold Hindi display font for each video's thumbnail (only fonts that were downloaded)."""
+    have = [f for f in THUMB_FONTS if (ROOT / "fonts" / f).exists() or (Path("fonts") / f).exists()]
+    random.shuffle(have)
+    FONT_NAMES["thumb"] = have + ["Khand-Bold.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"]
+    font_path.cache_clear()
+
+
+def subject_center(im):
+    """Where the main subject is (centre of detail + colour), as fractions 0..1."""
     np = _np()
-    im = grade_photo(fit_cover(img_path))
-    im = bloom(im)
-    xs = np.linspace(0, 1, W)
-    a = (np.clip(1 - xs / 0.74, 0, 1) ** 1.25 * 0.82 * 255).astype(np.uint8)
-    im = Image.composite(Image.new("RGB", (W, H), (6, 14, 52)), im, Image.fromarray(np.tile(a, (H, 1))))
-    ys = np.linspace(0, 1, H)
-    b = (np.clip((ys - 0.62) / 0.38, 0, 1) ** 1.4 * 0.55 * 255).astype(np.uint8)
-    im = Image.composite(Image.new("RGB", (W, H), (4, 8, 30)), im, Image.fromarray(np.tile(b[:, None], (1, W))))
-    rgba = im.convert("RGBA")
-    layers, size = title_layers(split_lines(text), W * 0.60, H * (0.52 if sub else 0.62))
-    total_h = sum(l.height for l, _ in layers) - int(size * 0.42) * (len(layers) - 1)
-    y = max(60, (H - total_h) // 2 - (28 if sub else 0))
+    small = im.convert("RGB").resize((128, 72))
+    g = np.asarray(small.convert("L"), dtype=np.float32)
+    en = np.abs(np.diff(g, axis=1))[:-1, :] + np.abs(np.diff(g, axis=0))[:, :-1]
+    sat = np.asarray(small.convert("HSV"), dtype=np.float32)[:-1, :-1, 1] / 255.0
+    wgt = en / (en.max() + 1e-6) + 0.5 * sat
+    yy, xx = np.mgrid[0:wgt.shape[0], 0:wgt.shape[1]].astype(np.float32)
+    wgt = wgt * np.exp(-(((xx / wgt.shape[1] - 0.5) / 0.6) ** 2 + ((yy / wgt.shape[0] - 0.5) / 0.7) ** 2))
+    tot = float(wgt.sum()) + 1e-6
+    return float((wgt * xx).sum() / tot / wgt.shape[1]), float((wgt * yy).sum() / tot / wgt.shape[0])
+
+
+def crop_to(path_or_img, size, cx_frac=None):
+    """Cover-crop to size, centred on the subject (horizontally)."""
+    im = Image.open(path_or_img).convert("RGB") if not isinstance(path_or_img, Image.Image) else path_or_img
+    tw, th = size
+    sc = max(tw / im.width, th / im.height)
+    im2 = im.resize((max(tw, int(im.width * sc + 0.5)), max(th, int(im.height * sc + 0.5))), Image.LANCZOS)
+    if cx_frac is None:
+        cx_frac = subject_center(im)[0]
+    left = int(min(im2.width - tw, max(0, cx_frac * im2.width - tw / 2)))
+    top = (im2.height - th) // 2
+    return im2.crop((left, top, left + tw, top + th))
+
+
+def dominant_color(im):
+    np = _np()
+    a = np.asarray(im.convert("RGB").resize((32, 18)), dtype=np.float32).reshape(-1, 3)
+    sat = a.max(1) - a.min(1)
+    idx = np.argsort(-sat)[: max(8, len(a) // 8)]
+    c = a[idx].mean(0)
+    return tuple(int(x) for x in c)
+
+
+def make_thumb_hero(img_path, text, sub, badge, out):
+    """Left: bold headline on a clean colour panel. Right: the subject, centred and graded. Nothing overlaps the subject."""
+    np = _np()
+    base = Image.open(img_path).convert("RGB")
+    x0 = int(W * 0.47)
+    cx, _cy = subject_center(base)
+    pic = grade_photo(crop_to(base, (W - x0 + 120, H), cx))
+    pic = bloom(pic, 0.3, 24)
+    dom = dominant_color(pic)
+    canvas = Image.new("RGB", (W, H))
+    # clean panel: deep colour gradient tinted by the picture's own colour
+    top_c, bot_c = (26, 14, 84), (6, 10, 40)
+    grad = Image.linear_gradient("L").resize((W, H))
+    canvas = Image.composite(Image.new("RGB", (W, H), bot_c), Image.new("RGB", (W, H), top_c), grad)
+    glow = glow_sprite(900, dom, 0.30).convert("RGBA")
+    cv = canvas.convert("RGBA")
+    cv.alpha_composite(glow, (-380, int(H * 0.75) - 450))
+    k = 2
+    m = Image.new("L", (W * k, H * k), 0)
+    ImageDraw.Draw(m).polygon([(( x0 + 70) * k, 0), (W * k, 0), (W * k, H * k), ((x0 - 70) * k, H * k)], fill=255)
+    m = m.resize((W, H), Image.LANCZOS)
+    full = Image.new("RGB", (W, H))
+    full.paste(pic, (x0 - 120, 0))
+    cv = Image.composite(full, cv.convert("RGB"), m).convert("RGBA")
+    edge = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(edge).line([(x0 + 70, 0), (x0 - 70, H)], fill=(255, 255, 255, 255), width=7)
+    gl = edge.filter(ImageFilter.GaussianBlur(12))
+    col = Image.new("RGBA", (W, H), (255, 214, 90, 255))
+    col.putalpha(gl.getchannel("A").point(lambda v: min(255, int(v * 1.5))))
+    cv.alpha_composite(col)
+    cv.alpha_composite(edge)
+    # headline inside the left panel only
+    shuffle_thumb_font()
+    layers, size = title_layers([text], x0 - 110, H * (0.60 if sub else 0.72), start=200, text=text)
+    ov = ov_of(size)
+    total_h = sum(l.height for l, _ in layers) - ov * (len(layers) - 1)
+    y = max(70, (H - total_h) // 2 - (26 if sub else 0))
     for lay, key in layers:
         if key:
-            g = lay.getchannel("A").filter(ImageFilter.GaussianBlur(max(8, size // 8))).point(lambda v: int(v * 0.6))
-            gl = Image.new("RGBA", lay.size, (255, 190, 0, 255))
-            gl.putalpha(g)
-            rgba.alpha_composite(gl, (36, y))
-        rgba.alpha_composite(lay, (36, y))
-        y += lay.height - int(size * 0.42)
+            padg = 60
+            big = Image.new("L", (lay.width + 2 * padg, lay.height + 2 * padg), 0)
+            big.paste(lay.getchannel("A"), (padg, padg))
+            g = big.filter(ImageFilter.GaussianBlur(max(8, size // 8))).point(lambda v: int(v * 0.55))
+            gl2 = Image.new("RGBA", big.size, (255, 190, 0, 255))
+            gl2.putalpha(g)
+            cv.alpha_composite(gl2, (14 - padg, y - padg)) if (y - padg) >= 0 and (14 - padg) >= 0 else cv.alpha_composite(gl2, (0, 0), (max(0, padg - 14), max(0, padg - y)))
+        cv.alpha_composite(lay, (14, y))
+        y += lay.height - ov
     if sub:
-        sp = pill(sub, 42, (214, 30, 50))
-        rgba.alpha_composite(sp, (52, min(H - sp.height - 34, y + 12)))
+        sp = pill(sub, 40, (214, 30, 50))
+        if sp.width > x0 - 30:
+            sp = sp.resize((x0 - 30, int(sp.height * (x0 - 30) / sp.width)), Image.LANCZOS)
+        cv.alpha_composite(sp, (30, min(H - sp.height - 30, y + 10)))
     if badge:
-        bp = pill(badge, 44, (230, 36, 56))
-        rgba.alpha_composite(bp, (46, 36))
-    final = rgba.convert("RGB").filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
+        bp = pill(badge, 42, (230, 36, 56))
+        cv.alpha_composite(bp, (30, 28))
+    final = cv.convert("RGB").filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
     final.save(out, "JPEG", quality=93)
 
 
 def make_thumb_split(img_a, img_b, text, left, right, out):
-    """Then / Now style: two worlds split by a glowing diagonal, big headline on top."""
+    """Headline on its own bar at the top; two worlds (then / now) below, split by a glowing diagonal."""
     np = _np()
-    A = ImageEnhance.Color(grade_photo(fit_cover(img_a))).enhance(1.1)
-    B = ImageEnhance.Color(grade_photo(fit_cover(img_b))).enhance(1.1)
-    A = Image.blend(A, Image.new("RGB", (W, H), (255, 80, 20)), 0.16)
-    B = Image.blend(B, Image.new("RGB", (W, H), (20, 140, 255)), 0.16)
+    BH = 240
+    ph = H - BH
+    A0, B0 = Image.open(img_a).convert("RGB"), Image.open(img_b).convert("RGB")
+    A = Image.blend(grade_photo(crop_to(A0, (W, ph), subject_center(A0)[0] * 0.8 + 0.1)), Image.new("RGB", (W, ph), (255, 80, 20)), 0.14)
+    B = Image.blend(grade_photo(crop_to(B0, (W, ph), subject_center(B0)[0] * 0.8 + 0.1)), Image.new("RGB", (W, ph), (20, 140, 255)), 0.14)
     k = 2
-    m = Image.new("L", (W * k, H * k), 0)
-    ImageDraw.Draw(m).polygon([(0, 0), (W * 0.57 * k, 0), (W * 0.43 * k, H * k), (0, H * k)], fill=255)
-    m = m.resize((W, H), Image.LANCZOS)
-    im = Image.composite(A, B, m)
-    seam = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    sd = ImageDraw.Draw(seam)
-    sd.line([(W * 0.57, 0), (W * 0.43, H)], fill=(255, 255, 255, 255), width=9)
-    glow = seam.filter(ImageFilter.GaussianBlur(14))
-    glow2 = seam.filter(ImageFilter.GaussianBlur(34))
-    base = im.convert("RGBA")
-    for g, col in ((glow2, (255, 200, 80)), (glow, (255, 255, 255))):
-        c = Image.new("RGBA", (W, H), col + (255,))
+    m = Image.new("L", (W * k, ph * k), 0)
+    ImageDraw.Draw(m).polygon([(0, 0), (W * 0.55 * k, 0), (W * 0.45 * k, ph * k), (0, ph * k)], fill=255)
+    m = m.resize((W, ph), Image.LANCZOS)
+    pic = bloom(Image.composite(A, B, m), 0.28, 20).convert("RGBA")
+    seam = Image.new("RGBA", (W, ph), (0, 0, 0, 0))
+    ImageDraw.Draw(seam).line([(W * 0.55, 0), (W * 0.45, ph)], fill=(255, 255, 255, 255), width=8)
+    for blur, colr in ((30, (255, 200, 80)), (12, (255, 255, 255))):
+        g = seam.filter(ImageFilter.GaussianBlur(blur))
+        c = Image.new("RGBA", (W, ph), colr + (255,))
         c.putalpha(g.getchannel("A").point(lambda v: min(255, int(v * 1.6))))
-        base.alpha_composite(c)
-    base.alpha_composite(seam)
-    im = bloom(base.convert("RGB"), 0.3, 22)
-    ys = np.linspace(0, 1, H)
-    top = (np.clip(1 - ys / 0.42, 0, 1) ** 1.3 * 0.7 * 255).astype(np.uint8)
-    im = Image.composite(Image.new("RGB", (W, H), (4, 8, 30)), im, Image.fromarray(np.tile(top[:, None], (1, W))))
-    rgba = im.convert("RGBA")
-    layers, size = title_layers(split_lines(text)[:2] if len(split_lines(text)) > 2 else split_lines(text), W * 0.86, H * 0.36, start=130)
-    y = 14
+        pic.alpha_composite(c)
+    pic.alpha_composite(seam)
+    canvas = Image.new("RGBA", (W, H), (8, 14, 50, 255))
+    canvas.alpha_composite(pic, (0, BH))
+    # headline bar
+    xs = np.linspace(0, 1, W)
+    bar = Image.new("RGB", (W, BH))
+    bar = Image.composite(Image.new("RGB", (W, BH), (34, 20, 92)), Image.new("RGB", (W, BH), (8, 16, 62)),
+                          Image.fromarray(np.tile((xs * 255).astype(np.uint8), (BH, 1))))
+    canvas.alpha_composite(bar.convert("RGBA"), (0, 0))
+    stripe = Image.new("RGBA", (W, 9), (255, 200, 20, 255))
+    canvas.alpha_composite(stripe, (0, BH - 9))
+    shuffle_thumb_font()
+    layers, size = title_layers([text], W * 0.94, BH - 26, start=150, text=text, max_lines=2)
+    ov = ov_of(size)
+    total_h = sum(l.height for l, _ in layers) - ov * (len(layers) - 1)
+    y = max(0, (BH - 9 - total_h) // 2)
     for lay, key in layers:
-        rgba.alpha_composite(lay, ((W - lay.width) // 2, y))
-        y += lay.height - int(size * 0.42)
+        canvas.alpha_composite(lay, ((W - lay.width) // 2, y))
+        y += lay.height - ov
     if left:
-        lp = pill(left, 70, (214, 24, 44), role="title")
-        rgba.alpha_composite(lp, (40, H - lp.height - 36))
+        lp = pill(left, 60, (214, 24, 44), role="thumb")
+        canvas.alpha_composite(lp, (36, H - lp.height - 28))
     if right:
-        rp = pill(right, 70, (22, 100, 230), role="title")
-        rgba.alpha_composite(rp, (W - rp.width - 40, H - rp.height - 36))
-    final = rgba.convert("RGB").filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
+        rp = pill(right, 60, (22, 100, 230), role="thumb")
+        canvas.alpha_composite(rp, (W - rp.width - 36, H - rp.height - 28))
+    final = canvas.convert("RGB").filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
     final.save(out, "JPEG", quality=93)
 
 
@@ -2527,7 +2704,7 @@ def pipeline():
     cat, topic_en, topic_hi = pick_topic(done)
     style = random.choice(STYLES)
     pal = random.choice(PALETTES)
-    target = random.randint(MIN_SEC, MAX_SEC)
+    target = TEST_SEC or random.randint(MIN_SEC, MAX_SEC)
     use_g = TTS_PROVIDER in ("auto", "gemini") and bool(GEMINI_KEY)
     wpm = float(wpms.get("gemini" if use_g else "edge", WPM))
     log(f"TOPIC: {topic_en} | category={cat} | style={style[0]} | theme={pal['name']} | target={target}s | wpm={wpm:.0f}")
@@ -2545,7 +2722,8 @@ def pipeline():
     voice = make_voice_auto(scenes, tdir)
     total = ffprobe_dur(voice)
     log(f"voice ({VOICE_USED[0]}) length {fmt_time(total)} (target {fmt_time(target)})")
-    if not (MIN_SEC - 30 <= total <= MAX_SEC + 45):
+    lo_ok, hi_ok = ((TEST_SEC * 0.4, TEST_SEC * 2.2) if TEST_SEC else (MIN_SEC - 30, MAX_SEC + 45))
+    if not (lo_ok <= total <= hi_ok):
         new_words = int(word_count(script) * target / total)
         log(f"length far off-range, rescaling script to ~{new_words} words")
         try:
@@ -2571,8 +2749,10 @@ def pipeline():
     silent, sfx_events = build_video(scenes, WORK / "build", pal)
     music = WORK / "music.wav"
     make_music(total, music, mood)
-    sfx = WORK / "sfx.wav"
-    build_sfx_track(sfx_events, total, sfx)
+    sfx = None
+    if SFX_ON:
+        sfx = WORK / "sfx.wav"
+        build_sfx_track(sfx_events, total, sfx)
     outdir = WORK / "out"
     outdir.mkdir()
     final = outdir / "video.mp4"
@@ -2790,6 +2970,12 @@ def selftest():
                          ("वीडियो अच्छा लगा हो तो सब्सक्राइब ज़रूर करें", "planet", (20, 30, 90), (60, 90, 160))])},
     ]
 
+    for k, sc_ in enumerate(sc):
+        sc_["grade"] = GRADES[k % 6]
+        sc_["transition"] = ["", "zoom", "whip", "wipe", "flash", "cut"][k % 6]
+        for sh_ in sc_.get("shots", []):
+            sh_["label_hi"] = "चाँद का राज़"
+
     def fake_tts(text, out, tone=None):
         d = max(3.0, len(text.split()) * 0.42)
         run(["ffmpeg", "-y", "-f", "lavfi", "-i", f"sine=frequency=190:duration={d}", "-af", "volume=0.4", "-f", "wav", out])
@@ -2803,7 +2989,7 @@ def selftest():
     sfx = t0 / "sfx.wav"
     build_sfx_track(ev, total, sfx)
     final = t0 / "final.mp4"
-    mux_final(silent, voice, music, sfx, final)
+    mux_final(silent, voice, music, sfx if SFX_ON else None, final)
     hero = t0 / "hero.png"
     art(hero, "planet", (255, 130, 40), (60, 10, 20), 1920)
     other = t0 / "other.png"
