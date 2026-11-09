@@ -41,7 +41,7 @@ jobs:
           # nicer Hindi fonts (free, Google Fonts). If a download fails the bot uses the Noto font instead.
           mkdir -p fonts
           B=https://raw.githubusercontent.com/google/fonts/main/ofl
-          for f in mukta/Mukta-ExtraBold.ttf mukta/Mukta-Bold.ttf yatraone/YatraOne-Regular.ttf khand/Khand-Bold.ttf; do
+          for f in mukta/Mukta-ExtraBold.ttf mukta/Mukta-Bold.ttf yatraone/YatraOne-Regular.ttf khand/Khand-Bold.ttf rozhaone/RozhaOne-Regular.ttf modak/Modak-Regular.ttf; do
             curl -fsSL --retry 2 -o "fonts/$(basename $f)" "$B/$f" || echo "font $f not downloaded"
           done
           ls -la fonts
@@ -65,6 +65,8 @@ jobs:
           # telegram = video comes to you on Telegram (safe default)
           # youtube  = bot uploads to YouTube as private (only after YouTube API audit passes)
           UPLOAD_MODE: ${{ vars.UPLOAD_MODE || 'telegram' }}
+          # short test videos while testing (seconds). Set Variable TEST_SECONDS = 0 for normal 3-5 minute videos.
+          TEST_SECONDS: ${{ vars.TEST_SECONDS || '30' }}
         run: |
           if [ "${{ github.event.inputs.mode }}" = "check" ]; then
             python bot.py --check
