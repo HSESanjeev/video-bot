@@ -77,8 +77,8 @@ STYLE_PHOTO = ("vivid rich colors, bright natural lighting, sharp detail, wide c
 STYLE_CARD = ("vibrant detailed digital illustration, one clear centered subject, clean simple soft-colored background, "
               "bright saturated colors, soft studio lighting, polished game-art quality, "
               "no text, no letters, no watermark, no logo")
-STYLE_THUMB = ("ultra dramatic hero shot, main subject large on the right side, bright rim light, vivid saturated colors, "
-               "shallow depth of field, empty space on the left, high contrast, professional youtube thumbnail background, "
+STYLE_THUMB = ("ultra dramatic hero shot, one single main subject large and centered (close-up), bright rim light, vivid saturated colors, "
+               "shallow depth of field, simple uncluttered background, high contrast, professional youtube thumbnail background, "
                "no text, no letters, no watermark")
 
 # bright themes (one is picked per video so the whole video looks consistent)
@@ -322,7 +322,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. Give 2-3 "shots": split the scene narration into 2-3 consecutive parts ("text_hi", together EXACTLY the scene narration) and give each part its own "prompt_en" showing precisely what that part says (one clear subject, cinematic). The picture changes every 2-4 seconds (roughly 6-10 words), so give 2-4 shots. Whatever the narrator says must APPEAR on screen at that moment: the exact animal, object, place or event named in that part of the sentence. Each shot may also have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) shown as a chapter label when a new section starts.
+- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) when the phrase names a NEW thing (an animal, object, place, event, person, process), give it a new "prompt_en" showing exactly that thing (one clear subject, cinematic, no text in the image); (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part; never keep a picture on screen after the narrator moved to something else. Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
@@ -365,14 +365,14 @@ Return ONLY JSON in exactly this shape:
  "thumb_text_hi": "3-5 Hindi words that create a CURIOSITY GAP: a shocking true claim or an unanswered question that makes the viewer need to click to learn the answer; never reveal the answer, never a lie",
  "thumb_sub_hi": "a short Hindi teaser line, 2-5 words, that adds intrigue without spoiling (e.g. जवाब चौंका देगा / 4 अरब साल पहले...)",
  "thumb_badge_hi": "one short Hindi word like रहस्य / सच / विज्ञान",
- "thumb_prompt_en": "one striking, dramatic hero subject for the thumbnail (a single subject, glowing, cinematic)",
+ "thumb_prompt_en": "the ONE most intriguing visual of THIS exact topic for the thumbnail: a single clear subject shown as a dramatic close-up or surprising scene that makes people ask a question (e.g. for ants: a giant ant lifting a huge leaf; for Earth: a glowing molten planet). Be specific to the topic, never generic. No text or letters in the image",
  "thumb_prompt2_en": "the contrasting counterpart for a then/now thumbnail (e.g. molten young Earth vs today's blue Earth); empty string if the topic has no natural contrast",
  "thumb_left_hi": "1-2 Hindi words for the left image, e.g. तब", "thumb_right_hi": "1-2 Hindi words for the right image, e.g. अब",
  "description_hi": "3-4 short Hindi lines telling what the viewer will learn",
  "tags": ["8-12 tags mixing Hindi and English"],
  "scenes": [
   {{"narration_hi": "...", "type": "photo", "tone": "suspense", "grade": "dark", "transition": "fade", "headline_hi": "",
-    "shots": [{{"text_hi": "first part of the narration", "prompt_en": "...", "label_hi": "key word"}}, {{"text_hi": "second part", "prompt_en": "...", "label_hi": ""}}]}},
+    "shots": [{{"text_hi": "first phrase of the narration", "prompt_en": "...", "label_hi": "key word"}}, {{"text_hi": "next phrase, same subject", "prompt_en": "", "focus_x": 0.3, "focus_y": 0.4, "label_hi": ""}}, {{"text_hi": "phrase naming something new", "prompt_en": "...", "label_hi": ""}}]}},
   {{"narration_hi": "...", "type": "merge", "tone": "wonder", "headline_hi": "...",
     "items": [{{"label_hi": "...", "prompt_en": "..."}}, {{"label_hi": "...", "prompt_en": "..."}}, {{"label_hi": "...", "prompt_en": "..."}}]}},
   {{"narration_hi": "...", "type": "counter", "tone": "excited", "headline_hi": "...", "counter": {{"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "..."}}}},
@@ -469,13 +469,18 @@ def validate_script(s):
         base_prompt = clean_short(sc.get("image_prompt_en"), 400)
         shots = []
         for sh in (sc.get("shots") or []):
-            if isinstance(sh, dict) and str(sh.get("prompt_en") or "").strip():
-                shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh["prompt_en"], 400),
-                              "label_hi": clean_short(sh.get("label_hi"), 18)})
+            if isinstance(sh, dict) and (str(sh.get("prompt_en") or "").strip() or (shots and str(sh.get("text_hi") or "").strip())):
+                def fr_(v):
+                    try:
+                        return min(0.85, max(0.15, float(v)))
+                    except Exception:  # noqa
+                        return None
+                shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh.get("prompt_en") or "", 400),
+                              "label_hi": clean_short(sh.get("label_hi"), 18), "fx": fr_(sh.get("focus_x")), "fy": fr_(sh.get("focus_y"))})
         if typ == "photo":
             if not shots:
                 shots = [{"text_hi": sc["narration_hi"], "prompt_en": base_prompt or "a dramatic wide nature landscape", "label_hi": ""}]
-            shots = shots[:5]
+            shots = shots[:8]
             nw = len(sc["narration_hi"].split())
             sw = sum(len(x["text_hi"].split()) for x in shots)
             if len(shots) > 1 and (abs(sw - nw) > max(2, 0.15 * nw) or any(not x["text_hi"] for x in shots)):
@@ -658,6 +663,11 @@ def make_voice(scenes, tdir, synth=None):
         total = ffprobe_dur(wav)
         sc["dur"] = total
         sc["speech_dur"] = max(0.5, total - pad)
+        try:
+            sc["wt"] = word_spans(sc["narration_hi"], wav, sc["speech_dur"])
+        except Exception as e:  # noqa
+            log("word timing failed:", str(e)[:100])
+            sc["wt"] = None
         wavs.append(wav)
         if i % 8 == 0:
             log(f"voice {i + 1}/{len(scenes)}")
@@ -833,10 +843,92 @@ def chunk_words(text, n=4):
     return ch
 
 
-def chunk_times(text, speech_dur, scene_dur):
+PUNCT_END = tuple(",;:।?!.—–…")
+
+
+def detect_silences(wav):
+    """Pauses inside the narration: list of (start, end) seconds."""
+    r = subprocess.run(["ffmpeg", "-hide_banner", "-i", str(wav), "-af", "silencedetect=noise=-33dB:d=0.12", "-f", "null", "-"],
+                       capture_output=True, text=True)
+    st, out = None, []
+    for ln in r.stderr.splitlines():
+        m = re.search(r"silence_start: ([\d.]+)", ln)
+        if m:
+            st = float(m.group(1))
+        m = re.search(r"silence_end: ([\d.]+)", ln)
+        if m and st is not None:
+            out.append((st, float(m.group(1))))
+            st = None
+    return out
+
+
+def word_spans(text, wav, speech_dur):
+    """(start, end) second of every word: pauses found in the real audio are matched to the commas/full stops of the text,
+    inside each clause the time is shared by word length. Accurate enough to cut the picture exactly on the spoken word."""
+    words = text.split()
+    n = len(words)
+    if n == 0:
+        return []
+    wt = [max(2.0, len(w) + 1.0) for w in words]
+    tot = sum(wt)
+    cum, a = [], 0.0
+    for w in wt:
+        a += w
+        cum.append(a)
+    bounds = [i for i, w in enumerate(words[:-1]) if w.rstrip("\"'”’)").endswith(PUNCT_END)]
+    try:
+        sil = [x for x in detect_silences(wav) if 0.15 < x[0] and x[1] < speech_dur - 0.05]
+    except Exception:  # noqa
+        sil = []
+    anchors, used = [], set()
+    for b in bounds:
+        pred = speech_dur * cum[b] / tot
+        best = None
+        for k, (a0, a1) in enumerate(sil):
+            if k in used:
+                continue
+            d = abs((a0 + a1) / 2 - pred)
+            if d < 1.0 and (best is None or d < best[0]):
+                best = (d, k)
+        if best:
+            used.add(best[1])
+            anchors.append((b + 1, sil[best[1]][0], sil[best[1]][1]))
+    anchors.sort()
+    for i in range(1, len(anchors)):  # keep time strictly increasing
+        if anchors[i][1] <= anchors[i - 1][2]:
+            anchors = anchors[:i]
+            break
+    segs, w0, t0 = [], 0, 0.0
+    for wi, ps, pe in anchors:
+        segs.append((w0, wi, t0, ps))
+        w0, t0 = wi, pe
+    segs.append((w0, n, t0, speech_dur))
+    spans = [None] * n
+    for a_, b_, ta, tb in segs:
+        ssum = sum(wt[a_:b_]) or 1.0
+        t = ta
+        for k in range(a_, b_):
+            d = (tb - ta) * wt[k] / ssum
+            spans[k] = (t, t + d)
+            t += d
+    return spans
+
+
+def chunk_times(text, speech_dur, scene_dur, spans=None):
     ch = chunk_words(text)
+    out, wi = [], 0
+    if spans and len(spans) == len(text.split()):
+        for c in ch:
+            k = len(c.split())
+            out.append([c, spans[wi][0], spans[wi + k - 1][1]])
+            wi += k
+        for i in range(len(out) - 1):
+            out[i][2] = out[i + 1][1]
+        out[0][1] = 0.0
+        out[-1][2] = scene_dur
+        return out
     wts = [max(1, len(c)) for c in ch]
-    tot, t, out = sum(wts), 0.0, []
+    tot, t = sum(wts), 0.0
     for c, w in zip(ch, wts):
         d = speech_dur * w / tot
         out.append([c, t, t + d])
@@ -1740,7 +1832,15 @@ def shot_frame(shot, tl):
     """One camera frame of a still picture: push / pull / pan / tilt / orbit / handheld, optional 2.5D parallax + rack focus."""
     src = shot["img"]
     p = cl(tl / max(0.1, shot["dur"]))
-    z, cx, cy = cam_state(shot["cam"], p, tl)
+    if shot["cam"] == "focus":
+        q = e_out(p)
+        z = 1.12 + 0.42 * q
+        cx = 0.5 + (shot["fx"] - 0.5) * q
+        cy = 0.5 + (shot["fy"] - 0.5) * q
+        m = (1 - 1 / z) / 2
+        cx, cy = min(0.5 + m, max(0.5 - m, cx)), min(0.5 + m, max(0.5 - m, cy))
+    else:
+        z, cx, cy = cam_state(shot["cam"], p, tl)
     fr = src.resize((W, H), Image.BILINEAR, box=crop_box(z, cx, cy))
     if shot.get("par"):
         fg = src.resize((W, H), Image.BILINEAR, box=crop_box(z * (1 + 0.07 * p), cx, cy))
@@ -1864,24 +1964,33 @@ def build_sub_sprites(text, pal):
     return sprites
 
 
-def make_subtrack(text, speech_dur, dur, pal):
+def make_subtrack(text, speech_dur, dur, pal, spans=None):
     items = []
-    for c, a, b in chunk_times(text, speech_dur, dur):
+    ok = bool(spans) and len(spans) == len(text.split())
+    wi = 0
+    for c, a, b in chunk_times(text, speech_dur, dur, spans):
         sprites = build_sub_sprites(c, pal)
-        lens = [max(1, len(x)) for x in c.split()]
-        tot, acc, cum = sum(lens), 0, []
-        for l in lens:
-            acc += l
-            cum.append(acc / tot)
-        items.append((a, b, sprites, cum))
+        k = len(c.split())
+        if ok:
+            starts = [spans[wi + j][0] for j in range(k)]
+        else:
+            lens = [max(1, len(x)) for x in c.split()]
+            tot, acc, starts = sum(lens), 0, []
+            for l in lens:
+                starts.append(a + (b - a) * acc / tot)
+                acc += l
+        wi += k
+        items.append((a, b, sprites, starts))
     return items
 
 
 def draw_sub(frame, items, t):
-    for a, b, sprites, cum in items:
+    for a, b, sprites, starts in items:
         if a <= t < b:
-            frac = (t - a) / max(1e-6, b - a)
-            wi = next((k for k, c in enumerate(cum) if frac <= c), len(cum) - 1)
+            wi = 0
+            for k, st_ in enumerate(starts):
+                if t >= st_ - 0.04:
+                    wi = k
             sp = sprites[min(wi, len(sprites) - 1)]
             sc = 0.88 + 0.12 * e_out((t - a) / 0.14) if t - a < 0.14 else 1.0
             put(frame, sp, W / 2, H - 30 - sp.height / 2 * sc, sc, 1.0)
@@ -1928,28 +2037,62 @@ def pick_cam(ctx):
 
 
 def build_shots(sc, dur, speech_dur, ctx, tone):
+    """Cut the picture exactly when the narrator reaches the words of each shot. Shots without a new picture
+    re-frame the SAME picture on the part being talked about (focus move)."""
     rnd = ctx["rnd"]
     raw = sc["shots"]
-    tot = sum(max(1, len(s["text_hi"])) for s in raw)
-    acc, spans = 0, []
-    for k, s in enumerate(raw):
-        a = 0.0 if k == 0 else speech_dur * acc / tot
-        acc += max(1, len(s["text_hi"]))
-        b = dur if k == len(raw) - 1 else speech_dur * acc / tot
-        spans.append((a, b, s))
-    shots = []
-    for a, b, s in spans:
-        n = max(1, math.ceil((b - a) / 6.5))
+    words = sc["narration_hi"].split()
+    nw = len(words)
+    wt = sc.get("wt") if sc.get("wt") and len(sc["wt"]) == nw else None
+    cnt = [max(1, len(x["text_hi"].split())) for x in raw]
+    tot = sum(cnt)
+    starts, acc = [], 0
+    for c in cnt:
+        starts.append(min(nw - 1, int(round(acc * nw / tot))))
+        acc += c
+    spans = []
+    for k, s_ in enumerate(raw):
+        if k == 0:
+            a = 0.0
+        elif wt:
+            a = max(0.4, wt[starts[k]][0] - 0.12)  # cut a hair BEFORE the word is spoken
+        else:
+            a = speech_dur * starts[k] / max(1, nw)
+        spans.append([a, 0.0, s_])
+    for k in range(len(spans)):
+        spans[k][1] = spans[k + 1][0] if k + 1 < len(spans) else dur
+    shots, last_img = [], None
+    for a, b, s_ in spans:
+        if b - a < 0.35 and shots:  # too short to see: merge into previous shot
+            shots[-1]["t1"] = b
+            shots[-1]["dur"] = b - shots[-1]["t0"]
+            continue
+        n = max(1, math.ceil((b - a) / 3.3))
         sd = (b - a) / n
         for j in range(n):
-            cam = "push" if (not shots) else pick_cam(ctx)
-            first_of_img = (j == 0)
-            trans = "none" if not shots else (rnd.choice(["fade", "fade", "zoom", "wipe", "whip"])
-                                              if first_of_img else "zoom")
-            shots.append({"img": graded_image(ctx, s["image"], sc.get("grade", "natural")), "label": (s.get("label_hi") or "") if j == 0 else "", "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd,
-                          "cam": cam, "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
-                          "focus": (not shots), "trans": trans, "tdur": 0.3 if trans == "fade" else 0.42,
+            new_img = (j == 0) and (s_["image"] is not last_img)
+            fx = s_.get("fx") if s_.get("fx") is not None else rnd.uniform(0.3, 0.7)
+            fy = s_.get("fy") if s_.get("fy") is not None else rnd.uniform(0.35, 0.65)
+            if j > 0:
+                fx, fy = min(0.8, max(0.2, fx + rnd.uniform(-0.25, 0.25))), min(0.75, max(0.25, fy + rnd.uniform(-0.2, 0.2)))
+            if not shots:
+                cam = "push"
+            elif not new_img:
+                cam = "focus"
+            else:
+                cam = "focus" if (s_.get("fx") is not None and rnd.random() < 0.5) else pick_cam(ctx)
+            if not shots:
+                trans = "none"
+            elif j > 0 or not new_img:
+                trans = "zoom" if rnd.random() < 0.5 else "fade"
+            else:
+                trans = rnd.choice(["fade", "zoom", "wipe", "whip", "flash"] if tone in ("excited", "suspense") else ["fade", "fade", "zoom", "wipe"])
+            shots.append({"img": graded_image(ctx, s_["image"], sc.get("grade", "natural")), "label": (s_.get("label_hi") or "") if j == 0 else "",
+                          "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
+                          "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
+                          "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4,
                           "phase": rnd.uniform(0, 6)})
+        last_img = s_["image"]
     shots[-1]["t1"] = dur
     return shots
 
@@ -1982,7 +2125,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             fr = blend_trans(ends[idx - 1], fr, tl / sh["tdur"], sh["trans"])
         fr = fx_apply(fr, t, int(t * FPS), sh["phase"])
         dust.draw(fr, t)
-        if sh.get("lab") is not None and 0.2 < tl < min(sh["dur"] - 0.15, 3.2):
+        if sh.get("lab") is not None and 0.12 < tl < min(sh["dur"] - 0.1, 3.4):
             lq = e_back((tl - 0.2) / 0.45)
             lo = 1 - cl((tl - (min(sh["dur"] - 0.15, 3.2) - 0.3)) / 0.3)
             lab = sh["lab"]
@@ -2014,6 +2157,18 @@ def make_kinetic_draw(sc, dur, speech_dur, ctx, events, pal):
                              stroke_fill=tuple(pal["ink"]), shadow=(5, 8, 6, 0.75), extrude=(8, tuple(max(0, c // 2) for c in pal["ink"])))
         sprites.append(lay)
     t_i = [0.45 + i * (speech_dur * 0.72) / n for i in range(n)]
+    nwd, wt_ = sc["narration_hi"].split(), sc.get("wt")
+    if wt_ and len(wt_) == len(nwd):
+        got, last_k = [], -1
+        for kw in words:
+            hit = next((k for k, w_ in enumerate(nwd) if k > last_k and (kw.split()[0].strip("।,?!") in w_ or w_.strip("।,?!") in kw)), None)
+            if hit is None:
+                got = None
+                break
+            got.append(max(0.2, wt_[hit][0] - 0.05))
+            last_k = hit
+        if got:
+            t_i = got
     for t in t_i:
         events.append((t, "impact", 0.8))
     lh = int(size * 1.22)
@@ -2172,7 +2327,7 @@ def render_scene(i, sc, out, pal, ctx, prev_sc, last):
         draw = make_kinetic_draw(sc, dur, sp, ctx, events, pal)
     else:
         draw = make_photo_draw(sc, dur, sp, ctx, events, pal)
-    subs = make_subtrack(sc["narration_hi"], sp, dur, pal)
+    subs = make_subtrack(sc["narration_hi"], sp, dur, pal, sc.get("wt"))
     trans, tdur = pick_transition(i, sc, prev_sc, ctx)
     nm, g = TRANS_SFX.get(trans, (None, 0))
     if nm and i > 0:
@@ -2432,7 +2587,7 @@ def dominant_color(im):
     return tuple(int(x) for x in c)
 
 
-def make_thumb_hero(img_path, text, sub, badge, out):
+def make_thumb_hero(img_path, text, sub, badge, out, side="left"):
     """Left: bold headline on a clean colour panel. Right: the subject, centred and graded. Nothing overlaps the subject."""
     np = _np()
     base = Image.open(img_path).convert("RGB")
@@ -2463,7 +2618,11 @@ def make_thumb_hero(img_path, text, sub, badge, out):
     col.putalpha(gl.getchannel("A").point(lambda v: min(255, int(v * 1.5))))
     cv.alpha_composite(col)
     cv.alpha_composite(edge)
-    # headline inside the left panel only
+    tx = 14
+    if side == "right":
+        cv = ImageOps.mirror(cv.convert("RGB")).convert("RGBA")
+        tx = W - x0 + 70
+    # headline inside the text panel only
     shuffle_thumb_font()
     layers, size = title_layers([text], x0 - 110, H * (0.60 if sub else 0.72), start=200, text=text)
     ov = ov_of(size)
@@ -2477,8 +2636,8 @@ def make_thumb_hero(img_path, text, sub, badge, out):
             g = big.filter(ImageFilter.GaussianBlur(max(8, size // 8))).point(lambda v: int(v * 0.55))
             gl2 = Image.new("RGBA", big.size, (255, 190, 0, 255))
             gl2.putalpha(g)
-            cv.alpha_composite(gl2, (14 - padg, y - padg)) if (y - padg) >= 0 and (14 - padg) >= 0 else cv.alpha_composite(gl2, (0, 0), (max(0, padg - 14), max(0, padg - y)))
-        cv.alpha_composite(lay, (14, y))
+            cv.alpha_composite(gl2, (tx - padg, y - padg)) if (y - padg) >= 0 and (tx - padg) >= 0 else cv.alpha_composite(gl2, (max(0, tx - padg), max(0, y - padg)), (max(0, padg - tx), max(0, padg - y)))
+        cv.alpha_composite(lay, (tx, y))
         y += lay.height - ov
     if sub:
         sp = pill(sub, 40, (214, 30, 50))
@@ -2490,6 +2649,28 @@ def make_thumb_hero(img_path, text, sub, badge, out):
         cv.alpha_composite(bp, (30, 28))
     final = cv.convert("RGB").filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
     final.save(out, "JPEG", quality=93)
+
+
+def make_thumb_bottom(img_path, text, out):
+    """Full picture, subject clear in the upper part, big headline on a dark gradient at the bottom."""
+    np = _np()
+    base = Image.open(img_path).convert("RGB")
+    pic = bloom(grade_photo(crop_to(base, (W, H), subject_center(base)[0])), 0.3, 24).convert("RGBA")
+    ys = np.linspace(0, 1, H)[:, None]
+    a = np.clip((ys - 0.48) / 0.52, 0, 1) ** 1.2 * 238
+    shade = np.zeros((H, W, 4), np.uint8)
+    shade[..., 0:3] = (4, 6, 24)
+    shade[..., 3] = np.broadcast_to(a, (H, W)).astype(np.uint8)
+    pic.alpha_composite(Image.fromarray(shade))
+    shuffle_thumb_font()
+    layers, size = title_layers([text], W * 0.94, H * 0.40, start=170, text=text)
+    ov = ov_of(size)
+    total_h = sum(l.height for l, _ in layers) - ov * (len(layers) - 1)
+    y = max(0, H - total_h - 22)
+    for lay, key in layers:
+        pic.alpha_composite(lay, (max(0, (W - lay.width) // 2), y))
+        y += lay.height - ov
+    pic.convert("RGB").filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3)).save(out, "JPEG", quality=93)
 
 
 def make_thumb_split(img_a, img_b, text, left, right, out):
@@ -2647,6 +2828,11 @@ def make_visuals(scenes, imgdir):
         if sc["type"] == "photo":
             for k, sh in enumerate(sc["shots"]):
                 p = imgdir / f"{i:03d}_s{k}.png"
+                if not sh["prompt_en"].strip() and prev_img:
+                    sh["image"] = prev_img  # same picture, camera moves to the part being spoken about
+                    continue
+                if not sh["prompt_en"].strip():
+                    sh["prompt_en"] = "a dramatic wide nature landscape"
                 if prev_img and CF_STATE["used"] >= MAX_IMAGES:
                     sh["image"] = prev_img  # free-quota saver: reuse the previous picture with a new camera move
                     continue
@@ -2765,7 +2951,12 @@ def pipeline():
         hero = any_img
     thumb = outdir / "thumbnail.jpg"
     text = script["thumb_text_hi"] or script["title_hi"]
-    make_thumb_hero(hero, text, script["thumb_sub_hi"], script["thumb_badge_hi"], thumb)
+    style = random.choice(["left", "right", "bottom"])
+    log("thumbnail layout:", style)
+    if style == "bottom":
+        make_thumb_bottom(hero, text, thumb)
+    else:
+        make_thumb_hero(hero, text, "", "", thumb, side=style)
     thumb2 = None
     if script["thumb_prompt2_en"]:
         other = imgdir / "thumb2.png"
