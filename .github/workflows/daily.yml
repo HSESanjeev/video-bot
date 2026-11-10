@@ -45,6 +45,8 @@ jobs:
             curl -fsSL --retry 2 -o "fonts/$(basename $f)" "$B/$f" || echo "font $f not downloaded"
           done
           ls -la fonts
+          # real world-map coastlines for map scenes (if this fails the bot uses simple built-in outlines)
+          curl -fsSL --retry 2 -o land.json https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson || echo "map data not downloaded"
 
       - name: Local AI pictures (free, no quota) - only used when Cloudflare is out of quota
         if: github.event.inputs.mode != 'voices'
