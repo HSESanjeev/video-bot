@@ -246,6 +246,117 @@ def gemini_json(prompt, temperature=0.8):
     raise RuntimeError("Gemini did not return valid JSON")
 
 
+
+# --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
+ITEM_KINDS = {"popup": 2.6, "bubble": 3.2, "note": 4.2, "place": 3.8, "year": 3.8, "title": 3.2}
+ITEM_SLOT = {"bubble": "A", "note": "A", "place": "B", "year": "C", "title": "D", "popup": "P"}
+
+DIRECTOR_RULES = """You are the DIRECTOR and film editor of a Hindi documentary. The narration is already recorded. For every scene you get the narration words with their index and the exact second each word is spoken. Plan what the viewer sees, tied to the exact words.
+
+For each scene return:
+"mains": the FULL-SCREEN pictures in order. Each has "w" = index of the word where it must appear (the first has w=0), and either
+   - a NEW picture: "prompt_en" (cinematic, realistic, ONE clear subject exactly as named at that word, no text in the image), "query_en" (1-3 English words for a real stock PHOTO of it, "" if it cannot be photographed), optional "motion": true and "clip_en" (1-3 English words for real stock FOOTAGE) ONLY if that moment is about something moving or changing position (animal running/flying, water flowing, fire, clouds, spinning planet), at most one in four mains, or
+   - "same": true, to keep the same picture while the camera moves onto the detail being discussed, with "fx","fy" (0.15-0.85, where that detail is in the picture).
+   The main picture is whatever the narrator is talking about AT THAT WORD: when the subject changes, the picture changes on that very word. A main lasts about 2-5 seconds; never leave a picture on screen after the narrator moved to a different subject.
+"items": small things shown ON TOP of the current main picture at the exact word that names them (this is how related points are shown). Each has "w" and a "kind":
+   - "popup": any concrete object, animal, body part, colour sample or symbol the narrator names: "popup_en" = English description of that ONE object (e.g. "a red heart", "a raw carrot", "a flame"). Use this generously, one for most named things.
+   - "bubble": "text_hi" (max 6 words) when someone's words are quoted.
+   - "year": "text_hi" = the date/year/time period when it is spoken.
+   - "place": "text_hi" = name of a place or person when first named, "sub_hi" = small line (region/role).
+   - "note": "text_hi" (max 12 words) = a key fact, "mark_hi" = 1-3 key words highlighted.
+   - "title": "text_hi" (1-3 words) only for the single biggest reveal of the whole video.
+   Items must start on the word that names them, never earlier or later. Do not put two items on the same word.
+Return JSON only: {"scenes":[{"i": <scene number>, "mains":[...], "items":[...]}]}"""
+
+
+def director_prompt(chunk):
+    parts = []
+    for i, sc in chunk:
+        wds = sc["narration_hi"].split()
+        wt = sc["wt"]
+        line = " ".join(f"{k}:{w}({wt[k][0]:.1f})" for k, w in enumerate(wds))
+        parts.append(f"SCENE {i} (tone {sc.get('tone')}, {sc['speech_dur']:.0f}s):\n{line}")
+    return DIRECTOR_RULES + "\n\n" + "\n\n".join(parts)
+
+
+def apply_direction(sc, d):
+    wds = sc["narration_hi"].split()
+    nw = len(wds)
+    mains, last = [], -1
+    for m in sorted([x for x in (d.get("mains") or []) if isinstance(x, dict)], key=lambda x: int(x.get("w", 0) or 0)):
+        try:
+            w = int(m.get("w", 0))
+        except Exception:  # noqa
+            continue
+        if w <= last or w >= nw:
+            continue
+        if not mains:
+            w = 0
+        if m.get("same") or not str(m.get("prompt_en") or "").strip():
+            if not mains:
+                continue
+            m = {"same": True, "fx": m.get("fx"), "fy": m.get("fy")}
+        mains.append((w, m))
+        last = w
+    if not mains or mains[0][0] != 0 or not str(mains[0][1].get("prompt_en") or "").strip():
+        return False
+    shots = []
+    for k, (w, m) in enumerate(mains):
+        w2 = mains[k + 1][0] if k + 1 < len(mains) else nw
+        def fr_(v):
+            try:
+                return min(0.85, max(0.15, float(v)))
+            except Exception:  # noqa
+                return None
+        shots.append({"text_hi": " ".join(wds[w:w2]), "prompt_en": clean_short(m.get("prompt_en") or "", 400) if not m.get("same") else "",
+                      "query_en": clean_short(m.get("query_en") or "", 50), "motion": bool(m.get("motion")) and not m.get("same"),
+                      "clip_en": clean_short(m.get("clip_en") or "", 40), "label_hi": "", "ov": None, "popup_en": "",
+                      "fx": fr_(m.get("fx")), "fy": fr_(m.get("fy"))})
+    items, used = [], set()
+    for it in sorted([x for x in (d.get("items") or []) if isinstance(x, dict)], key=lambda x: int(x.get("w", 0) or 0)):
+        try:
+            w = int(it.get("w"))
+        except Exception:  # noqa
+            continue
+        kind = str(it.get("kind") or "")
+        if kind not in ITEM_KINDS or not (0 <= w < nw) or (w, kind) in used:
+            continue
+        txt = clean_short(it.get("text_hi"), 90 if kind == "note" else 40)
+        if kind == "popup":
+            if not str(it.get("popup_en") or "").strip():
+                continue
+            rec = {"w": w, "kind": kind, "popup_en": clean_short(it["popup_en"], 120)}
+        elif txt:
+            rec = {"w": w, "kind": kind, "text": txt, "mark": clean_short(it.get("mark_hi"), 30), "sub": clean_short(it.get("sub_hi"), 40)}
+        else:
+            continue
+        used.add((w, kind))
+        items.append(rec)
+    sc["shots"] = shots
+    sc["items"] = items[:12]
+    return True
+
+
+def director_pass(scenes):
+    """After the voice exists: plan pictures and on-screen items on the exact spoken words (falls back to the script's own shots)."""
+    todo = [(i, sc) for i, sc in enumerate(scenes)
+            if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
+    ok = 0
+    for a in range(0, len(todo), 5):
+        chunk = todo[a:a + 5]
+        try:
+            out = gemini_json(director_prompt(chunk), 0.6)
+            rows = {int(r.get("i")): r for r in (out.get("scenes") or []) if isinstance(r, dict) and str(r.get("i", "")).lstrip("-").isdigit()}
+        except Exception as e:  # noqa
+            log("director failed for a group of scenes, keeping the script's own shots:", str(e)[:120])
+            continue
+        for i, sc in chunk:
+            if i in rows and apply_direction(sc, rows[i]):
+                sc["directed"] = True
+                ok += 1
+    log(f"director: {ok}/{len(todo)} photo scenes planned word-by-word")
+
+
 # --------------------------------------------------------------------------- topic
 def norm_words(s):
     s = re.sub(r"[^a-z0-9 ]", " ", s.lower())
@@ -359,7 +470,7 @@ TARGET: about {words} Hindi words of narration in total ({target_sec} seconds), 
 {SCRIPT_RULES}
 
 VERIFIED FACTS TO PREFER (may be empty):
-{facts[:6000]}
+{facts[:12500]}
 
 Return ONLY JSON in exactly this shape:
 {{
@@ -577,11 +688,11 @@ def rescale_script(script, target_words):
 
 # --------------------------------------------------------------------------- voice
 TONES = {
-    "suspense": ("-6%", "-3Hz", "calm, low and hushed, slow storytelling with natural pauses, building quiet curiosity"),
-    "wonder": ("-3%", "+0Hz", "warm, gentle and full of quiet wonder, a calm storyteller"),
-    "serious": ("-4%", "-2Hz", "calm, steady and grounded, a thoughtful storyteller"),
-    "excited": ("-1%", "+1Hz", "warm and engaged, slightly brighter but still calm and natural"),
-    "calm": ("-3%", "+0Hz", "calm, warm and natural, like a friendly storyteller narrating a documentary"),
+    "suspense": ("-4%", "-2Hz", "hushed and gripping, slow and deliberate with tense pauses, like a true-crime documentary storyteller"),
+    "wonder": ("-1%", "+1Hz", "engaged and full of wonder, steady confident storytelling with warmth"),
+    "serious": ("-2%", "-1Hz", "serious, firm and grounded, steady pace with weight on the key words"),
+    "excited": ("+2%", "+2Hz", "gripping and animated, building momentum as the story turns, still controlled"),
+    "calm": ("-1%", "+0Hz", "natural, confident and engaging, a steady documentary storyteller with clear pauses between sentences"),
 }
 
 
@@ -2404,8 +2515,8 @@ def draw_popup(fr, sh, tl):
     q = e_back((tl - t0) / 0.38)
     out = cl((t1 - tl) / 0.2)
     wob = math.sin(tl * 3.2 + sh["phase"]) * 0.025
-    cx = W * (0.5 + 0.30 * sh["pop_side"])
-    cy = H * 0.5 + math.sin(tl * 2.4 + sh["phase"]) * 8
+    cx = W * (0.5 + 0.31 * sh["pop_side"])
+    cy = H * 0.56 + math.sin(tl * 2.4 + sh["phase"]) * 8
     s2 = sp.rotate(math.degrees(wob) * 2 + sh["pop_side"] * 4, resample=Image.BICUBIC, expand=True)
     put(fr, s2, cx, cy, (0.15 + 0.85 * cl(q)) * (0.6 + 0.4 * out), min(1.0, (tl - t0) * 8) * out)
 
@@ -2452,6 +2563,27 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     if lt is not None:
         events.append((0.25, "pop", 0.55))
     ends = {}
+    wt_ = sc.get("wt")
+    items = []
+    if sc.get("items") and wt_:
+        rr = ctx["rnd"]
+        for k_, it in enumerate(sc["items"]):
+            if it["kind"] == "popup" and it.get("popup_img") is None:
+                continue
+            w_ = min(it["w"], len(wt_) - 1)
+            t0_ = max(0.1, wt_[w_][0] - 0.08)
+            items.append({"t0": t0_, "t1": min(dur - 0.1, t0_ + ITEM_KINDS[it["kind"]]), "slot": ITEM_SLOT[it["kind"]], "it": it,
+                          "ps": {"phase": rr.uniform(0, 6), "pop_side": -1 if k_ % 2 == 0 else 1, "popup": it.get("popup_img"),
+                                 "ov": None if it["kind"] == "popup" else {"kind": it["kind"], "text": (it["text"] + "|" + it.get("sub", "")) if it["kind"] == "place" else it["text"], "mark": it.get("mark", "")}}})
+        for a_ in range(len(items)):  # one thing per screen area at a time
+            for b_ in range(a_ + 1, len(items)):
+                if items[b_]["slot"] == items[a_]["slot"] and items[b_]["t0"] > items[a_]["t0"] and items[a_]["t1"] > items[b_]["t0"]:
+                    items[a_]["t1"] = items[b_]["t0"] - 0.05
+                    break
+        for x_ in items:
+            x_["ps"]["dur"] = max(0.4, x_["t1"] - x_["t0"])
+            if x_["slot"] == "P":
+                events.append((x_["t0"], "pop", 0.0))
 
     def draw(t):
         idx = 0
@@ -2477,6 +2609,10 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             fr.paste(Image.blend(fr, Image.new("RGB", fr.size, pu), 0.34 * (1 - tl / 0.55) ** 1.5))
         draw_popup(fr, sh, tl)
         draw_ov(fr, sh, tl, pal)
+        for x_ in items:
+            if x_["t0"] <= t < x_["t1"]:
+                draw_popup(fr, x_["ps"], t - x_["t0"])
+                draw_ov(fr, x_["ps"], t - x_["t0"], pal)
         if lt is not None:
             q = e_back((t - 0.2) / 0.5)
             out = 1 - cl((t - (dur - 0.45)) / 0.35)
@@ -3639,6 +3775,15 @@ def make_visuals(scenes, imgdir):
     prev_img = None
     for i, sc in enumerate(scenes):
         if sc["type"] == "photo":
+            for n_, it in enumerate(sc.get("items") or []):
+                if it["kind"] == "popup" and POPUPS_MAX[0] > 0:
+                    POPUPS_MAX[0] -= 1
+                    try:
+                        po = imgdir / f"{i:03d}_i{n_}_pop.png"
+                        if gen_image(it["popup_en"], po, "obj"):
+                            it["popup_img"] = cutout_sticker(po)
+                    except Exception as e:  # noqa
+                        log("popup failed:", type(e).__name__, str(e)[:100])
             for k, sh in enumerate(sc["shots"]):
                 p = imgdir / f"{i:03d}_s{k}.png"
                 pp = (sh.get("popup_en") or "").strip()
@@ -3724,15 +3869,39 @@ def pipeline():
     wpms = load_json(WPM_FILE, {})
     random.seed()
 
-    cat, topic_en, topic_hi = pick_topic(done)
+    custom = os.environ.get("CUSTOM_STORY", "").strip()
+    if custom == "0":
+        custom = ""
+    own_story = ""
+    if custom:  # the owner's own topic or full story: used instead of the automatic topic
+        first = custom.splitlines()[0].strip()
+        if len(custom) > 220:  # a full story was given: first short line = title, everything = the story
+            own_story = custom
+            topic_en = first if len(first) <= 120 else first[:80]
+        else:
+            topic_en = custom.replace("\n", " ")
+        cat, topic_hi = "custom", topic_en
+        log("CUSTOM_STORY is set: using the owner's own", "story" if own_story else "topic")
+        if own_story:  # a full story is never cut to the short test length
+            globals()["TEST_SEC"] = 0
+            globals()["MAX_IMAGES"] = int(os.environ.get("MAX_IMAGES", "48"))
+            CLIPS_MAX[0], POPUPS_MAX[0] = int(os.environ.get("MAX_CLIPS", "14")), int(os.environ.get("MAX_POPUPS", "40"))
+    else:
+        cat, topic_en, topic_hi = pick_topic(done)
     style = random.choice(STYLES)
     pal = random.choice(PALETTES)
     target = TEST_SEC or random.randint(MIN_SEC, MAX_SEC)
+    if own_story:  # length follows the owner's story, not the test length
+        target = int(min(900, max(30, len(own_story.split()) / float(wpms.get("gemini" if (TTS_PROVIDER in ("auto", "gemini") and GEMINI_KEY) else "edge", WPM)) * 60)))
     use_g = TTS_PROVIDER in ("auto", "gemini") and bool(GEMINI_KEY)
     wpm = float(wpms.get("gemini" if use_g else "edge", WPM))
     log(f"TOPIC: {topic_en} | category={cat} | style={style[0]} | theme={pal['name']} | target={target}s | wpm={wpm:.0f}")
 
-    facts, sources = research(topic_en)
+    if own_story:
+        facts, sources = ("THE OWNER'S OWN STORY. Follow it faithfully: keep its facts, names, order and meaning, and only polish the wording into natural spoken Hindi "
+                          "and cut it into scenes. Do not add new facts.\n" + own_story[:12000]), []
+    else:
+        facts, sources = research(topic_en)
     script = write_script(topic_en, cat, style, target, facts, wpm)
     scenes = script["scenes"]
     mood = script["mood"] or MOOD_MAP.get(cat, "wonder")
@@ -3745,7 +3914,7 @@ def pipeline():
     voice = make_voice_auto(scenes, tdir)
     total = ffprobe_dur(voice)
     log(f"voice ({VOICE_USED[0]}) length {fmt_time(total)} (target {fmt_time(target)})")
-    lo_ok, hi_ok = ((TEST_SEC * 0.4, TEST_SEC * 2.2) if TEST_SEC else (MIN_SEC - 30, MAX_SEC + 45))
+    lo_ok, hi_ok = ((target * 0.5, target * 1.8) if own_story else (TEST_SEC * 0.4, TEST_SEC * 2.2) if TEST_SEC else (MIN_SEC - 30, MAX_SEC + 45))
     if not (lo_ok <= total <= hi_ok):
         new_words = int(word_count(script) * target / total)
         log(f"length far off-range, rescaling script to ~{new_words} words")
@@ -3758,6 +3927,7 @@ def pipeline():
             log(f"new voice length {fmt_time(total)}")
         except Exception as e:  # noqa
             log("rescale failed, continuing:", e)
+    director_pass(scenes)
     prov = "gemini" if VOICE_USED[0].startswith("gemini") else "edge"
     wpms[prov] = round(word_count(script) / (total / 60), 1)
     save_json(WPM_FILE, wpms)
@@ -3978,7 +4148,10 @@ def selftest():
         {"type": "merge", "tone": "wonder", "headline_hi": "टक्कर से चाँद बना",
          "items": items([("युवा पृथ्वी",) + P, ("थिया ग्रह",) + R, ("हमारा चाँद",) + M]),
          "narration_hi": "लगभग साढ़े चार अरब साल पहले, पृथ्वी से एक मंगल जितना बड़ा ग्रह टकराया, और इसी टक्कर से हमारा चाँद बना"},
-        {"type": "photo", "tone": "serious", "headline_hi": "आग का दौर", "narration_hi": n3,
+        {"type": "photo", "tone": "serious", "headline_hi": "", "narration_hi": n3,
+         "items": [{"w": 1, "kind": "place", "text": "आसमान", "sub": "उस दौर का"}, {"w": 6, "kind": "year", "text": "४५० करोड़ साल पहले"},
+                   {"w": 9, "kind": "bubble", "text": "कितना डरावना!"}, {"w": 12, "kind": "popup", "popup_en": "fire",
+                    "popup_img": (lambda im_: (ImageDraw.Draw(im_).ellipse([20, 20, 280, 280], fill=(255, 120, 20, 255), outline=(255, 255, 255, 255), width=14), im_)[1])(Image.new("RGBA", (300, 300), (0, 0, 0, 0)))}],
          "shots": shots([("अब ज़रा सोचिए, उस समय आसमान कितना डरावना दिखता होगा।", "rock", (255, 120, 40), (120, 20, 10)),
                          ("हर तरफ आग और धुआँ ही धुआँ था", "planet", (90, 20, 10), (20, 5, 5))])},
         {"type": "counter", "tone": "excited", "headline_hi": "पृथ्वी की उम्र",
