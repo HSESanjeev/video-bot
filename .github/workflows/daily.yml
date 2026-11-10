@@ -23,7 +23,7 @@ concurrency:
 jobs:
   make:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 240
     steps:
       - uses: actions/checkout@v4
 
@@ -45,6 +45,18 @@ jobs:
             curl -fsSL --retry 2 -o "fonts/$(basename $f)" "$B/$f" || echo "font $f not downloaded"
           done
           ls -la fonts
+
+      - name: Local AI pictures (free, no quota) - only used when Cloudflare is out of quota
+        if: github.event.inputs.mode != 'voices'
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu || echo "torch not installed"
+          pip install diffusers transformers accelerate safetensors || echo "diffusers not installed"
+
+      - name: Remember downloaded model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-sd-turbo-v1
 
       - name: Run bot
         env:
