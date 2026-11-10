@@ -324,7 +324,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. EVERY shot must also have "label_hi" (1-3 Hindi words) AND "popup_en": an English description of ONE concrete object, animal, body part or symbol that the phrase mentions (e.g. "a raw carrot", "a human brain", "a burning flame", "a red heart", "a clock", "a lion"), shown as a pop-up sticker on top of the picture at the moment the word is spoken, so a viewer watching on mute still understands every sentence. Leave "popup_en" empty only if the phrase names no object at all. Optional on-screen helpers per shot (at most ONE per shot, and in total on about every second shot, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
+- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (0) include now and then a macro close-up DETAIL shot (a hand, an eye, a cracked object, a texture) of something just mentioned, and sometimes a high aerial wide shot to show where a place is; (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. EVERY shot must also have "label_hi" (1-3 Hindi words) AND "popup_en": an English description of ONE concrete object, animal, body part or symbol that the phrase mentions (e.g. "a raw carrot", "a human brain", "a burning flame", "a red heart", "a clock", "a lion"), shown as a pop-up sticker on top of the picture at the moment the word is spoken, so a viewer watching on mute still understands every sentence. Leave "popup_en" empty only if the phrase names no object at all. Optional on-screen helpers per shot (at most ONE per shot, and in total on about every second shot, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "place_hi" (the name of a place or person introduced for the first time, 1-2 words, with "place_sub_hi" a small line such as the region or role; shown as a bold location tag), "title_hi" (1-3 huge Hindi words, ONLY for the single biggest reveal of the video, e.g. the name of the main subject; shown as a glowing title), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
@@ -479,7 +479,10 @@ def validate_script(s):
                         return None
                 shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh.get("prompt_en") or "", 400),
                               "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50), "popup_en": clean_short(sh.get("popup_en") or "", 120),
-                              "ov": (({"kind": "bubble", "text": clean_short(sh.get("bubble_hi"), 40)} if str(sh.get("bubble_hi") or "").strip() else
+                              "ov": (({"kind": "title", "text": clean_short(sh.get("title_hi"), 24)} if str(sh.get("title_hi") or "").strip() else
+                                      {"kind": "place", "text": clean_short(sh.get("place_hi"), 28) + "|" + clean_short(sh.get("place_sub_hi"), 40)}
+                                      if str(sh.get("place_hi") or "").strip() else
+                                      {"kind": "bubble", "text": clean_short(sh.get("bubble_hi"), 40)} if str(sh.get("bubble_hi") or "").strip() else
                                       {"kind": "year", "text": clean_short(sh.get("year_hi"), 22)} if str(sh.get("year_hi") or "").strip() else
                                       {"kind": "note", "text": clean_short(sh.get("note_hi"), 90), "mark": clean_short(sh.get("mark_hi"), 30)}
                                       if str(sh.get("note_hi") or "").strip() else None)), "fx": fr_(sh.get("focus_x")), "fy": fr_(sh.get("focus_y"))})
@@ -2200,7 +2203,8 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                 trans = "zoom" if rnd.random() < 0.5 else "fade"
             else:
                 trans = rnd.choice(["fade", "zoom", "wipe", "whip", "flash"] if tone in ("excited", "suspense") else ["fade", "fade", "zoom", "wipe"])
-            shots.append({"img": graded_image(ctx, s_["image"], sc.get("grade", "natural")), "label": (s_.get("label_hi") or "") if j == 0 else "",
+            shots.append({"img": graded_image(ctx, s_["image"], sc.get("grade", "natural")), "label": ((s_.get("label_hi") or "") if (j == 0 and not (s_.get("ov") and s_["ov"]["kind"] in ("place", "title"))) else ""),
+                          "pulse": ((rnd.choice([(200, 20, 30), (20, 120, 140), (255, 255, 255)]) if (new_img and shots and rnd.random() < (0.4 if tone in ("suspense", "serious", "excited") else 0.12)) else None)),
                           "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
                           "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
                           "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4,
@@ -2258,10 +2262,32 @@ def ov_sprite(kind, text, mark, pal):
         sh.alpha_composite(black, (20, 24))
         sh.alpha_composite(card, (20, 20))
         sp = sh.rotate(random.choice([-2, 2]), expand=True, resample=Image.BICUBIC)
+    elif kind == "place":  # location tag, bottom-left (big name + small region line)
+        main_, _, sub_ = text.partition("|")
+        a1 = text_layer(main_.strip(), load_font(70, "title"), fill=(255, 255, 255), shadow=(0, 4, 8, 0.8))
+        a2 = text_layer(sub_.strip(), load_font(30, "sub"), fill=(235, 220, 200), shadow=(0, 2, 4, 0.8)) if sub_.strip() else None
+        w = max(a1.width, a2.width if a2 else 0) + 40
+        h = a1.height + (a2.height if a2 else 0) + 20
+        sp = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        ImageDraw.Draw(sp).rectangle([0, 8, 8, h - 8], fill=tuple(pal["accent"]) + (255,))
+        sp.alpha_composite(a1, (22, 0))
+        if a2:
+            sp.alpha_composite(a2, (22, a1.height - 6))
+    elif kind == "title":  # huge glowing title reveal
+        lay = text_layer(text, load_font(190, "title"), fill=(255, 244, 214), fill2=(255, 140, 50), max_w=int(W * 0.86), shadow=(0, 6, 10, 0.8))
+        pad_ = 70
+        big_ = Image.new("RGBA", (lay.width + 2 * pad_, lay.height + 2 * pad_), (0, 0, 0, 0))
+        big_.alpha_composite(lay, (pad_, pad_))
+        g = big_.getchannel("A").filter(ImageFilter.GaussianBlur(24)).point(lambda v: min(255, int(v * 1.6)))
+        glow = Image.new("RGBA", big_.size, (255, 70, 20, 255))
+        glow.putalpha(g)
+        sp = Image.new("RGBA", big_.size, (0, 0, 0, 0))
+        sp.alpha_composite(glow)
+        sp.alpha_composite(big_)
     else:  # year / time marker on a timeline
         lay = text_layer(text, load_font(58, "title"), fill=(255, 255, 255), stroke=0)
         pw, ph = lay.width + 56, lay.height + 22
-        w, h = max(560, pw + 60), ph + 70
+        w, h = max(1000, pw + 60), ph + 70
         sp = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         d = ImageDraw.Draw(sp)
         d.line([(10, ph + 36), (w - 10, ph + 36)], fill=(255, 255, 255, 200), width=3)
@@ -2298,13 +2324,23 @@ def draw_ov(fr, sh, tl, pal):
     ov = sh.get("ov")
     if not ov:
         return
-    t0, t1 = 0.22, min(sh["dur"] - 0.08, 4.2)
+    t0, t1 = 0.22, min(sh["dur"] - 0.08, 5.0 if ov["kind"] in ("place", "year") else 4.2)
     if not (t0 < tl < t1):
         return
     spr = ov_sprite(ov["kind"], ov["text"], ov.get("mark", ""), pal)
     q = e_back((tl - t0) / 0.4)
     a = cl((tl - t0) * 6) * (1 - cl((tl - (t1 - 0.25)) / 0.25))
-    if ov["kind"] == "bubble":
+    if ov["kind"] == "place":
+        cx, cy = 50 + spr.width / 2 - (1 - cl(q)) * 220, H - 70 - spr.height / 2
+    elif ov["kind"] == "title":
+        cx, cy = W / 2, H * 0.34
+        put(fr, spr, cx, cy, 1.18 - 0.18 * cl(q), a)
+        return
+    elif ov["kind"] == "year":
+        cx, cy = W / 2 - (1 - cl(q)) * 360, H - 40 - spr.height / 2
+        put(fr, spr, cx, cy, 1.0, a)
+        return
+    elif ov["kind"] == "bubble":
         cx, cy = W - 60 - spr.width / 2 - 20, 70 + spr.height / 2
     elif ov["kind"] == "note":
         cx, cy = W - 30 - spr.width / 2, 40 + spr.height / 2 - (1 - cl(q)) * 160
@@ -2346,6 +2382,9 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             lo = 1 - cl((tl - (min(sh["dur"] - 0.15, 3.2) - 0.3)) / 0.3)
             lab = sh["lab"]
             put(fr, lab, 60 + lab.width / 2 - (1 - cl(lq)) * 380, H - 190, 1.0, cl((tl - 0.2) * 5) * lo)
+        pu = sh.get("pulse")
+        if pu and tl < 0.55:
+            fr.paste(Image.blend(fr, Image.new("RGB", fr.size, pu), 0.34 * (1 - tl / 0.55) ** 1.5))
         draw_popup(fr, sh, tl)
         draw_ov(fr, sh, tl, pal)
         if lt is not None:
