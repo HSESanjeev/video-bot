@@ -49,7 +49,7 @@ WPM_FILE = STATE / "wpm.json"
 
 W, H, FPS = 1280, 720, 30
 VOICE = os.environ.get("TTS_VOICE", "hi-IN-MadhurNeural")
-TTS_RATE = os.environ.get("TTS_RATE", "+6%")
+TTS_RATE = os.environ.get("TTS_RATE", "-3%")
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "auto").strip().lower()  # auto | gemini | edge
 GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 GEMINI_TTS_MODELS = [m for m in os.environ.get(
@@ -116,7 +116,7 @@ STYLES = [
 ]
 
 VOICE_USED = ["edge"]
-EXPLAINERS = {"merge", "split", "steps", "compare", "counter", "bars"}
+EXPLAINERS = {"merge", "split", "steps", "compare", "counter", "bars", "map"}
 
 
 def log(*a):
@@ -324,15 +324,16 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (0) include now and then a macro close-up DETAIL shot (a hand, an eye, a cracked object, a texture) of something just mentioned, and sometimes a high aerial wide shot to show where a place is; (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. EVERY shot must also have "label_hi" (1-3 Hindi words) AND "popup_en": an English description of ONE concrete object, animal, body part or symbol that the phrase mentions (e.g. "a raw carrot", "a human brain", "a burning flame", "a red heart", "a clock", "a lion"), shown as a pop-up sticker on top of the picture at the moment the word is spoken, so a viewer watching on mute still understands every sentence. Leave "popup_en" empty only if the phrase names no object at all. Optional on-screen helpers per shot (at most ONE per shot, and in total on about every second shot, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "place_hi" (the name of a place or person introduced for the first time, 1-2 words, with "place_sub_hi" a small line such as the region or role; shown as a bold location tag), "title_hi" (1-3 huge Hindi words, ONLY for the single biggest reveal of the video, e.g. the name of the main subject; shown as a glowing title), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
+- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (0) include now and then a macro close-up DETAIL shot (a hand, an eye, a cracked object, a texture) of something just mentioned, and sometimes a high aerial wide shot to show where a place is; (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. EVERY shot must also have "label_hi" (1-3 Hindi words) AND "popup_en": an English description of ONE concrete object, animal, body part or symbol that the phrase mentions (e.g. "a raw carrot", "a human brain", "a burning flame", "a red heart", "a clock", "a lion"), shown as a pop-up sticker on top of the picture at the moment the word is spoken, so a viewer watching on mute still understands every sentence. Leave "popup_en" empty only if the phrase names no object at all. MOVING FOOTAGE: only when the phrase describes something that MOVES or CHANGES POSITION (an animal running or flying, water flowing, fire burning, clouds moving, a planet spinning, people walking), set "motion": true and "clip_en": 1-3 English words for real stock footage of it (e.g. "lion running", "ocean waves", "flying bat"); at most one shot in four, never for still things, abstract ideas or old history; those use pictures. Optional on-screen helpers per shot (at most ONE per shot, and in total on about every second shot, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "place_hi" (the name of a place or person introduced for the first time, 1-2 words, with "place_sub_hi" a small line such as the region or role; shown as a bold location tag), "title_hi" (1-3 huge Hindi words, ONLY for the single biggest reveal of the video, e.g. the name of the main subject; shown as a glowing title), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
 - "compare": two things side by side. items = [A, B].
 - "counter": one striking number counting up on screen (age, distance, size, speed, count). "counter": {"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "अरब साल पहले"} plus "headline_hi" (what the number is). The narration says the number in words.
 - "bars": compare 2-4 real sizes as animated bars. "bars": [{"label_hi": "पृथ्वी", "value": 12742, "unit_hi": "किमी"}, ...]. Same unit for all, rounded well-established values only.
+- "map": use whenever the narrator names a country, region, city, route, journey or migration. "map": {"mode": "flat", "route": false, "pins": [{"label_hi": "भारत", "lat": 22.0, "lon": 79.0}, ...]} (1-4 real places with correct latitude/longitude; route true draws an animated line through the pins in order, e.g. a journey or spread; mode "globe" for far-apart places). The narration says the place names.
 - "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook, key insights and the recap.
-Use an explainer/data type (merge, split, steps, compare, counter, bars) for AT LEAST 40% of the scenes wherever the topic has a cause->effect, combination, breakup, sequence, comparison or a striking number. Include at least 2 "kinetic" scenes. Use "photo" for the hook, atmosphere, scale and the closing scene.
+Use an explainer/data type (merge, split, steps, compare, counter, bars, map) for AT LEAST 40% of the scenes wherever the topic has a cause->effect, combination, breakup, sequence, comparison or a striking number. Include at least 2 "kinetic" scenes. Use "photo" for the hook, atmosphere, scale and the closing scene.
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
 Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in any picture, no real people.
 Every scene also has "grade" (colour grading that fits the scene: warm for fire/desert/sunrise/early Earth, cool for ocean/ice/night/space, cinematic for dramatic reveals, vivid for lively nature and animals, dark for danger and mystery, dread for creepy/scary/dangerous night scenes (cold teal), bwred for shock, fear, anger or a dramatic turning point (black and white with red glow), redwash for violence or emergency, natural for calm facts) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
@@ -450,6 +451,21 @@ def validate_script(s):
                 sc["bars"] = bars
             else:
                 typ = "photo"
+        elif typ == "map":
+            mp = sc.get("map") if isinstance(sc.get("map"), dict) else {}
+            pins = []
+            for pn in (mp.get("pins") or [])[:4]:
+                try:
+                    la, lo = float(pn.get("lat")), float(pn.get("lon"))
+                except Exception:  # noqa
+                    continue
+                if -80 <= la <= 80 and -180 <= lo <= 180 and clean_short(pn.get("label_hi"), 20):
+                    pins.append({"label_hi": clean_short(pn.get("label_hi"), 20), "lat": la, "lon": lo})
+            if pins:
+                sc["map"] = {"pins": pins, "route": bool(mp.get("route")) and len(pins) >= 2,
+                             "mode": "globe" if str(mp.get("mode")) == "globe" else "flat"}
+            else:
+                typ = "photo"
         elif typ == "kinetic":
             kw = [clean_short(k, 18) for k in (sc.get("keywords_hi") or []) if clean_short(k, 18)][:4]
             if len(kw) >= 2:
@@ -478,7 +494,8 @@ def validate_script(s):
                     except Exception:  # noqa
                         return None
                 shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh.get("prompt_en") or "", 400),
-                              "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50), "popup_en": clean_short(sh.get("popup_en") or "", 120),
+                              "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50), "motion": bool(sh.get("motion")), "clip_en": clean_short(sh.get("clip_en") or "", 40),
+                              "popup_en": clean_short(sh.get("popup_en") or "", 120),
                               "ov": (({"kind": "title", "text": clean_short(sh.get("title_hi"), 24)} if str(sh.get("title_hi") or "").strip() else
                                       {"kind": "place", "text": clean_short(sh.get("place_hi"), 28) + "|" + clean_short(sh.get("place_sub_hi"), 40)}
                                       if str(sh.get("place_hi") or "").strip() else
@@ -560,11 +577,11 @@ def rescale_script(script, target_words):
 
 # --------------------------------------------------------------------------- voice
 TONES = {
-    "suspense": ("+2%", "-2Hz", "intense, urgent and gripping, building curiosity fast, punchy emphasis on key words"),
-    "wonder": ("+8%", "+4Hz", "bursting with awe and excitement, bright, lively and expressive"),
-    "serious": ("+4%", "+0Hz", "strong, confident and dramatic, driving the story forward"),
-    "excited": ("+14%", "+6Hz", "highly energetic and thrilled, fast, revealing something amazing"),
-    "calm": ("+5%", "+2Hz", "upbeat, friendly and lively, explaining clearly with energy"),
+    "suspense": ("-6%", "-3Hz", "calm, low and hushed, slow storytelling with natural pauses, building quiet curiosity"),
+    "wonder": ("-3%", "+0Hz", "warm, gentle and full of quiet wonder, a calm storyteller"),
+    "serious": ("-4%", "-2Hz", "calm, steady and grounded, a thoughtful storyteller"),
+    "excited": ("-1%", "+1Hz", "warm and engaged, slightly brighter but still calm and natural"),
+    "calm": ("-3%", "+0Hz", "calm, warm and natural, like a friendly storyteller narrating a documentary"),
 }
 
 
@@ -600,7 +617,7 @@ def tts_gemini(text, out_path, tone=None):
     if gap < GEMINI_TTS_GAP:
         time.sleep(GEMINI_TTS_GAP - gap)
     style = TONES.get(tone or "", TONES["calm"])[2]
-    prompt = (f"Say in an ENERGETIC, enthusiastic, high-energy male voice with a fast lively pace, like a top Hindi YouTube storyteller who is excited about every fact, "
+    prompt = (f"Say in a CALM, warm, natural male voice at a steady unhurried pace, like a thoughtful Hindi storyteller narrating a documentary, never shouting or over-acting, "
               f"{style}, with natural pauses at commas and full stops: {text}")
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
@@ -974,6 +991,7 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
 
 
 CF_STATE = {"dead": False, "used": 0}
+PILLS_ON = os.environ.get("PILLS", "0") == "1"
 SUBS_ON = os.environ.get("SUBTITLES", "0") == "1"  # subtitles are OFF: the visuals tell the story
 MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "14" if TEST_SEC else "48"))
 
@@ -1059,6 +1077,69 @@ def pexels_photo(query, out, size=(1920, 1080)):
 
 BAD_TAGS = {"man", "woman", "people", "girl", "boy", "child", "children", "person", "portrait", "model", "baby", "couple", "family",
             "face", "lady", "men", "women", "kid", "kids", "student", "crowd", "wedding", "bride", "text", "logo"}
+
+
+def pixabay_video(query, out):
+    """Real moving footage (free Pixabay video, commercial use allowed). Used only for shots where something moves."""
+    if not PIXABAY_KEY or not query:
+        return False
+    hits = []
+    qs = [query[:90]] + ([query.split()[-1]] if len(query.split()) > 1 else [])
+    for q in qs:
+        r = requests.get("https://pixabay.com/api/videos/", params={"key": PIXABAY_KEY, "q": q, "per_page": 20, "safesearch": "true"}, timeout=30)
+        if not r.ok:
+            raise RuntimeError(f"Pixabay video HTTP {r.status_code}")
+        hits = [h for h in r.json().get("hits", []) if h.get("duration", 0) >= 3 and not (BAD_TAGS & {x.strip().lower() for x in h.get("tags", "").split(",")})]
+        if hits:
+            break
+    if not hits:
+        return False
+    h = random.choice(hits[:6])
+    v = h.get("videos", {})
+    pick = next((v[k] for k in ("medium", "large", "small") if v.get(k, {}).get("url")), None)
+    if not pick:
+        return False
+    with requests.get(pick["url"], stream=True, timeout=90) as rr:
+        rr.raise_for_status()
+        n = 0
+        with open(out, "wb") as f:
+            for chunk in rr.iter_content(1 << 20):
+                n += len(chunk)
+                if n > 60 << 20:
+                    raise RuntimeError("clip too big")
+                f.write(chunk)
+    return Path(out).exists() and Path(out).stat().st_size > 20000
+
+
+class ClipReader:
+    """Streams the frames of a stock clip (looped if short) in order, scaled and cropped to the video size."""
+
+    def __init__(self, path, dur):
+        cmd = ["ffmpeg", "-v", "error", "-stream_loop", "-1", "-i", str(path), "-t", f"{dur + 0.6:.2f}", "-vf",
+               f"fps={FPS},scale={W}:{H}:force_original_aspect_ratio=increase,crop={W}:{H}", "-f", "rawvideo", "-pix_fmt", "rgb24", "-"]
+        self.p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        self.i, self.last = -1, None
+
+    def frame(self, idx):
+        while self.i < idx and self.p is not None:
+            buf = self.p.stdout.read(W * H * 3)
+            if len(buf) < W * H * 3:
+                self.close()
+                break
+            self.last = Image.frombytes("RGB", (W, H), buf)
+            self.i += 1
+        return self.last
+
+    def close(self):
+        if self.p is not None:
+            try:
+                self.p.kill()
+            except Exception:  # noqa
+                pass
+            self.p = None
+
+    def __del__(self):
+        self.close()
 
 
 def query_from_prompt(prompt):
@@ -1931,6 +2012,14 @@ def shot_frame(shot, tl):
     """One camera frame of a still picture: push / pull / pan / tilt / orbit / handheld, optional 2.5D parallax + rack focus."""
     src = shot["img"]
     p = cl(tl / max(0.1, shot["dur"]))
+    if shot.get("clip"):
+        if shot.get("reader") is None:
+            shot["reader"] = ClipReader(shot["clip"], shot["dur"])
+        f_ = shot["reader"].frame(int(round(tl * FPS)))
+        if f_ is not None:
+            f2 = apply_grade(f_, shot.get("grade", "natural"))
+            z = 1.0 + 0.05 * p  # very slow push so the footage never looks frozen between moves
+            return f2.resize((W, H), Image.BILINEAR, box=((W - W / z) / 2, (H - H / z) / 2, (W + W / z) / 2, (H + H / z) / 2)) if z > 1.003 else f2
     if shot["cam"] == "focus":
         q = e_out(p)
         z = 1.12 + 0.42 * q
@@ -2183,7 +2272,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
             shots[-1]["t1"] = b
             shots[-1]["dur"] = b - shots[-1]["t0"]
             continue
-        n = max(1, math.ceil((b - a) / 2.7))
+        n = 1 if s_.get("clip") else max(1, math.ceil((b - a) / 2.7))
         sd = (b - a) / n
         for j in range(n):
             new_img = (j == 0) and (s_["image"] is not last_img)
@@ -2209,6 +2298,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                           "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
                           "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4,
                           "ov": (s_.get("ov") if j == 0 else None), "popup": (s_.get("popup_img") if j == 0 else None),
+                          "clip": s_.get("clip"), "reader": None, "grade": sc.get("grade", "natural"),
                           "pop_side": rnd.choice([-1, 1]),
                           "phase": rnd.uniform(0, 6)})
         last_img = s_["image"]
@@ -2352,9 +2442,9 @@ def draw_ov(fr, sh, tl, pal):
 def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     shots = build_shots(sc, dur, speech_dur, ctx, sc.get("tone"))
     dust = Dust(ctx["rnd"].random())
-    lt = lower_third(sc["headline_hi"], pal) if sc.get("headline_hi") else None
+    lt = lower_third(sc["headline_hi"], pal) if (PILLS_ON and sc.get("headline_hi")) else None  # orange tag boxes are OFF
     for sh in shots:
-        sh["lab"] = lower_third(sh["label"], pal) if sh.get("label") else None
+        sh["lab"] = lower_third(sh["label"], pal) if (PILLS_ON and sh.get("label")) else None
     for sh in shots[1:]:
         nm, g = TRANS_SFX.get(sh["trans"], (None, 0))
         if nm:
@@ -2570,6 +2660,414 @@ def pick_transition(i, sc, prev_sc, ctx):
     return rnd.choice(["fade", "fade", "zoom", "wipe", "whip"]), 0.45
 
 
+# ---- map / globe / route animation and layered cross-section (drawn in code, no pictures needed)
+LAND_URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_land.geojson"
+LAND_FALLBACK = [  # crude continent outlines (lon, lat); used only when the real map data cannot be downloaded
+    [(-168, 66), (-162, 70), (-156, 71), (-141, 70), (-128, 70), (-115, 68), (-95, 72), (-85, 69), (-82, 63), (-93, 59), (-88, 56), (-82, 53),
+     (-79, 52), (-78, 58), (-77, 62), (-70, 61), (-65, 60), (-62, 57), (-56, 53), (-60, 48), (-65, 48), (-66, 44), (-70, 43), (-74, 40),
+     (-76, 35), (-81, 31), (-80, 26), (-83, 29), (-85, 30), (-90, 29), (-95, 29), (-97, 26), (-97, 22), (-95, 19), (-91, 19), (-90, 21),
+     (-87, 21), (-88, 16), (-84, 15), (-83, 10), (-79, 9), (-77, 8), (-80, 7), (-84, 9), (-87, 13), (-92, 14), (-96, 16), (-102, 18),
+     (-105, 20), (-106, 23), (-110, 27), (-113, 31), (-115, 30), (-112, 25), (-110, 23), (-112, 26), (-115, 29), (-117, 33), (-121, 35),
+     (-124, 40), (-124, 47), (-128, 51), (-133, 56), (-140, 59), (-148, 60), (-153, 58), (-158, 57), (-164, 55), (-158, 58), (-162, 60),
+     (-166, 62)],
+    [(-77, 8), (-72, 12), (-65, 11), (-60, 8), (-52, 5), (-50, 0), (-44, -2), (-35, -5), (-35, -9), (-39, -14), (-40, -20), (-44, -23),
+     (-48, -26), (-49, -29), (-53, -34), (-58, -35), (-57, -38), (-62, -39), (-65, -42), (-65, -47), (-68, -50), (-69, -52), (-68, -55),
+     (-72, -54), (-75, -50), (-74, -44), (-73, -38), (-71, -30), (-70, -20), (-76, -14), (-81, -6), (-80, -2), (-78, 2)],
+    [(-9, 37), (-9, 43), (-2, 43.5), (-1, 46), (-4, 48), (2, 51), (5, 53), (8, 54), (9, 57), (11, 55), (14, 54), (20, 55), (22, 59), (28, 60),
+     (23, 65), (25, 66), (21, 64), (17, 61), (19, 60), (16, 56), (12, 56), (11, 59), (6, 58), (5, 62), (14, 67), (20, 70), (30, 71), (40, 67),
+     (44, 68), (60, 69), (70, 73), (80, 73), (100, 77), (113, 74), (130, 72), (140, 72), (160, 70), (170, 70), (180, 68), (180, 65), (178, 63),
+     (163, 60), (162, 56), (156, 51), (156, 57), (142, 59), (137, 54), (141, 52), (140, 48), (135, 43), (130, 42), (129, 36), (126, 35),
+     (126, 38), (125, 40), (121, 40), (119, 37), (122, 37), (121, 31), (122, 29), (120, 24), (117, 23), (110, 21), (108, 21), (106, 18),
+     (109, 12), (105, 9), (103, 10), (100, 13), (99, 8), (103, 2), (101, 3), (98, 8), (98, 16), (94, 17), (92, 21), (90, 22), (87, 21),
+     (85, 20), (80, 15), (80, 10), (77, 8), (73, 16), (72, 21), (69, 22), (66, 25), (61, 25), (57, 26), (56, 27), (51, 28), (48, 30),
+     (50, 26), (52, 24), (56, 25), (58, 23), (60, 22), (55, 17), (52, 16), (45, 13), (43, 13), (39, 21), (35, 28), (34.5, 29.5), (35, 33),
+     (36, 36), (30, 36), (27, 37), (26, 40), (23, 40), (24, 38), (22, 37), (21, 40), (19, 42), (14, 45), (12, 44), (16, 41), (18, 40),
+     (16, 38), (12, 42), (9, 44), (5, 43), (3, 43), (0, 39), (-2, 37), (-5, 36)],
+    [(-17, 21), (-16, 28), (-10, 30), (-6, 36), (0, 36), (10, 37), (11, 33), (20, 31), (25, 32), (32, 31), (34, 28), (38, 21), (43, 12),
+     (51, 12), (48, 5), (41, -2), (40, -10), (40, -16), (35, -22), (32, -28), (27, -34), (20, -35), (18, -32), (14, -23), (12, -17),
+     (13, -9), (9, -1), (9, 4), (5, 6), (-4, 5), (-8, 4), (-13, 8), (-17, 14)],
+    [(114, -22), (122, -18), (130, -12), (137, -12), (136, -15), (141, -17), (142, -11), (146, -19), (153, -26), (151, -34), (147, -38),
+     (140, -38), (135, -34), (131, -31), (124, -33), (115, -34)],
+    [(-73, 78), (-60, 82), (-30, 83), (-18, 79), (-20, 70), (-35, 66), (-43, 60), (-50, 64), (-55, 70), (-65, 76)],
+    [(-180, -72), (-120, -74), (-60, -65), (-60, -75), (0, -70), (60, -67), (120, -66), (180, -70), (180, -90), (-180, -90)],
+    [(-5, 50), (1, 51), (2, 53), (-2, 56), (-3, 58.5), (-6, 58), (-5, 55), (-3, 54), (-5, 52)],
+    [(-10, 52), (-6, 52), (-6, 55), (-10, 54)],
+    [(130, 31), (132, 34), (135, 34), (140, 36), (142, 40), (141, 45), (139, 40), (136, 36), (131, 34)],
+    [(44, -25), (47, -25), (50, -15), (49, -12), (44, -17)],
+    [(95, 5), (98, 4), (105, -5), (102, -4), (95, 2)], [(109, 1), (117, 7), (119, 1), (116, -4), (110, -3)],
+    [(105, -6), (114, -7.5), (114, -8.5), (106, -7)], [(131, -1), (141, -3), (150, -10), (142, -9), (138, -8), (132, -4)],
+    [(172, -34), (178, -38), (175, -41), (172, -41)], [(167, -46), (174, -41), (171, -44.5)], [(80, 9.5), (82, 7), (80.5, 6), (79.8, 8)],
+]
+
+
+def get_land():
+    """Real Natural Earth coastlines (downloaded once, cached); crude built-in outlines if the download is impossible."""
+    if "land" in _C:
+        return _C["land"]
+    np = _np()
+    rings, src = [], "builtin"
+    cache = ROOT / "land.json"
+    data = None
+    try:
+        if cache.exists():
+            data = json.loads(cache.read_text())
+        elif os.environ.get("NO_LAND_DOWNLOAD") != "1":
+            r = requests.get(LAND_URL, timeout=40)
+            if r.ok:
+                data = r.json()
+                try:
+                    cache.write_text(json.dumps(data))
+                except Exception:  # noqa
+                    pass
+        if data:
+            for f in data.get("features", []):
+                g = f.get("geometry") or {}
+                polys = g.get("coordinates", []) if g.get("type") == "MultiPolygon" else [g.get("coordinates", [])] if g.get("type") == "Polygon" else []
+                for poly in polys:
+                    if poly:
+                        rings.append(np.array(poly[0], dtype=np.float64)[:, :2])
+            if rings:
+                src = "natural-earth"
+    except Exception as e:  # noqa
+        log("map data download failed:", type(e).__name__)
+    if not rings:
+        rings = [np.array(r, dtype=np.float64) for r in LAND_FALLBACK]
+    _C["land"], _C["land_src"] = rings, src
+    return rings
+
+
+def gc_points(a, b, n=40):
+    np = _np()
+
+    def vec(la, lo):
+        la, lo = math.radians(la), math.radians(lo)
+        return np.array([math.cos(la) * math.cos(lo), math.cos(la) * math.sin(lo), math.sin(la)])
+    v1, v2 = vec(*a), vec(*b)
+    om = math.acos(max(-1.0, min(1.0, float(v1 @ v2))))
+    out = []
+    for k in range(n + 1):
+        f = k / n
+        v = v1 if om < 1e-6 else (math.sin((1 - f) * om) * v1 + math.sin(f * om) * v2) / math.sin(om)
+        out.append((math.degrees(math.asin(max(-1, min(1, v[2])))), math.degrees(math.atan2(v[1], v[0]))))
+    return out
+
+
+def hav_km(a, b):
+    la1, lo1, la2, lo2 = map(math.radians, (a[0], a[1], b[0], b[1]))
+    h = math.sin((la2 - la1) / 2) ** 2 + math.cos(la1) * math.cos(la2) * math.sin((lo2 - lo1) / 2) ** 2
+    return 12742 * math.asin(min(1, math.sqrt(h)))
+
+
+def pin_sprite(pal):
+    k = 4
+    s = 44
+    im = Image.new("RGBA", (s * k, s * k), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    d.ellipse([4 * k, 4 * k, (s - 4) * k, (s - 4) * k], fill=(255, 255, 255, 255))
+    d.ellipse([9 * k, 9 * k, (s - 9) * k, (s - 9) * k], fill=(230, 40, 60, 255))
+    d.ellipse([s * k / 2 - 4 * k, s * k / 2 - 4 * k, s * k / 2 + 4 * k, s * k / 2 + 4 * k], fill=(255, 255, 255, 255))
+    return im.resize((s, s), Image.LANCZOS)
+
+
+def make_map_draw(sc, dur, speech_dur, pal, events):
+    np = _np()
+    m = sc["map"]
+    pins = m["pins"]
+    route = m["route"] and len(pins) >= 2
+    mode = m["mode"]
+    pts = [(p["lat"], p["lon"]) for p in pins]
+    lats, lons = [p[0] for p in pts], [p[1] for p in pts]
+    span_lon = max(lons) - min(lons)
+    if mode == "globe" and (span_lon > 110 or (max(lats) - min(lats)) > 90):
+        mode = "flat"
+    land = get_land()
+    base = bg_base(tuple(pal["top"]), tuple(pal["bottom"]))
+    bubbles = _bubbles()
+    head = head_sprite(sc["headline_hi"], pal) if sc.get("headline_hi") else None
+    pin_img = pin_sprite(pal)
+    labels = [lower_third(p["label_hi"], pal) if False else text_layer(p["label_hi"], load_font(34, "label"), fill=(255, 255, 255)) for p in pins]
+    label_pills = []
+    for lay in labels:
+        w, h = lay.width + 36, lay.height + 14
+        pl = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        col = Image.new("RGBA", (w, h), tuple(pal["ink"]) + (255,))
+        col.putalpha(rounded_mask((w, h), h // 2))
+        pl.alpha_composite(col)
+        pl.alpha_composite(lay, ((w - lay.width) // 2, (h - lay.height) // 2))
+        label_pills.append(pl)
+    # path through the pins
+    path = []
+    for a, b in zip(pts, pts[1:]):
+        path += gc_points(a, b, 40)[(1 if path else 0):]
+    seg_len = [0.0]
+    for a, b in zip(path, path[1:]):
+        seg_len.append(seg_len[-1] + hav_km(a, b))
+    total_km = seg_len[-1] if route else 0.0
+    pin_km = [0.0]
+    for a, b in zip(pts, pts[1:]):
+        pin_km.append(pin_km[-1] + hav_km(a, b))
+    t_start, t_end = 1.9, max(3.2, min(dur - 1.2, speech_dur * 0.85))
+    if route:
+        pin_t = [1.2] + [t_start + (t_end - t_start) * (k / max(1.0, total_km)) for k in pin_km[1:]]
+    else:
+        pin_t = [1.2 + 0.8 * i for i in range(len(pts))]
+    for t in pin_t:
+        events.append((t, "pop", 0.8))
+    events.append((0.2, "whoosh_soft", 0.8))
+    if route:
+        for k in range(int((t_end - t_start) / 0.12)):
+            events.append((t_start + k * 0.12, "tick", 0.12))
+        events.append((t_end, "ding", 0.7))
+    # view geometry
+    mid_lat = sum(lats) / len(lats)
+    ux = sum(math.cos(math.radians(a)) * math.cos(math.radians(o)) for a, o in pts)
+    uy = sum(math.cos(math.radians(a)) * math.sin(math.radians(o)) for a, o in pts)
+    mid_lon = math.degrees(math.atan2(uy, ux))
+    R, gcx, gcy = 228, W / 2, 322
+    PW, PH, PX, PY = 1160, 428, 60, 94
+    ocean_sprite = {}
+    if mode == "globe":
+        D = 2 * R + 40
+        gg = np.mgrid[0:2 * R, 0:2 * R].astype(np.float32)
+        d = np.sqrt((gg[0] - R) ** 2 + (gg[1] - R) ** 2) / R
+        shade = np.clip(1.0 - 0.55 * d ** 2.2, 0.35, 1.0)
+        c_in, c_out = np.array([90, 175, 235], np.float32), np.array([20, 70, 150], np.float32)
+        col = (c_out[None, None, :] + (c_in - c_out)[None, None, :] * (1 - d ** 1.5)[..., None])
+        ocean = Image.fromarray(np.clip(col, 0, 255).astype(np.uint8)).convert("RGBA")
+        am = Image.new("L", (2 * R * 3, 2 * R * 3), 0)
+        ImageDraw.Draw(am).ellipse([0, 0, 2 * R * 3 - 1, 2 * R * 3 - 1], fill=255)
+        ocean.putalpha(am.resize((2 * R, 2 * R), Image.LANCZOS))
+        ocean_sprite["img"] = ocean
+        ocean_sprite["glow"] = glow_sprite(2 * R + 150, (255, 255, 255), 0.55)
+        hl = np.clip(1 - np.sqrt((gg[0] - R * 0.65) ** 2 + (gg[1] - R * 0.6) ** 2) / (R * 0.9), 0, 1) ** 1.6 * 70
+        edge = np.clip((d - 0.55) / 0.45, 0, 1) ** 1.6 * 120
+        sh = np.zeros((2 * R, 2 * R, 4), np.uint8)
+        sh[..., 0:3] = 255
+        sh[..., 3] = np.clip(hl, 0, 255).astype(np.uint8)
+        sh2 = np.zeros((2 * R, 2 * R, 4), np.uint8)
+        sh2[..., 0:3] = (5, 20, 60)
+        sh2[..., 3] = np.clip(edge, 0, 255).astype(np.uint8)
+        ocean_sprite["shade"] = Image.alpha_composite(Image.fromarray(sh), Image.fromarray(sh2))
+        ocean_sprite["mask"] = ocean.getchannel("A")
+
+    def centre(t):
+        q = e_out(t / 2.0)
+        return lerp(mid_lat * 0.7 + 8, mid_lat * 0.8, q), lerp(mid_lon + 85, mid_lon, q)
+
+    def proj_globe(lat, lon, c):
+        p0, l0 = math.radians(c[0]), math.radians(c[1])
+        la, lo = np.radians(lat), np.radians(lon)
+        dl = lo - l0
+        x = R * np.cos(la) * np.sin(dl)
+        y = R * (math.cos(p0) * np.sin(la) - math.sin(p0) * np.cos(la) * np.cos(dl))
+        cc = math.sin(p0) * np.sin(la) + math.cos(p0) * np.cos(la) * np.cos(dl)
+        return x, y, cc
+
+    # flat view bounds
+    asp = PW / PH
+    h_lon = max(max(span_lon / 2 + 14, (max(lats) - min(lats)) / 2 * asp + 12), 24.0)
+    r_c = ((min(lons) + max(lons)) / 2 if span_lon < 180 else mid_lon, (min(lats) + max(lats)) / 2)
+
+    def flat_view(t):
+        q = e_io((t - 0.15) / 1.8)
+        hl_ = math.exp(lerp(math.log(185.0), math.log(h_lon), q))
+        return lerp(0.0, r_c[0], q), lerp(12.0, r_c[1], q), hl_
+
+    def draw(t):
+        fr = base.copy()
+        _draw_bubbles(fr, bubbles, t)
+        if head is not None:
+            put(fr, head, W / 2, 62, 1.0, cl(t * 2.5))
+        screen = []  # (x, y, visible) of each pin at 1x
+        route_pts = []
+        if mode == "globe":
+            c = centre(t)
+            put(fr, ocean_sprite["glow"], gcx, gcy, 1.0, 0.8)
+            k = 2
+            cv = Image.new("RGBA", (2 * R * k, 2 * R * k), (0, 0, 0, 0))
+            dr = ImageDraw.Draw(cv)
+            for gl in range(-60, 61, 30):  # graticule
+                la = np.full(60, float(gl))
+                lo = np.linspace(-180, 180, 60)
+                x, y, cc = proj_globe(la, lo, c)
+                seg = []
+                for xi, yi, ci in zip(x, y, cc):
+                    if ci > 0:
+                        seg.append((R + xi * 1, R - yi * 1))
+                    else:
+                        if len(seg) > 1:
+                            dr.line([(a * k, b * k) for a, b in seg], fill=(255, 255, 255, 70), width=2)
+                        seg = []
+                if len(seg) > 1:
+                    dr.line([(a * k, b * k) for a, b in seg], fill=(255, 255, 255, 70), width=2)
+            for gl in range(-180, 180, 30):
+                la = np.linspace(-85, 85, 40)
+                lo = np.full(40, float(gl))
+                x, y, cc = proj_globe(la, lo, c)
+                seg = []
+                for xi, yi, ci in zip(x, y, cc):
+                    if ci > 0:
+                        seg.append((R + xi, R - yi))
+                    else:
+                        if len(seg) > 1:
+                            dr.line([(a * k, b * k) for a, b in seg], fill=(255, 255, 255, 70), width=2)
+                        seg = []
+                if len(seg) > 1:
+                    dr.line([(a * k, b * k) for a, b in seg], fill=(255, 255, 255, 70), width=2)
+            for ring in land:
+                x, y, cc = proj_globe(ring[:, 1], ring[:, 0], c)
+                if not (cc > 0).any():
+                    continue
+                n = np.hypot(x, y)
+                n[n < 1e-6] = 1e-6
+                hid = cc <= 0
+                x = np.where(hid, x / n * R * 0.999, x)
+                y = np.where(hid, y / n * R * 0.999, y)
+                poly = [((R + a) * k, (R - b) * k) for a, b in zip(x, y)]
+                if len(poly) > 2:
+                    dr.polygon(poly, fill=(120, 196, 96, 255), outline=(70, 140, 70, 255))
+            if route and len(path) > 1:
+                prog = cl((t - t_start) / (t_end - t_start)) * total_km
+                seg = []
+                for (la, lo), dist in zip(path, seg_len):
+                    if dist > prog:
+                        break
+                    x, y, cc = proj_globe(np.array([la]), np.array([lo]), c)
+                    if cc[0] > 0:
+                        seg.append(((R + x[0]) * k, (R - y[0]) * k))
+                    else:
+                        if len(seg) > 1:
+                            dr.line(seg, fill=(255, 255, 255, 255), width=14)
+                            dr.line(seg, fill=tuple(pal["accent"]) + (255,), width=8)
+                        seg = []
+                if len(seg) > 1:
+                    dr.line(seg, fill=(255, 255, 255, 255), width=14)
+                    dr.line(seg, fill=tuple(pal["accent"]) + (255,), width=8)
+                if t >= t_start and seg:
+                    route_pts.append(((seg[-1][0]) / k + gcx - R, (seg[-1][1]) / k + gcy - R))
+            cv = cv.reduce(k)
+            sphere = ocean_sprite["img"].copy()
+            sphere.alpha_composite(cv)
+            sphere.alpha_composite(ocean_sprite["shade"])
+            a = ImageChops.multiply(sphere.getchannel("A"), ocean_sprite["mask"])
+            sphere.putalpha(a)
+            put(fr, sphere, gcx, gcy, 1.0, 1.0)
+            for la, lo in pts:
+                x, y, cc = proj_globe(np.array([la]), np.array([lo]), c)
+                screen.append((gcx + x[0], gcy - y[0], cc[0] > 0.08))
+        else:
+            cx_, cy_, hl_ = flat_view(t)
+            sc_ = (PW / 2) / hl_
+            k = 2
+            cv = Image.new("RGB", (PW * k, PH * k), (150, 205, 245))
+            dr = ImageDraw.Draw(cv, "RGBA")
+
+            def fp(lat, lon):
+                return ((PW / 2 + (lon - cx_) * sc_) * k, (PH / 2 - (lat - cy_) * sc_) * k)
+            step = 30 if hl_ > 60 else (10 if hl_ > 20 else 5)
+            for gl in range(-90, 91, step):
+                dr.line([fp(gl, -180), fp(gl, 180)], fill=(255, 255, 255, 90), width=2)
+            for gl in range(-180, 181, step):
+                dr.line([fp(-90, gl), fp(90, gl)], fill=(255, 255, 255, 90), width=2)
+            for ring in land:
+                poly = [fp(b, a) for a, b in ring]
+                xs = [p[0] for p in poly]
+                ys = [p[1] for p in poly]
+                if max(xs) < 0 or min(xs) > PW * k or max(ys) < 0 or min(ys) > PH * k:
+                    continue
+                dr.polygon(poly, fill=(120, 196, 96, 255), outline=(70, 140, 70, 255))
+            if route and len(path) > 1:
+                prog = cl((t - t_start) / (t_end - t_start)) * total_km
+                seg = []
+                for (la, lo), dist in zip(path, seg_len):
+                    if dist > prog:
+                        break
+                    seg.append(fp(la, lo))
+                if len(seg) > 1:
+                    dr.line(seg, fill=(255, 255, 255, 255), width=14, joint="curve")
+                    dr.line(seg, fill=tuple(pal["accent"]) + (255,), width=8, joint="curve")
+                if t >= t_start and seg:
+                    route_pts.append((PX + seg[-1][0] / k, PY + seg[-1][1] / k))
+            panel = cv.reduce(k).convert("RGBA")
+            pm = rounded_mask((PW, PH), 30)
+            panel.putalpha(pm)
+            border = Image.new("RGBA", (PW + 12, PH + 12), (255, 255, 255, 255))
+            border.putalpha(rounded_mask((PW + 12, PH + 12), 36))
+            put(fr, border, PX + PW / 2, PY + PH / 2, 1.0, 1.0)
+            put(fr, panel, PX + PW / 2, PY + PH / 2, 1.0, 1.0)
+            for la, lo in pts:
+                x, y = fp(la, lo)
+                inside = 0 <= x <= PW * k and 0 <= y <= PH * k
+                screen.append((PX + x / k, PY + y / k, inside))
+        for i, (x, y, vis) in enumerate(screen):
+            q = t - pin_t[i]
+            if q < 0 or not vis:
+                continue
+            drop = lerp(-70, 0, e_out(q / 0.35))
+            ring_r = 1.0 + (q % 1.4) / 1.4 * 1.6
+            put(fr, soft_circle(22, (255, 255, 255), 0.5), x, y - 18, ring_r, 0.6 * (1 - (q % 1.4) / 1.4) * cl(q * 3))
+            put(fr, pin_img, x, y - 20 + drop, e_back(q / 0.4), cl(q * 6))
+            ly = y - 62 if i % 2 == 0 else y + 22
+            put(fr, label_pills[i], x, ly + drop * 0.3, 1.0, cl((q - 0.15) * 4))
+        for (x, y) in route_pts:
+            put(fr, soft_circle(14, (255, 255, 255), 1.0), x, y, 1.0 + 0.1 * math.sin(t * 9), 1.0)
+        if route:
+            prog = cl((t - t_start) / (t_end - t_start)) * total_km
+            if t > t_start - 0.1:
+                txt = f"≈ {prog:,.0f} किमी"
+                put(fr, quick_text(txt, 54, tuple(pal["accent"]), stroke=8, stroke_fill=(255, 255, 255), role="label"),
+                    230 if mode == "globe" else W / 2, 505 if mode == "globe" else 92 + PH - 28, 1.0, cl((t - t_start + 0.1) * 4))
+        return fr
+    return draw
+
+
+LAYER_COLS = [(255, 196, 60), (255, 130, 50), (230, 70, 60), (170, 40, 110), (90, 40, 140)]
+
+
+def make_layers_draw(sc, dur, speech_dur, pal, events):
+    layers = sc["layers"]
+    n = len(layers)
+    base = bg_base(tuple(pal["top"]), tuple(pal["bottom"]))
+    bubbles = _bubbles()
+    head = head_sprite(sc["headline_hi"], pal) if sc.get("headline_hi") else None
+    top, bh = 110, min(84, 400 // n)
+    cx = 360
+    t_i = [0.5 + i * max(0.7, (speech_dur * 0.75) / n) for i in range(n)]
+    for t in t_i:
+        events.append((t, "pop", 0.7))
+    lab = [text_layer(l["label_hi"], load_font(46, "head"), fill=tuple(pal["ink"]), align="left") for l in layers]
+    det = [text_layer(l["detail_hi"], load_font(34, "label"), fill=tuple(pal["accent"]), stroke=4, stroke_fill=(255, 255, 255), align="left") if l["detail_hi"] else None for l in layers]
+    arrow = sym_arrow(pal, 64).rotate(-90, expand=True)
+
+    def draw(t):
+        fr = base.copy()
+        _draw_bubbles(fr, bubbles, t)
+        if head is not None:
+            put(fr, head, W / 2, 62, 1.0, cl(t * 2.5))
+        d = ImageDraw.Draw(fr)
+        for i in range(n):
+            q = t - t_i[i]
+            if q < 0:
+                continue
+            w = 560 - i * 70
+            off = lerp(-700, 0, e_out(q / 0.5))
+            y0 = top + i * (bh + 6)
+            col = LAYER_COLS[i % 5] if n > 1 else LAYER_COLS[0]
+            d.rounded_rectangle([cx - w / 2 + off, y0, cx + w / 2 + off, y0 + bh], 22, fill=(255, 255, 255))
+            d.rounded_rectangle([cx - w / 2 + 5 + off, y0 + 5, cx + w / 2 - 5 + off, y0 + bh - 5], 18, fill=col)
+            d.ellipse([cx - 14 + off, y0 + bh / 2 - 14, cx + 14 + off, y0 + bh / 2 + 14], fill=(255, 255, 255))
+            a = cl(q * 3)
+            put(fr, lab[i], 760 + lab[i].width / 2 + (1 - a) * 80, y0 + bh / 2 - (14 if det[i] else 0), 1.0, a)
+            if det[i] is not None:
+                put(fr, det[i], 760 + det[i].width / 2 + (1 - a) * 80, y0 + bh / 2 + 26, 1.0, a)
+        k = max(0, sum(1 for x in t_i if t >= x) - 1)
+        put(fr, arrow, 90, top + k * (bh + 6) + bh / 2 + 6 * math.sin(t * 5), 1.0, cl(t - t_i[0]))
+        return fr
+    return draw
+
+
+
+
 def render_scene(i, sc, out, pal, ctx, prev_sc, last):
     dur, sp = sc["dur"], sc["speech_dur"]
     events = []
@@ -2582,6 +3080,8 @@ def render_scene(i, sc, out, pal, ctx, prev_sc, last):
         draw = make_bars_draw(sc, dur, sp, pal, events)
     elif typ == "kinetic":
         draw = make_kinetic_draw(sc, dur, sp, ctx, events, pal)
+    elif typ == "map":
+        draw = make_map_draw(sc, dur, sp, pal, events)
     else:
         draw = make_photo_draw(sc, dur, sp, ctx, events, pal)
     subs = make_subtrack(sc["narration_hi"], sp, dur, pal, sc.get("wt"))
@@ -3100,6 +3600,12 @@ def cutout_sticker(path, maxside=360):
     bb = a.point(lambda v: 255 if v > 40 else 0).getbbox()
     if not bb or (bb[2] - bb[0]) * (bb[3] - bb[1]) < 0.04 * im.width * im.height:
         return None
+    bbox_area = (bb[2] - bb[0]) * (bb[3] - bb[1])
+    if bbox_area > 0.80 * im.width * im.height:  # background was not removed: reject ugly square stickers
+        return None
+    ar = np.asarray(a.crop(bb).point(lambda v: 255 if v > 40 else 0), dtype=np.float32) / 255.0
+    if ar.mean() > 0.93:  # object fills its whole box = a square picture, not a cut-out
+        return None
     im, a = im.crop(bb), a.crop(bb)
     sc = maxside / max(im.size)
     im, a = im.resize((int(im.width * sc), int(im.height * sc)), Image.LANCZOS), a.resize((int(a.width * sc), int(a.height * sc)), Image.LANCZOS)
@@ -3123,6 +3629,7 @@ def cutout_sticker(path, maxside=360):
     return out
 
 
+CLIPS_MAX = [int(os.environ.get("MAX_CLIPS", "4" if TEST_SEC else "14"))]
 POPUPS_MAX = [int(os.environ.get("MAX_POPUPS", "10" if TEST_SEC else "40"))]
 
 
@@ -3143,6 +3650,21 @@ def make_visuals(scenes, imgdir):
                             sh["popup_img"] = cutout_sticker(po)
                     except Exception as e:  # noqa
                         log("popup failed:", type(e).__name__, str(e)[:100])
+                if sh.get("motion") and sh.get("clip_en") and PIXABAY_KEY and CLIPS_MAX[0] > 0:
+                    CLIPS_MAX[0] -= 1
+                    try:
+                        cp = imgdir / f"{i:03d}_s{k}.mp4"
+                        if pixabay_video(sh["clip_en"], cp):
+                            fp = imgdir / f"{i:03d}_s{k}_clip.png"
+                            run(["ffmpeg", "-y", "-i", cp, "-vf", "select=eq(n\\,10)", "-frames:v", "1", fp])
+                            if not fp.exists():
+                                run(["ffmpeg", "-y", "-i", cp, "-frames:v", "1", fp])
+                            sh["clip"] = str(cp)
+                            sh["image"] = fp
+                            prev_img = fp
+                            continue
+                    except Exception as e:  # noqa
+                        log("stock clip failed:", type(e).__name__, str(e)[:100])
                 if not sh["prompt_en"].strip() and prev_img:
                     sh["image"] = prev_img  # same picture, camera moves to the part being spoken about
                     continue
@@ -3473,6 +3995,9 @@ def selftest():
         {"type": "steps", "tone": "calm", "headline_hi": "चाँद बनने के चरण",
          "items": items([("टक्कर",) + R, ("मलबा",) + R, ("जुड़ना",) + M, ("चाँद",) + M]),
          "narration_hi": "पहले टक्कर हुई, फिर मलबा बना, फिर वह धीरे धीरे जुड़ता गया और आख़िर में चाँद बन गया"},
+        {"type": "map", "tone": "calm", "headline_hi": "सफ़र", "grade": "natural",
+         "map": {"mode": "flat", "route": True, "pins": [{"label_hi": "अफ़्रीका", "lat": 5.0, "lon": 20.0}, {"label_hi": "भारत", "lat": 22.0, "lon": 79.0}]},
+         "narration_hi": "यह सफ़र अफ़्रीका से शुरू हुआ और धीरे-धीरे भारत तक पहुँचा"},
         {"type": "kinetic", "tone": "excited", "keywords_hi": ["टक्कर", "मलबा", "चाँद!"], "headline_hi": "",
          "image_prompt_en": "x", "image": art(t0 / "k.png", "rock", (255, 120, 40), (60, 10, 60), 1920),
          "narration_hi": "याद रखिए, टक्कर से मलबा बना, और उसी मलबे से हमारा चाँद"},
