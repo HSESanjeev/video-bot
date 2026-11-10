@@ -1052,15 +1052,35 @@ BAD_TAGS = {"man", "woman", "people", "girl", "boy", "child", "children", "perso
             "face", "lady", "men", "women", "kid", "kids", "student", "crowd", "wedding", "bride", "text", "logo"}
 
 
-def pixabay_photo(query, out, size=(1920, 1080)):
+def query_from_prompt(prompt):
+    """Short English search words taken from an AI picture prompt (first clause, without filler words)."""
+    c = re.split(r"[,;.]", prompt)[0].lower().replace("\u2019s", "").replace("'s", "")
+    c = re.sub(r"\b(a|an|the|of|at|in|on|with|during|over|under|night|day|close-up|closeup|wide|shot|photo|picture|image|view|dramatic|cinematic|realistic|beautiful|large|giant|single|detailed|glowing)\b", " ", c)
+    w = [x for x in re.findall(r"[a-z]+", c)]
+    return " ".join(w[:3])
+
+
+def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
     """REAL photo of the named thing from Pixabay (free key, no daily image limit, commercial use allowed, no people)."""
     if not PIXABAY_KEY or not query:
         return False
-    r = requests.get("https://pixabay.com/api/", params={"key": PIXABAY_KEY, "q": query[:90], "image_type": "photo", "orientation": "horizontal",
-                                                          "min_width": 1280, "safesearch": "true", "per_page": 30, "order": "popular"}, timeout=30)
-    if not r.ok:
-        raise RuntimeError(f"Pixabay HTTP {r.status_code}")
-    hits = [h for h in r.json().get("hits", []) if not (BAD_TAGS & {x.strip().lower() for x in h.get("tags", "").split(",")})]
+    hits = []
+    qs = [query[:90]]
+    if len(query.split()) > 1:
+        qs.append(query.split()[-1])  # last word is usually the thing itself
+    for q in qs:
+        for it in (("photo",) if kind == "photo" else ("all",)):
+            r = requests.get("https://pixabay.com/api/", params={"key": PIXABAY_KEY, "q": q, "image_type": it,
+                                                                  "orientation": "horizontal" if kind != "card" else "all",
+                                                                  "min_width": 1000 if kind != "card" else 400, "safesearch": "true",
+                                                                  "per_page": 30, "order": "popular"}, timeout=30)
+            if not r.ok:
+                raise RuntimeError(f"Pixabay HTTP {r.status_code}")
+            hits = [h for h in r.json().get("hits", []) if not (BAD_TAGS & {x.strip().lower() for x in h.get("tags", "").split(",")})]
+            if hits:
+                break
+        if hits:
+            break
     if not hits:
         return False
     h = random.choice(hits[:8])
@@ -1078,6 +1098,8 @@ def gen_image(prompt, out, kind="photo", fallback_query="", query=""):
         chain.insert(0, ("pixabay", lambda: pixabay_photo(query, out, size)))  # real photo first: exact subject, no AI quota used
     if ALLOW_POLLI:
         chain.append(("pollinations", lambda: img_pollinations(full, out, size)))
+    if PIXABAY_KEY:  # last resort when the AI quota is used up: a real photo of the main thing in the prompt
+        chain.append(("pixabay-fallback", lambda: pixabay_photo(query or fallback_query or query_from_prompt(prompt), out, size, kind)))
     if kind != "card":
         chain.append(("pexels-photo", lambda: pexels_photo(fallback_query or prompt[:60], out, size)))
     for name, fn in chain:
