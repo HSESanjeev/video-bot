@@ -57,7 +57,12 @@ GEMINI_TTS_MODELS = [m for m in os.environ.get(
 GEMINI_TTS_GAP = float(os.environ.get("GEMINI_TTS_GAP", "4"))
 WPM = float(os.environ.get("WPM_ESTIMATE", "130"))  # spoken Hindi words per minute (default estimate)
 MIN_SEC, MAX_SEC = 180, 300
-TEST_SEC = int(os.environ.get("TEST_SECONDS", "0") or 0)  # >0 = short test video of about this many seconds
+def _test_sec():
+    v = os.environ.get("TEST_SECONDS", "0").strip().lower()
+    return int(v) if v.isdigit() else 0  # 0 / off / no / full / empty = normal 3-5 minute video
+
+
+TEST_SEC = _test_sec()  # >0 = short test video of about this many seconds
 UPLOAD_MODE = os.environ.get("UPLOAD_MODE", "telegram").strip().lower()
 SCENE_GAP = 0.18
 HOOK_GAP = 0.70
@@ -3870,7 +3875,7 @@ def pipeline():
     random.seed()
 
     custom = os.environ.get("CUSTOM_STORY", "").strip()
-    if custom == "0":
+    if custom.strip().lower() in ("0", "off", "no", "none", "false"):
         custom = ""
     own_story = ""
     if custom:  # the owner's own topic or full story: used instead of the automatic topic
