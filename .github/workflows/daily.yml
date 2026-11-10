@@ -12,6 +12,16 @@ on:
         default: "full"
         type: choice
         options: [full, check, voices]
+      custom_story:
+        description: "OPTIONAL: your own topic or full story (any language). Leave EMPTY = bot picks its own topic as usual"
+        required: false
+        default: ""
+        type: string
+      video_seconds:
+        description: "Video length: 30 = quick test (seconds). Type full = normal 3-5 minute video"
+        required: false
+        default: "30"
+        type: string
 
 permissions:
   contents: write
@@ -81,9 +91,9 @@ jobs:
           # youtube  = bot uploads to YouTube as private (only after YouTube API audit passes)
           UPLOAD_MODE: ${{ vars.UPLOAD_MODE || 'telegram' }}
           # short test videos while testing (seconds). Set Variable TEST_SECONDS = 0 for normal 3-5 minute videos.
-          TEST_SECONDS: ${{ vars.TEST_SECONDS || '30' }}
+          TEST_SECONDS: ${{ github.event.inputs.video_seconds || vars.TEST_SECONDS || '30' }}
           # your own topic or full story (Variable CUSTOM_STORY). Value 0 or empty = automatic topic as usual
-          CUSTOM_STORY: ${{ vars.CUSTOM_STORY }}
+          CUSTOM_STORY: ${{ github.event.inputs.custom_story || vars.CUSTOM_STORY }}
         run: |
           if [ "${{ github.event.inputs.mode }}" = "check" ]; then
             python bot.py --check
