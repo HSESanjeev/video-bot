@@ -21,6 +21,7 @@ import asyncio
 import base64
 import difflib
 import glob
+import io
 import json
 import math
 import os
@@ -72,8 +73,8 @@ CF_TOKEN = os.environ.get("CF_API_TOKEN", "")
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-STYLE_PHOTO = ("vivid rich colors, bright natural lighting, sharp detail, wide cinematic composition, "
-               "main subject centered with breathing space, high quality nature documentary look, "
+STYLE_PHOTO = ("cinematic film still, photorealistic, dramatic moody lighting, rich contrast, shallow depth of field, "
+               "35mm lens, highly detailed, high quality documentary look, one clear main subject, "
                "no text, no letters, no watermark, no logo, no real person's face")
 STYLE_CARD = ("vibrant detailed digital illustration, one clear centered subject, clean simple soft-colored background, "
               "bright saturated colors, soft studio lighting, polished game-art quality, "
@@ -323,7 +324,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. Optional on-screen helpers per shot (at most ONE per shot, and in total on about one shot in three, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
+- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. Optional on-screen helpers per shot (at most ONE per shot, and in total on about every second shot, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
@@ -970,7 +971,7 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
 
 
 CF_STATE = {"dead": False, "used": 0}
-MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "16"))
+MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "14" if TEST_SEC else "48"))
 
 
 def img_cloudflare(prompt, out, size=(1920, 1080), dims=None):
@@ -1092,14 +1093,54 @@ def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
     return True
 
 
+LOCAL_SD = {"pipe": None, "dead": os.environ.get("LOCAL_SD", "1") == "0", "n": 0}
+
+
+def img_local_sd(prompt, out, size, kind="photo"):
+    """Unlimited free AI pictures made on the GitHub runner itself (SD-Turbo on CPU, ~20-60 s per picture, no quota, no key)."""
+    if LOCAL_SD["dead"]:
+        return False
+    try:
+        import torch
+        if LOCAL_SD["pipe"] is None:
+            from diffusers import AutoPipelineForText2Image
+            log("loading local SD-Turbo model (first time ~2 GB download)...")
+            torch.set_num_threads(max(1, os.cpu_count() or 2))
+            pipe = AutoPipelineForText2Image.from_pretrained("stabilityai/sd-turbo", torch_dtype=torch.float32, variant="fp16",
+                                                             low_cpu_mem_usage=True)
+            pipe.set_progress_bar_config(disable=True)
+            try:
+                pipe.enable_attention_slicing()
+            except Exception:  # noqa
+                pass
+            LOCAL_SD["pipe"] = pipe
+        w, h = (512, 512) if kind == "card" else (768, 432)
+        t0 = time.time()
+        img = LOCAL_SD["pipe"](prompt=prompt[:300], num_inference_steps=2, guidance_scale=0.0, width=w, height=h).images[0]
+        LOCAL_SD["n"] += 1
+        if LOCAL_SD["n"] <= 3 or LOCAL_SD["n"] % 10 == 0:
+            log(f"  local picture {LOCAL_SD['n']} made in {time.time() - t0:.0f}s")
+        buf = io.BytesIO()
+        img.save(buf, "PNG")
+        fit_image(buf.getvalue(), out, size)
+        return True
+    except Exception as e:  # noqa
+        LOCAL_SD["dead"] = True
+        note_fail("local-sd", f"{type(e).__name__}: {str(e)[:160]}")
+        log("local SD-Turbo unavailable:", type(e).__name__, str(e)[:200])
+        return False
+
+
 def gen_image(prompt, out, kind="photo", fallback_query="", query=""):
     suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB}[kind]
     size = (1080, 1080) if kind == "card" else (1920, 1080)
     full = f"{prompt}, {suffix}"
     dims = {"photo": (1024, 576), "thumb": (1024, 576), "card": (512, 512)}[kind]
     chain = [("cloudflare", lambda: img_cloudflare(full, out, size, dims))]
-    if kind == "photo" and query and PIXABAY_KEY:
+    if kind == "photo" and query and PIXABAY_KEY and os.environ.get("REAL_PHOTOS") == "1":
         chain.insert(0, ("pixabay", lambda: pixabay_photo(query, out, size)))  # real photo first: exact subject, no AI quota used
+    chain.append(("local-sd", lambda: img_local_sd(prompt.split(", no text")[0] + ", " + {"photo": "cinematic film still, photorealistic, dramatic lighting, highly detailed",
+                                                  "thumb": "ultra dramatic hero shot, vivid, highly detailed", "card": "polished digital illustration, vibrant"}[kind], out, size, kind)))
     if ALLOW_POLLI:
         chain.append(("pollinations", lambda: img_pollinations(full, out, size)))
     if PIXABAY_KEY:  # last resort when the AI quota is used up: a real photo of the main thing in the prompt
@@ -2131,7 +2172,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
             shots[-1]["t1"] = b
             shots[-1]["dur"] = b - shots[-1]["t0"]
             continue
-        n = max(1, math.ceil((b - a) / 3.3))
+        n = max(1, math.ceil((b - a) / 2.7))
         sd = (b - a) / n
         for j in range(n):
             new_img = (j == 0) and (s_["image"] is not last_img)
