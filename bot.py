@@ -49,7 +49,7 @@ WPM_FILE = STATE / "wpm.json"
 
 W, H, FPS = 1280, 720, 30
 VOICE = os.environ.get("TTS_VOICE", "hi-IN-MadhurNeural")
-TTS_RATE = os.environ.get("TTS_RATE", "-3%")
+TTS_RATE = os.environ.get("TTS_RATE", "+8%")
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "auto").strip().lower()  # auto | gemini | edge
 GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 GEMINI_TTS_MODELS = [m for m in os.environ.get(
@@ -253,35 +253,79 @@ def gemini_json(prompt, temperature=0.8):
 
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
-ITEM_KINDS = {"popup": 2.6, "bubble": 3.2, "note": 4.2, "place": 3.8, "year": 3.8, "title": 3.2}
-ITEM_SLOT = {"bubble": "A", "note": "A", "place": "B", "year": "C", "title": "D", "popup": "P"}
+ITEM_KINDS = {"bubble": 3.2, "note": 6.5, "place": 3.8, "year": 3.8, "title": 3.2}
+ITEM_SLOT = {"bubble": "A", "note": "N", "place": "B", "year": "C", "title": "D", "popup": "P"}
 
-DIRECTOR_RULES = """You are the DIRECTOR and film editor of a Hindi documentary. The narration is already recorded. For every scene you get the narration words with their index and the exact second each word is spoken. Plan what the viewer sees, tied to the exact words.
+DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
 
-For each scene return:
-"mains": the FULL-SCREEN pictures in order. Each has "w" = index of the word where it must appear (the first has w=0), and either
-   - a NEW picture: "prompt_en" (cinematic, realistic, ONE clear subject exactly as named at that word, no text in the image), "query_en" (1-3 English words for a real stock PHOTO of it, "" if it cannot be photographed), optional "motion": true and "clip_en" (1-3 English words for real stock FOOTAGE) ONLY if that moment is about something moving or changing position (animal running/flying, water flowing, fire, clouds, spinning planet), at most one in four mains, or
-   - "same": true, to keep the same picture while the camera moves onto the detail being discussed, with "fx","fy" (0.15-0.85, where that detail is in the picture).
-   The main picture is whatever the narrator is talking about AT THAT WORD: when the subject changes, the picture changes on that very word. A main lasts about 2-5 seconds; never leave a picture on screen after the narrator moved to a different subject.
-"items": small things shown ON TOP of the current main picture at the exact word that names them (this is how related points are shown). Each has "w" and a "kind":
-   - "popup": any concrete object, animal, body part, colour sample or symbol the narrator names: "popup_en" = English description of that ONE object (e.g. "a red heart", "a raw carrot", "a flame"). Use this generously, one for most named things.
+=== STEP 1: READ THE MOMENT (do this silently for every scene) ===
+- WHAT is said: a subject (animal / place / object / phenomenon), a part of a subject, a movement, a number, a date, a quote, a real source or evidence, a comparison, a process, a mystery, a reveal.
+- TO WHOM / HOW it is said (use the scene's tone): suspense = slow dark push-ins, dark grade, flash/glitch only at the reveal; wonder = wide reveals, pull-outs, cinematic/warm grade; serious = steady push, cool grade, no flashy transitions; excited = faster cuts, whip/zoom transitions, vivid grade; calm = gentle drifts, natural grade, plain fades. A question to the viewer = camera slowly pushes in. A shocking fact = a hard cut or flash exactly on that word. A list = one picture per item. Reflection/ending = slow pull-out and fade.
+- Then pick the technique(s) from the CATALOGUE that fit the moment. Never use a technique just because it exists.
+
+=== STEP 2: THE 10 GOLDEN RULES (obey always) ===
+1 Story first: understand the narration, then choose techniques.  2 Timing: every change happens ON the word that causes it (cut ~0.1 s before, never after).  3 Smooth movement: camera moves ease in/out, never jerk.  4 Consistency: same look/grade/overlay style through the whole film.  5 Sound effects only very quiet (the engine handles it).  6 Always a high-quality REAL picture, so zooming stays sharp.  7 Avoid over-editing: at most one special transition per ~15 seconds, plain fade/cut otherwise; no effect for decoration.  8 Visual hierarchy: the subject being spoken about is the biggest thing; everything else secondary.  9 Fact accuracy: never invent dates, names, numbers or quotes; use only what the narration says.  10 One colour grade for the film (leave "grade" empty unless the mood really changes).
+
+=== CATALOGUE of the 150 techniques (what exists, and what the engine can do) ===
+MAP (1-20): map zoom, pins, route line, distance counter, globe, borders, expansion, army arrows, GPS, compass, scale, comparison -> the engine has a MAP scene type (script decides); inside photo scenes use "place" items for locations.
+DATA (21-40): counters, %, year counter, bars, pie, line graphs, ranking, odometer -> engine scene types counter / bars; inside photo scenes use "year" for dates/periods.
+HISTORY/DOCUMENT (41-60): timeline, old photo, Ken Burns, document reveal, newspaper, manuscript, evidence highlight -> use ONLY "note" (source card) when a real document / paper / report / study / book / inscription is mentioned; archival look = "grade":"bwred" or "dark".
+CAMERA (61-80): push in, pull out, pan, tilt, orbit, parallax, drone reveal, rack/focus pull, handheld, whip pan, match move, tracking, cinematic reveal -> "cam": push, pull, pan_lr, pan_rl, tilt_up, tilt_down, orbit, handheld, push_tl, push_br; "kf" keyframes (below) for focus-follow, rack/focus pull and tracking.
+TEXT (81-100): kinetic type, text reveal, word highlight, lower third, chapter title, date & location title, callout -> items "title", "place" (location title), "year" (date title), "bubble" (quote), "note" (highlighted words).
+DIAGRAM (101-115): flowchart, steps, compare, layers, labels -> engine scene types steps / compare / merge / split / layers; not in photo scenes.
+VFX (116-135): grain, dust, fog, vignette, glitch, light leak, flash, split screen -> already added by the engine lightly; you only choose grade and transitions.
+TRANSITION (136-150): "trans" = fade, zoom, whip, wipe, circle, flash, glitch, cut. Zoom/whip match the camera direction; flash = shock or reveal; circle = focus on one thing; wipe = time passes / moving on; glitch = technical/digital mystery only; cut = same idea continues; fade = default.
+
+=== WHAT TO RETURN FOR EACH SCENE ===
+"mains": FULL-SCREEN pictures in order (this is the main storytelling tool). Each has "w" = index of the word where it appears (the first has w=0).
+ RULE A - NEW PICTURE FOR EVERY SUBJECT: whenever the narrator names a new thing (animal, plant, place, object, planet, phenomenon, material, body part, event) the screen shows a NEW full-screen real picture of exactly that thing, starting on that word. Do NOT use small stickers/overlays for objects. Typical main length 1.5-3.5 s; never keep a picture after the narrator moved to another subject.
+ RULE B - REAL FIRST: every new main MUST have "query_en": 1-3 plain English words that find a REAL stock photo of that exact thing (e.g. "african lion", "volcano eruption", "milky way", "coral reef"). Use the most common, concrete, photographable name; no adjectives like "powerful", no people, no text, no cut-outs, no green-screen. Also give "prompt_en": a cinematic realistic description of the same single subject (only used if no real photo exists).
+ RULE C - MOTION ONLY WHEN SOMETHING MOVES: add "motion": true and "clip_en" (1-3 English words for REAL stock footage) only if that moment describes movement or change of position (running, flying, flowing, erupting, burning, spinning, growing). At most one in four mains. Never ask for green-screen/isolated footage.
+ RULE D - PARTS OF A SUBJECT = CAMERA KEYFRAMES ON THE SAME PICTURE: when the narrator talks about a part/detail of the subject already on screen (eyes, claws, wings, crater, tail, skin), do NOT make a new picture: use {"w":..,"same":true} with "kf", or put "kf" on the main itself.
+ "kf": list of up to 4 camera keyframes [{"w": word index where the camera must ARRIVE, "fx": 0.1-0.9 horizontal position of the detail in the picture, "fy": 0.1-0.9 vertical position, "z": zoom 1.3-2.0}]. You cannot see the picture, so use typical composition: main subject near the centre, head/face upper-centre (fy~0.35), sky/top (fy~0.2), ground/bottom (fy~0.75), left/right side by the narrator's words. The camera glides (ease in/out) from keyframe to keyframe, following the narration. Use keyframes on most mains longer than 2 s and for every "look at this part" sentence; a wide establishing main may have none.
+ Optional per main: "cam" (a camera move name from the catalogue, only when kf is not used), "trans" (transition INTO this main), "grade" (only if the mood truly changes), "tech": the catalogue number(s) you applied, e.g. "61,86".
+"items": things drawn ON TOP of the current main, exactly on the word that names them:
+   - "place": "text_hi" = place name, "sub_hi" = small line (region/country). Only for a real, named place.
+   - "year": "text_hi" = date/year/period exactly as spoken.
    - "bubble": "text_hi" (max 6 words) when someone's words are quoted.
-   - "year": "text_hi" = the date/year/time period when it is spoken.
-   - "place": "text_hi" = name of a place or person when first named, "sub_hi" = small line (region/role).
-   - "note": "text_hi" (max 12 words) = a key fact, "mark_hi" = 1-3 key words highlighted.
-   - "title": "text_hi" (1-3 words) only for the single biggest reveal of the whole video.
-   Items must start on the word that names them, never earlier or later. Do not put two items on the same word.
-Return JSON only: {"scenes":[{"i": <scene number>, "mains":[...], "items":[...]}]}"""
+   - "note": SOURCE CARD, ONLY when the narration mentions a REAL source/evidence (a study, paper, report, book, inscription, record, fossil label, expedition log). "sub_hi" = the source name/year as spoken, "text_hi" = a short real paragraph (25-45 Hindi words) in the voice of that source that contains the fact, "mark_hi" = the 1-4 exact words of the paragraph the narrator is discussing (they get highlighted). Never use a note as decoration; never invent a source that the narration does not mention.
+   - "title": "text_hi" (1-3 words), only for the single biggest reveal of the whole video.
+   - NO "popup" stickers exist any more.
+   Never two items on the same word. No item before its word.
+Return JSON only: {"scenes":[{"i": <scene number>, "read": "<who is addressed + how it is said, 6 words>", "mains":[...], "items":[...]}]}"""
 
 
-def director_prompt(chunk):
+def director_prompt(chunk, topic="", nb=None):
     parts = []
+    nb = nb or {}
     for i, sc in chunk:
         wds = sc["narration_hi"].split()
         wt = sc["wt"]
         line = " ".join(f"{k}:{w}({wt[k][0]:.1f})" for k, w in enumerate(wds))
-        parts.append(f"SCENE {i} (tone {sc.get('tone')}, {sc['speech_dur']:.0f}s):\n{line}")
-    return DIRECTOR_RULES + "\n\n" + "\n\n".join(parts)
+        prev_ = nb.get(i - 1, "")
+        parts.append(f"SCENE {i} (tone {sc.get('tone')}, {sc['speech_dur']:.0f}s, previous scene ended: \"{prev_}\"):\n{line}")
+    return DIRECTOR_RULES + f"\n\nVIDEO TOPIC: {topic}\n\n" + "\n\n".join(parts)
+
+
+def parse_kf(kf, w0, w1, fx=None, fy=None):
+    """Keyframe list [{w, fx, fy, z}] -> validated dicts with word index inside this main's word range."""
+    out = []
+    if isinstance(kf, list):
+        for k in kf:
+            try:
+                w = int(k.get("w"))
+                if not (w0 <= w < w1):
+                    continue
+                out.append({"w": w, "fx": min(0.9, max(0.1, float(k.get("fx")))), "fy": min(0.9, max(0.1, float(k.get("fy")))),
+                            "z": min(2.1, max(1.15, float(k.get("z", 1.5))))})
+            except Exception:  # noqa
+                continue
+    out.sort(key=lambda x: x["w"])
+    ded = []
+    for k in out:
+        if not ded or k["w"] > ded[-1]["w"]:
+            ded.append(k)
+    return ded[:5] or None
 
 
 def apply_direction(sc, d):
@@ -300,7 +344,8 @@ def apply_direction(sc, d):
         if m.get("same") or not str(m.get("prompt_en") or "").strip():
             if not mains:
                 continue
-            m = {"same": True, "fx": m.get("fx"), "fy": m.get("fy")}
+            m = {"same": True, "fx": m.get("fx"), "fy": m.get("fy"), "kf": m.get("kf"), "cam": m.get("cam"),
+                 "trans": m.get("trans"), "grade": m.get("grade")}
         mains.append((w, m))
         last = w
     if not mains or mains[0][0] != 0 or not str(mains[0][1].get("prompt_en") or "").strip():
@@ -316,7 +361,9 @@ def apply_direction(sc, d):
         shots.append({"text_hi": " ".join(wds[w:w2]), "prompt_en": clean_short(m.get("prompt_en") or "", 400) if not m.get("same") else "",
                       "query_en": clean_short(m.get("query_en") or "", 50), "motion": bool(m.get("motion")) and not m.get("same"),
                       "clip_en": clean_short(m.get("clip_en") or "", 40), "label_hi": "", "ov": None, "popup_en": "",
-                      "fx": fr_(m.get("fx")), "fy": fr_(m.get("fy"))})
+                      "fx": fr_(m.get("fx")), "fy": fr_(m.get("fy")),
+                      "kf": parse_kf(m.get("kf"), w, w2, m.get("fx"), m.get("fy")),
+                      "cam": str(m.get("cam") or ""), "trans": str(m.get("trans") or ""), "grade": str(m.get("grade") or "")})
     items, used = [], set()
     for it in sorted([x for x in (d.get("items") or []) if isinstance(x, dict)], key=lambda x: int(x.get("w", 0) or 0)):
         try:
@@ -326,7 +373,7 @@ def apply_direction(sc, d):
         kind = str(it.get("kind") or "")
         if kind not in ITEM_KINDS or not (0 <= w < nw) or (w, kind) in used:
             continue
-        txt = clean_short(it.get("text_hi"), 90 if kind == "note" else 40)
+        txt = clean_short(it.get("text_hi"), 260 if kind == "note" else 40)
         if kind == "popup":
             if not str(it.get("popup_en") or "").strip():
                 continue
@@ -342,23 +389,30 @@ def apply_direction(sc, d):
     return True
 
 
-def director_pass(scenes):
-    """After the voice exists: plan pictures and on-screen items on the exact spoken words (falls back to the script's own shots)."""
+def director_pass(scenes, topic=""):
+    """After the voice exists: plan pictures, camera keyframes and on-screen items on the exact spoken words
+    (falls back to the script's own shots)."""
     todo = [(i, sc) for i, sc in enumerate(scenes)
             if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
+    nb = {i: " ".join(sc["narration_hi"].split()[-9:]) for i, sc in enumerate(scenes)}
     ok = 0
-    for a in range(0, len(todo), 5):
-        chunk = todo[a:a + 5]
-        try:
-            out = gemini_json(director_prompt(chunk), 0.6)
-            rows = {int(r.get("i")): r for r in (out.get("scenes") or []) if isinstance(r, dict) and str(r.get("i", "")).lstrip("-").isdigit()}
-        except Exception as e:  # noqa
-            log("director failed for a group of scenes, keeping the script's own shots:", str(e)[:120])
-            continue
+    for a in range(0, len(todo), 3):
+        chunk = todo[a:a + 3]
+        rows = {}
+        for attempt in range(2):
+            try:
+                out = gemini_json(director_prompt(chunk, topic, nb), 0.45)
+                rows = {int(r.get("i")): r for r in (out.get("scenes") or []) if isinstance(r, dict) and str(r.get("i", "")).lstrip("-").isdigit()}
+                if rows:
+                    break
+            except Exception as e:  # noqa
+                log("director retry:", str(e)[:120])
         for i, sc in chunk:
             if i in rows and apply_direction(sc, rows[i]):
                 sc["directed"] = True
                 ok += 1
+                if rows[i].get("read"):
+                    log(f"  scene {i}: {str(rows[i]['read'])[:60]} | mains={len(sc['shots'])} items={len(sc['items'])}")
     log(f"director: {ok}/{len(todo)} photo scenes planned word-by-word")
 
 
@@ -433,7 +487,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Scene 1 is a SUSPENSE HOOK: 25-30 words, built on a TRUE surprising fact or question, does NOT reveal the answer, ends by promising it ("आगे जानेंगे"). Scene 1 must be type "photo", tone "suspense", visually dramatic.
 - Scene 2 says in one or two lines what the viewer will understand by the end.
 - Around 55% of the video add a short re-hook line ("लेकिन असली राज़ अभी बाक़ी है...") that is true to what follows.
-- Final scenes: recap the 3 key points in simple words, then one short line asking viewers to subscribe.
+- NO recap, NO summary, NO call to subscribe/like/comment. The story simply ends on its last strong fact or an open, thought-provoking line; the video then fades out.
 - The viewer must truly UNDERSTAND the topic by the end: define every new term when first used, use one simple everyday analogy, go in a logical order.
 - Facts: only well-established science, rounded widely-accepted numbers. If something is debated say "वैज्ञानिकों का मानना है". Never invent names, dates, statistics or quotes. If unsure, leave it out.
 - Neutral on religion and politics; never mention or mock any belief. Say "वैज्ञानिक मान्यता के अनुसार" for origin topics.
@@ -448,7 +502,7 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 - "counter": one striking number counting up on screen (age, distance, size, speed, count). "counter": {"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "अरब साल पहले"} plus "headline_hi" (what the number is). The narration says the number in words.
 - "bars": compare 2-4 real sizes as animated bars. "bars": [{"label_hi": "पृथ्वी", "value": 12742, "unit_hi": "किमी"}, ...]. Same unit for all, rounded well-established values only.
 - "map": use whenever the narrator names a country, region, city, route, journey or migration. "map": {"mode": "flat", "route": false, "pins": [{"label_hi": "भारत", "lat": 22.0, "lon": 79.0}, ...]} (1-4 real places with correct latitude/longitude; route true draws an animated line through the pins in order, e.g. a journey or spread; mode "globe" for far-apart places). The narration says the place names.
-- "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook, key insights and the recap.
+- "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook and key insights.
 Use an explainer/data type (merge, split, steps, compare, counter, bars, map) for AT LEAST 40% of the scenes wherever the topic has a cause->effect, combination, breakup, sequence, comparison or a striking number. Include at least 2 "kinetic" scenes. Use "photo" for the hook, atmosphere, scale and the closing scene.
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
 Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in any picture, no real people.
@@ -693,11 +747,11 @@ def rescale_script(script, target_words):
 
 # --------------------------------------------------------------------------- voice
 TONES = {
-    "suspense": ("-4%", "-2Hz", "hushed and gripping, slow and deliberate with tense pauses, like a true-crime documentary storyteller"),
-    "wonder": ("-1%", "+1Hz", "engaged and full of wonder, steady confident storytelling with warmth"),
-    "serious": ("-2%", "-1Hz", "serious, firm and grounded, steady pace with weight on the key words"),
-    "excited": ("+2%", "+2Hz", "gripping and animated, building momentum as the story turns, still controlled"),
-    "calm": ("-1%", "+0Hz", "natural, confident and engaging, a steady documentary storyteller with clear pauses between sentences"),
+    "suspense": ("+2%", "-2Hz", "hushed and gripping, slow and deliberate with tense pauses, like a true-crime documentary storyteller"),
+    "wonder": ("+8%", "+1Hz", "engaged and full of wonder, steady confident storytelling with warmth"),
+    "serious": ("+6%", "-1Hz", "serious, firm and grounded, steady pace with weight on the key words"),
+    "excited": ("+13%", "+2Hz", "gripping and animated, building momentum as the story turns, still controlled"),
+    "calm": ("+8%", "+0Hz", "natural, confident and engaging, a steady documentary storyteller with clear pauses between sentences"),
 }
 
 
@@ -733,7 +787,7 @@ def tts_gemini(text, out_path, tone=None):
     if gap < GEMINI_TTS_GAP:
         time.sleep(GEMINI_TTS_GAP - gap)
     style = TONES.get(tone or "", TONES["calm"])[2]
-    prompt = (f"Say in a CALM, warm, natural male voice at a steady unhurried pace, like a thoughtful Hindi storyteller narrating a documentary, never shouting or over-acting, "
+    prompt = (f"Say in a CALM, warm, natural male voice at a brisk, flowing documentary pace (clearly faster than slow reading, no long drawn-out words), like a thoughtful Hindi storyteller narrating a documentary, never shouting or over-acting, "
               f"{style}, with natural pauses at commas and full stops: {text}")
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
@@ -1195,6 +1249,36 @@ BAD_TAGS = {"man", "woman", "people", "girl", "boy", "child", "children", "perso
             "face", "lady", "men", "women", "kid", "kids", "student", "crowd", "wedding", "bride", "text", "logo"}
 
 
+GREEN_TAGS = {"green screen", "greenscreen", "chroma", "chroma key", "chromakey", "green background", "alpha", "transparent", "overlay"}
+
+
+def green_frac(img):
+    """Share of pixels that look like a chroma-key green screen (0..1)."""
+    np = _np()
+    a = np.asarray(img.convert("RGB").resize((96, 54)), dtype=np.int16)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    m = (g > 110) & (g > r * 1.45) & (g > b * 1.35) & (r < 140)
+    return float(m.mean())
+
+
+def tags_of(h):
+    return {x.strip().lower() for x in h.get("tags", "").split(",")}
+
+
+def first_frame_ok(path):
+    """True if the clip's frames (start, middle) are not a green screen."""
+    try:
+        d = ffprobe_dur(path)
+        for ts in (0.3, max(0.4, d / 2)):
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{ts:.2f}", "-i", str(path), "-frames:v", "1", "-vf", "scale=192:108",
+                                  "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, timeout=60).stdout
+            if len(raw) == 192 * 108 * 3 and green_frac(Image.frombytes("RGB", (192, 108), raw)) > 0.18:
+                return False
+    except Exception:  # noqa
+        pass
+    return True
+
+
 def pixabay_video(query, out):
     """Real moving footage (free Pixabay video, commercial use allowed). Used only for shots where something moves."""
     if not PIXABAY_KEY or not query:
@@ -1205,26 +1289,31 @@ def pixabay_video(query, out):
         r = requests.get("https://pixabay.com/api/videos/", params={"key": PIXABAY_KEY, "q": q, "per_page": 20, "safesearch": "true"}, timeout=30)
         if not r.ok:
             raise RuntimeError(f"Pixabay video HTTP {r.status_code}")
-        hits = [h for h in r.json().get("hits", []) if h.get("duration", 0) >= 3 and not (BAD_TAGS & {x.strip().lower() for x in h.get("tags", "").split(",")})]
+        hits = [h for h in r.json().get("hits", []) if h.get("duration", 0) >= 3
+                and not ((BAD_TAGS | GREEN_TAGS) & tags_of(h)) and "green" not in h.get("tags", "").lower()]
         if hits:
             break
     if not hits:
         return False
-    h = random.choice(hits[:6])
-    v = h.get("videos", {})
-    pick = next((v[k] for k in ("medium", "large", "small") if v.get(k, {}).get("url")), None)
-    if not pick:
-        return False
-    with requests.get(pick["url"], stream=True, timeout=90) as rr:
-        rr.raise_for_status()
-        n = 0
-        with open(out, "wb") as f:
-            for chunk in rr.iter_content(1 << 20):
-                n += len(chunk)
-                if n > 60 << 20:
-                    raise RuntimeError("clip too big")
-                f.write(chunk)
-    return Path(out).exists() and Path(out).stat().st_size > 20000
+    random.shuffle(hits)
+    for h in hits[:4]:
+        v = h.get("videos", {})
+        pick = next((v[k] for k in ("medium", "large", "small") if v.get(k, {}).get("url")), None)
+        if not pick:
+            continue
+        with requests.get(pick["url"], stream=True, timeout=90) as rr:
+            rr.raise_for_status()
+            n = 0
+            with open(out, "wb") as f:
+                for chunk in rr.iter_content(1 << 20):
+                    n += len(chunk)
+                    if n > 60 << 20:
+                        raise RuntimeError("clip too big")
+                    f.write(chunk)
+        if Path(out).exists() and Path(out).stat().st_size > 20000 and first_frame_ok(out):
+            return True
+        log("  clip rejected (green screen / bad), trying next")
+    return False
 
 
 class ClipReader:
@@ -1282,16 +1371,27 @@ def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
                                                                   "per_page": 30, "order": "popular"}, timeout=30)
             if not r.ok:
                 raise RuntimeError(f"Pixabay HTTP {r.status_code}")
-            hits = [h for h in r.json().get("hits", []) if not (BAD_TAGS & {x.strip().lower() for x in h.get("tags", "").split(",")})]
+            hits = [h for h in r.json().get("hits", []) if not ((BAD_TAGS | GREEN_TAGS) & tags_of(h))
+                    and "green" not in h.get("tags", "").lower()]
             if hits:
                 break
         if hits:
             break
     if not hits:
         return False
-    h = random.choice(hits[:8])
-    fit_image(requests.get(h.get("largeImageURL") or h["webformatURL"], timeout=60).content, out, size)
-    return True
+    top = hits[:8]
+    random.shuffle(top)
+    for h in top[:4]:
+        data = requests.get(h.get("largeImageURL") or h["webformatURL"], timeout=60).content
+        try:
+            if kind == "photo" and green_frac(Image.open(io.BytesIO(data))) > 0.22:
+                log("  photo rejected (green screen), trying next")
+                continue
+        except Exception:  # noqa
+            continue
+        fit_image(data, out, size)
+        return True
+    return False
 
 
 LOCAL_SD = {"pipe": None, "dead": os.environ.get("LOCAL_SD", "1") == "0", "n": 0}
@@ -1342,8 +1442,13 @@ def gen_image(prompt, out, kind="photo", fallback_query="", query=""):
     full = f"{prompt}, {suffix}"
     dims = {"photo": (1024, 576), "thumb": (1024, 576), "card": (512, 512), "obj": (512, 512)}[kind]
     chain = [("cloudflare", lambda: img_cloudflare(full, out, size, dims))]
-    if kind == "photo" and query and PIXABAY_KEY and os.environ.get("REAL_PHOTOS") == "1":
-        chain.insert(0, ("pixabay", lambda: pixabay_photo(query, out, size)))  # real photo first: exact subject, no AI quota used
+    rq = query or fallback_query or query_from_prompt(prompt)
+    if kind in ("photo", "thumb") and rq and os.environ.get("REAL_PHOTOS") != "0":
+        # REAL free picture of the exact subject first; AI is only the last resort
+        if PIXABAY_KEY:
+            chain.insert(0, ("pixabay", lambda: pixabay_photo(rq, out, size)))
+        if kind == "photo":
+            chain.insert(1 if PIXABAY_KEY else 0, ("pexels-real", lambda: pexels_photo(rq, out, size)))
     chain.append(("local-sd", lambda: img_local_sd(prompt.split(", no text")[0] + ", " + {"photo": "cinematic film still, photorealistic, dramatic lighting, highly detailed",
                                                   "thumb": "ultra dramatic hero shot, vivid, highly detailed", "card": "polished digital illustration, vibrant",
                                                   "obj": "single isolated object on a plain white background, studio photo"}[kind], out, size, kind)))
@@ -2124,6 +2229,39 @@ def crop_box(z, cx, cy):
     return (l, t, l + cw, t + ch)
 
 
+def kf_state(shot, tl):
+    """Multi-waypoint keyframe camera: smooth ease-in/out between (time, zoom, x, y) waypoints, then a very slow drift."""
+    pts = shot["kfs"]
+    if tl <= pts[0][0]:
+        z, cx, cy = pts[0][1:]
+    else:
+        z = cx = cy = None
+        for (t0, z0, x0, y0), (t1, z1, x1, y1) in zip(pts, pts[1:]):
+            if tl <= t1:
+                q = e_io(cl((tl - t0) / max(1e-3, t1 - t0)))
+                z, cx, cy = lerp(z0, z1, q), lerp(x0, x1, q), lerp(y0, y1, q)
+                break
+        if z is None:
+            t, z, cx, cy = pts[-1]
+            z *= 1 + min(0.05, (tl - t) * 0.012)
+    m = (1 - 1 / z) / 2
+    return z, min(0.5 + m, max(0.5 - m, cx)), min(0.5 + m, max(0.5 - m, cy))
+
+
+def shot_state(shot, tl):
+    """(zoom, cx, cy) of a still-picture shot at time tl (used so the next shot of the SAME picture continues from here)."""
+    if shot.get("kfs"):
+        return kf_state(shot, tl)
+    p = cl(tl / max(0.1, shot["dur"]))
+    if shot["cam"] == "focus":
+        q = e_out(p)
+        z = 1.12 + 0.42 * q
+        cx, cy = 0.5 + (shot["fx"] - 0.5) * q, 0.5 + (shot["fy"] - 0.5) * q
+        m = (1 - 1 / z) / 2
+        return z, min(0.5 + m, max(0.5 - m, cx)), min(0.5 + m, max(0.5 - m, cy))
+    return cam_state(shot["cam"], p, tl)
+
+
 def shot_frame(shot, tl):
     """One camera frame of a still picture: push / pull / pan / tilt / orbit / handheld, optional 2.5D parallax + rack focus."""
     src = shot["img"]
@@ -2136,16 +2274,13 @@ def shot_frame(shot, tl):
             f2 = apply_grade(f_, shot.get("grade", "natural"))
             z = 1.0 + 0.05 * p  # very slow push so the footage never looks frozen between moves
             return f2.resize((W, H), Image.BILINEAR, box=((W - W / z) / 2, (H - H / z) / 2, (W + W / z) / 2, (H + H / z) / 2)) if z > 1.003 else f2
-    if shot["cam"] == "focus":
-        q = e_out(p)
-        z = 1.12 + 0.42 * q
-        cx = 0.5 + (shot["fx"] - 0.5) * q
-        cy = 0.5 + (shot["fy"] - 0.5) * q
-        m = (1 - 1 / z) / 2
-        cx, cy = min(0.5 + m, max(0.5 - m, cx)), min(0.5 + m, max(0.5 - m, cy))
+    if shot.get("kfs"):
+        z, cx, cy = kf_state(shot, tl)
+    elif shot["cam"] == "focus":
+        z, cx, cy = shot_state(shot, tl)
     else:
         z, cx, cy = cam_state(shot["cam"], p, tl)
-    if tl < 0.3 and shot["cam"] != "focus":
+    if tl < 0.3 and shot["cam"] != "focus" and not shot.get("kfs"):
         z *= 1 + 0.10 * (1 - e_out(tl / 0.3))  # quick punch-in on the beat the word is spoken
     fr = src.resize((W, H), Image.BILINEAR, box=crop_box(z, cx, cy))
     if shot.get("par"):
@@ -2388,7 +2523,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
             shots[-1]["t1"] = b
             shots[-1]["dur"] = b - shots[-1]["t0"]
             continue
-        n = 1 if s_.get("clip") else max(1, math.ceil((b - a) / 2.7))
+        n = 1 if (s_.get("clip") or s_.get("kf")) else max(1, math.ceil((b - a) / 2.7))
         sd = (b - a) / n
         for j in range(n):
             new_img = (j == 0) and (s_["image"] is not last_img)
@@ -2408,13 +2543,36 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                 trans = "zoom" if rnd.random() < 0.5 else "fade"
             else:
                 trans = rnd.choice(["fade", "zoom", "wipe", "whip", "flash"] if tone in ("excited", "suspense") else ["fade", "fade", "zoom", "wipe"])
-            shots.append({"img": graded_image(ctx, s_["image"], sc.get("grade", "natural")), "label": ((s_.get("label_hi") or "") if (j == 0 and not (s_.get("ov") and s_["ov"]["kind"] in ("place", "title"))) else ""),
+            kfs = None
+            if s_.get("kf") and not s_.get("clip") and wt and j == 0:
+                prev_st = shot_state(shots[-1], shots[-1]["dur"]) if (shots and not new_img and not shots[-1].get("clip")) else None
+                st = prev_st or (1.0, 0.5, 0.5)
+                kfs = [(0.0, *st)]
+                for kf in s_["kf"]:
+                    wi = min(nw - 1, max(0, int(kf["w"])))
+                    ta = min(sd - 0.2, max(0.45, wt[wi][0] + 0.12 - a))
+                    zz = min(2.1, max(1.15, kf["z"]))
+                    m_ = (1 - 1 / zz) / 2
+                    tx, ty = min(0.5 + m_, max(0.5 - m_, kf["fx"])), min(0.5 + m_, max(0.5 - m_, kf["fy"]))
+                    t_last = kfs[-1][0]
+                    t_start = max(t_last + 0.05, ta - 0.9)
+                    if t_start > t_last + 0.2:
+                        kfs.append((t_start, *kfs[-1][1:]))  # rest on the previous detail, then glide to the next one
+                    if ta > kfs[-1][0] + 0.05:
+                        kfs.append((ta, zz, tx, ty))
+                if len(kfs) < 2:
+                    kfs = None
+            if s_.get("cam") in CAMS and new_img and kfs is None:
+                cam = s_["cam"]
+            if s_.get("trans") in TRANS_NAMES and shots and j == 0:
+                trans = "none" if s_["trans"] == "cut" else s_["trans"]
+            shots.append({"img": graded_image(ctx, s_["image"], s_.get("grade") if s_.get("grade") in GRADES else sc.get("grade", "natural")), "kfs": kfs, "label": ((s_.get("label_hi") or "") if (j == 0 and not (s_.get("ov") and s_["ov"]["kind"] in ("place", "title"))) else ""),
                           "pulse": ((rnd.choice([(200, 20, 30), (20, 120, 140), (255, 255, 255)]) if (new_img and shots and rnd.random() < (0.4 if tone in ("suspense", "serious", "excited") else 0.12)) else None)),
                           "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
                           "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
                           "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4,
                           "ov": (s_.get("ov") if j == 0 else None), "popup": (s_.get("popup_img") if j == 0 else None),
-                          "clip": s_.get("clip"), "reader": None, "grade": sc.get("grade", "natural"),
+                          "clip": s_.get("clip"), "reader": None, "grade": s_.get("grade") if s_.get("grade") in GRADES else sc.get("grade", "natural"),
                           "pop_side": rnd.choice([-1, 1]),
                           "phase": rnd.uniform(0, 6)})
         last_img = s_["image"]
@@ -2441,33 +2599,47 @@ def ov_sprite(kind, text, mark, pal):
         d.polygon([(54, h - 4), (36, h + 44), (88, h - 4)], fill=(255, 252, 240, 255))
         big.alpha_composite(lay, (4 + (w - lay.width) // 2, 4 + (h - lay.height) // 2))
         sp = big.rotate(random.choice([-3, 3]), expand=True, resample=Image.BICUBIC)
-    elif kind == "note":  # torn-paper source card with highlighter
-        font = load_font(36, "sub")
-        lines = wrap_text(probe, text, font, 520)[:4]
-        marks = [m for m in mark.split() if len(m) > 1]
-        lh = int(font.size * 1.55)
-        w, h = 600, lh * len(lines) + 70
+    elif kind in ("note", "note0"):  # torn-paper SOURCE card: a real paragraph, the discussed words highlighted (note0 = no highlight yet)
+        body, _, src = text.rpartition("|")
+        if not body:
+            body, src = text, ""
+        font = load_font(34, "sub")
+        wmax = 680
+        lines = wrap_text(probe, body, font, wmax)[:7]
+        marks = [m.strip("।,.?!\"'") for m in mark.split() if len(m.strip("।,.?!\"'")) > 1]
+        lh = int(font.size * 1.6)
+        head_h = 58 if src else 30
+        w, h = wmax + 90, head_h + lh * len(lines) + 56
         card = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         d = ImageDraw.Draw(card)
         rnd = random.Random(len(text))
-        top = [(x, 6 + rnd.randint(0, 6)) for x in range(0, w + 1, 20)]
-        bot = [(x, h - 6 - rnd.randint(0, 8)) for x in range(w, -1, -20)]
-        d.polygon(top + bot, fill=(246, 238, 218, 255))
-        d.rectangle([0, 14, w, 24], fill=tuple(pal["accent"]) + (255,))
-        for i, ln in enumerate(lines):
-            y = 38 + i * lh
-            tw = probe.textlength(ln, font=font)
-            if any(m in ln for m in marks):
-                d.rectangle([34, y + 6, 34 + tw, y + lh - 8], fill=(255, 226, 40, 255))
-            lay = text_layer(ln, font, fill=(30, 24, 20))
-            card.alpha_composite(lay, (34 - 6, y + (lh - lay.height) // 2 - 4))
+        top = [(x, 5 + rnd.randint(0, 7)) for x in range(0, w + 1, 18)]
+        bot = [(x, h - 6 - rnd.randint(0, 8)) for x in range(w, -1, -18)]
+        d.polygon(top + bot, fill=(244, 236, 214, 255))
+        for yy in range(head_h + 16, h - 20, lh):  # faint ruled lines like old paper
+            d.line([(30, yy + lh - 6), (w - 30, yy + lh - 6)], fill=(210, 198, 170, 120), width=1)
+        if src:
+            sl = text_layer(src, load_font(30, "head"), fill=(120, 40, 30))
+            card.alpha_composite(sl, (40, 20))
+            d.line([(40, 20 + sl.height + 6), (w - 40, 20 + sl.height + 6)], fill=(120, 40, 30, 200), width=3)
+        sp_w = probe.textlength(" ", font=font)
+        for li, ln in enumerate(lines):
+            y = head_h + 14 + li * lh
+            x = 45.0
+            for wd in ln.split():
+                tw = probe.textlength(wd, font=font)
+                if kind == "note" and any(m in wd or (len(wd) > 2 and wd.strip("।,.?!\"'") in m) for m in marks):
+                    d.rounded_rectangle([x - 4, y + 5, x + tw + 4, y + lh - 9], 6, fill=(255, 226, 40, 235))
+                lay = text_layer(wd, font, fill=(30, 24, 20))
+                card.alpha_composite(lay, (int(x) - 6, y + (lh - lay.height) // 2 - 4))
+                x += tw + sp_w
         sh = Image.new("RGBA", (w + 40, h + 40), (0, 0, 0, 0))
-        m = card.getchannel("A").filter(ImageFilter.GaussianBlur(8)).point(lambda v: int(v * 0.5))
+        m = card.getchannel("A").filter(ImageFilter.GaussianBlur(8)).point(lambda v: int(v * 0.55))
         black = Image.new("RGBA", card.size, (0, 0, 0, 255))
         black.putalpha(m)
-        sh.alpha_composite(black, (20, 24))
+        sh.alpha_composite(black, (20, 26))
         sh.alpha_composite(card, (20, 20))
-        sp = sh.rotate(random.choice([-2, 2]), expand=True, resample=Image.BICUBIC)
+        sp = sh.rotate(-1.5 if len(text) % 2 else 1.5, expand=True, resample=Image.BICUBIC)
     elif kind == "place":  # location tag, bottom-left (big name + small region line)
         main_, _, sub_ = text.partition("|")
         a1 = text_layer(main_.strip(), load_font(70, "title"), fill=(255, 255, 255), shadow=(0, 4, 8, 0.8))
@@ -2530,8 +2702,19 @@ def draw_ov(fr, sh, tl, pal):
     ov = sh.get("ov")
     if not ov:
         return
-    t0, t1 = 0.22, min(sh["dur"] - 0.08, 5.0 if ov["kind"] in ("place", "year") else 4.2)
+    t0, t1 = 0.22, min(sh["dur"] - 0.08, 5.0 if ov["kind"] in ("place", "year") else (6.5 if ov["kind"] == "note" else 4.2))
     if not (t0 < tl < t1):
+        return
+    if ov["kind"] == "note":  # source card: dim the picture, paper slides in, the discussed words get highlighted
+        a = cl((tl - t0) * 5) * (1 - cl((tl - (t1 - 0.3)) / 0.3))
+        if a > 0.01:
+            fr.paste(Image.blend(fr, Image.new("RGB", fr.size, (0, 0, 0)), 0.45 * a))
+        qn = e_out(cl((tl - t0) / 0.5))
+        s0 = ov_sprite("note0", ov["text"], ov.get("mark", ""), pal)
+        s1 = ov_sprite("note", ov["text"], ov.get("mark", ""), pal)
+        cx, cy = W / 2, H / 2 + (1 - qn) * 260
+        put(fr, s0, cx, cy, 1.1 + 0.08 * qn, a)
+        put(fr, s1, cx, cy, 1.1 + 0.08 * qn, a * cl((tl - t0 - 0.8) * 2.5))
         return
     spr = ov_sprite(ov["kind"], ov["text"], ov.get("mark", ""), pal)
     q = e_back((tl - t0) / 0.4)
@@ -2573,13 +2756,13 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     if sc.get("items") and wt_:
         rr = ctx["rnd"]
         for k_, it in enumerate(sc["items"]):
-            if it["kind"] == "popup" and it.get("popup_img") is None:
+            if it["kind"] not in ITEM_KINDS:
                 continue
             w_ = min(it["w"], len(wt_) - 1)
             t0_ = max(0.1, wt_[w_][0] - 0.08)
             items.append({"t0": t0_, "t1": min(dur - 0.1, t0_ + ITEM_KINDS[it["kind"]]), "slot": ITEM_SLOT[it["kind"]], "it": it,
                           "ps": {"phase": rr.uniform(0, 6), "pop_side": -1 if k_ % 2 == 0 else 1, "popup": it.get("popup_img"),
-                                 "ov": None if it["kind"] == "popup" else {"kind": it["kind"], "text": (it["text"] + "|" + it.get("sub", "")) if it["kind"] == "place" else it["text"], "mark": it.get("mark", "")}}})
+                                 "ov": None if it["kind"] == "popup" else {"kind": it["kind"], "text": (it["text"] + "|" + it.get("sub", "")) if it["kind"] in ("place", "note") else it["text"], "mark": it.get("mark", "")}}})
         for a_ in range(len(items)):  # one thing per screen area at a time
             for b_ in range(a_ + 1, len(items)):
                 if items[b_]["slot"] == items[a_]["slot"] and items[b_]["t0"] > items[a_]["t0"] and items[a_]["t1"] > items[b_]["t0"]:
@@ -2952,6 +3135,19 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
         pin_t = [1.2] + [t_start + (t_end - t_start) * (k / max(1.0, total_km)) for k in pin_km[1:]]
     else:
         pin_t = [1.2 + 0.8 * i for i in range(len(pts))]
+        wt_m, nw_m = sc.get("wt"), sc["narration_hi"].split()
+        if wt_m and len(wt_m) == len(nw_m):  # each pin drops exactly when its place name is spoken
+            got, last_k = [], -1
+            for p_ in pins:
+                toks = [x.strip("।,?!") for x in p_["label_hi"].split() if len(x.strip("।,?!")) > 1]
+                hit = next((k for k, w_ in enumerate(nw_m) if k > last_k and any(tk in w_ or (len(w_) > 2 and w_.strip("।,?!") in tk) for tk in toks)), None)
+                if hit is None:
+                    got = None
+                    break
+                got.append(max(0.9, wt_m[hit][0] - 0.05))
+                last_k = hit
+            if got:
+                pin_t = got
     for t in pin_t:
         events.append((t, "pop", 0.8))
     events.append((0.2, "whoosh_soft", 0.8))
@@ -2992,8 +3188,19 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
         ocean_sprite["mask"] = ocean.getchannel("A")
 
     def centre(t):
-        q = e_out(t / 2.0)
-        return lerp(mid_lat * 0.7 + 8, mid_lat * 0.8, q), lerp(mid_lon + 85, mid_lon, q)
+        # globe spins in, then turns to face each pin as it is named, finally settles on the middle of all of them
+        wp = [(0.0, mid_lat * 0.7 + 8, mid_lon + 85)]
+        for k_, (la_, lo_) in enumerate(pts):
+            wp.append((max(wp[-1][0] + 0.3, pin_t[k_] - 0.6), la_ * 0.85, lo_))
+        wp.append((max(wp[-1][0] + 0.8, pin_t[-1] + 1.8), mid_lat * 0.8, mid_lon))
+        if t <= wp[0][0]:
+            return wp[0][1:]
+        for a_, b_ in zip(wp, wp[1:]):
+            if t <= b_[0]:
+                q = e_io(cl((t - a_[0]) / max(1e-3, b_[0] - a_[0])))
+                dl = (b_[2] - a_[2] + 180) % 360 - 180
+                return lerp(a_[1], b_[1], q), a_[2] + dl * q
+        return wp[-1][1:]
 
     def proj_globe(lat, lon, c):
         p0, l0 = math.radians(c[0]), math.radians(c[1])
@@ -3009,10 +3216,25 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
     h_lon = max(max(span_lon / 2 + 14, (max(lats) - min(lats)) / 2 * asp + 12), 24.0)
     r_c = ((min(lons) + max(lons)) / 2 if span_lon < 180 else mid_lon, (min(lats) + max(lats)) / 2)
 
+    # camera keyframes: wide world -> zoom onto each pin the moment it is named -> pull back to show all of them
+    follow_hl = max(8.0, min(30.0, h_lon * (0.55 if route else 0.4)))
+    t_out = pin_t[-1] + 1.8
+    kf_view = [(0.0, 0.0, 12.0, 185.0)]
+    for k_, (la_, lo_) in enumerate(pts):
+        kf_view.append((max(kf_view[-1][0] + 0.2, pin_t[k_] - 0.7), lo_, la_, follow_hl * (1.35 if k_ == 0 else 1.0)))
+    kf_view.append((max(kf_view[-1][0] + 0.8, t_out), r_c[0], r_c[1], h_lon))
+
+    def view_kf(t):
+        if t <= kf_view[0][0]:
+            return kf_view[0][1:]
+        for a_, b_ in zip(kf_view, kf_view[1:]):
+            if t <= b_[0]:
+                q = e_io(cl((t - a_[0]) / max(1e-3, b_[0] - a_[0])))
+                return lerp(a_[1], b_[1], q), lerp(a_[2], b_[2], q), math.exp(lerp(math.log(a_[3]), math.log(b_[3]), q))
+        return kf_view[-1][1:]
+
     def flat_view(t):
-        q = e_io((t - 0.15) / 1.8)
-        hl_ = math.exp(lerp(math.log(185.0), math.log(h_lon), q))
-        return lerp(0.0, r_c[0], q), lerp(12.0, r_c[1], q), hl_
+        return view_kf(t)
 
     def draw(t):
         fr = base.copy()
@@ -3146,10 +3368,12 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
                 continue
             drop = lerp(-70, 0, e_out(q / 0.35))
             ring_r = 1.0 + (q % 1.4) / 1.4 * 1.6
-            put(fr, soft_circle(22, (255, 255, 255), 0.5), x, y - 18, ring_r, 0.6 * (1 - (q % 1.4) / 1.4) * cl(q * 3))
-            put(fr, pin_img, x, y - 20 + drop, e_back(q / 0.4), cl(q * 6))
+            nxt = pin_t[i + 1] if i + 1 < len(pin_t) else None
+            old = 0.0 if nxt is None else cl((t - nxt) / 0.5) * (1 - cl((t - t_out + 0.2) / 0.6))  # earlier pins shrink away while the camera follows the new one
+            put(fr, soft_circle(22, (255, 255, 255), 0.5), x, y - 18, ring_r, 0.6 * (1 - (q % 1.4) / 1.4) * cl(q * 3) * (1 - old))
+            put(fr, pin_img, x, y - 20 + drop, e_back(q / 0.4) * (1 - 0.3 * old), cl(q * 6))
             ly = y - 62 if i % 2 == 0 else y + 22
-            put(fr, label_pills[i], x, ly + drop * 0.3, 1.0, cl((q - 0.15) * 4))
+            put(fr, label_pills[i], x, ly + drop * 0.3, 1.0 - 0.25 * old, cl((q - 0.15) * 4) * (1 - 0.85 * old))
         for (x, y) in route_pts:
             put(fr, soft_circle(14, (255, 255, 255), 1.0), x, y, 1.0 + 0.1 * math.sin(t * 9), 1.0)
         if route:
@@ -3291,20 +3515,20 @@ def build_video(scenes, tdir, pal):
 def mux_final(silent, voice, music, sfx, out, max_mb=None):
     dur = ffprobe_dur(voice)
     fc = ("[1:a]highpass=f=70,aresample=44100,asplit=2[v][vsc];"
-          "[2:a]volume=0.30[m];"
+          "[2:a]volume=0.12[m];"
           "[m][vsc]sidechaincompress=threshold=0.04:ratio=9:attack=15:release=500[duck];"
           + ("[3:a]aresample=44100,aformat=channel_layouts=stereo,volume=0.55[fx];" if sfx else "")
           + "[v]aformat=channel_layouts=stereo[vst];"
           + ("[vst][duck][fx]amix=inputs=3:" if sfx else "[vst][duck]amix=inputs=2:")
           + "duration=first:dropout_transition=0:normalize=0[mix];"
-          "[mix]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100[a]")
+          f"[mix]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100,afade=t=out:st={max(0.5, dur - 2.0):.2f}:d=2.0[a]")
     vopts = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
     if max_mb:
         kbps = int(max(500, min(5000, (max_mb * 8 * 1024) / dur - 136)))
         vopts = ["-c:v", "libx264", "-preset", "veryfast", "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k",
                  "-bufsize", f"{2 * kbps}k"]
     run(["ffmpeg", "-y", "-i", silent, "-i", voice, "-i", music, *(["-i", sfx] if sfx else []), "-filter_complex", fc,
-         "-map", "0:v", "-map", "[a]", *vopts, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
+         "-map", "0:v", "-map", "[a]", "-vf", f"fade=t=out:st={max(0.5, dur - 1.6):.2f}:d=1.6", *vopts, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
          "-movflags", "+faststart", "-shortest", out])
     if max_mb and Path(out).stat().st_size > max_mb * 1024 * 1024:
         log("file still large, re-encoding smaller")
@@ -3771,7 +3995,7 @@ def cutout_sticker(path, maxside=360):
 
 
 CLIPS_MAX = [int(os.environ.get("MAX_CLIPS", "4" if TEST_SEC else "14"))]
-POPUPS_MAX = [int(os.environ.get("MAX_POPUPS", "10" if TEST_SEC else "40"))]
+POPUPS_MAX = [int(os.environ.get("MAX_POPUPS", "0"))]  # sticker pop-ups are off: every subject gets its own full-screen picture
 
 
 def make_visuals(scenes, imgdir):
@@ -3820,7 +4044,7 @@ def make_visuals(scenes, imgdir):
                     continue
                 if not sh["prompt_en"].strip():
                     sh["prompt_en"] = "a dramatic wide nature landscape"
-                if prev_img and CF_STATE["used"] >= MAX_IMAGES:
+                if prev_img and CF_STATE["used"] >= MAX_IMAGES and not PIXABAY_KEY:
                     sh["image"] = prev_img  # free-quota saver: reuse the previous picture with a new camera move
                     continue
                 requested += 1
@@ -3890,7 +4114,7 @@ def pipeline():
         if own_story:  # a full story is never cut to the short test length
             globals()["TEST_SEC"] = 0
             globals()["MAX_IMAGES"] = int(os.environ.get("MAX_IMAGES", "48"))
-            CLIPS_MAX[0], POPUPS_MAX[0] = int(os.environ.get("MAX_CLIPS", "14")), int(os.environ.get("MAX_POPUPS", "40"))
+            CLIPS_MAX[0], POPUPS_MAX[0] = int(os.environ.get("MAX_CLIPS", "14")), int(os.environ.get("MAX_POPUPS", "0"))
     else:
         cat, topic_en, topic_hi = pick_topic(done)
     style = random.choice(STYLES)
@@ -3932,7 +4156,7 @@ def pipeline():
             log(f"new voice length {fmt_time(total)}")
         except Exception as e:  # noqa
             log("rescale failed, continuing:", e)
-    director_pass(scenes)
+    director_pass(scenes, topic_en)
     prov = "gemini" if VOICE_USED[0].startswith("gemini") else "edge"
     wpms[prov] = round(word_count(script) / (total / 60), 1)
     save_json(WPM_FILE, wpms)
@@ -4145,7 +4369,7 @@ def selftest():
     P, R, M = ("planet", (255, 220, 160), (255, 160, 120)), ("rock", (200, 230, 255), (120, 160, 230)), ("moon", (40, 50, 110), (20, 20, 60))
     n1 = "क्या आप जानते हैं कि चाँद कैसे बना था? यह कहानी बहुत हैरान करने वाली है, आगे जानेंगे"
     n3 = "अब ज़रा सोचिए, उस समय आसमान कितना डरावना दिखता होगा। हर तरफ आग और धुआँ ही धुआँ था"
-    n10 = "तो अब आप जान गए कि चाँद कैसे बना। वीडियो अच्छा लगा हो तो सब्सक्राइब ज़रूर करें"
+    n10 = "तो अब आप जान गए कि चाँद कैसे बना। और यह कहानी आज भी आसमान में चमक रही है"
     sc = [
         {"type": "photo", "tone": "suspense", "headline_hi": "", "narration_hi": n1,
          "shots": shots([("क्या आप जानते हैं कि चाँद कैसे बना था?", "planet", (20, 30, 90), (120, 60, 160)),
@@ -4155,8 +4379,8 @@ def selftest():
          "narration_hi": "लगभग साढ़े चार अरब साल पहले, पृथ्वी से एक मंगल जितना बड़ा ग्रह टकराया, और इसी टक्कर से हमारा चाँद बना"},
         {"type": "photo", "tone": "serious", "headline_hi": "", "narration_hi": n3,
          "items": [{"w": 1, "kind": "place", "text": "आसमान", "sub": "उस दौर का"}, {"w": 6, "kind": "year", "text": "४५० करोड़ साल पहले"},
-                   {"w": 9, "kind": "bubble", "text": "कितना डरावना!"}, {"w": 12, "kind": "popup", "popup_en": "fire",
-                    "popup_img": (lambda im_: (ImageDraw.Draw(im_).ellipse([20, 20, 280, 280], fill=(255, 120, 20, 255), outline=(255, 255, 255, 255), width=14), im_)[1])(Image.new("RGBA", (300, 300), (0, 0, 0, 0)))}],
+                   {"w": 9, "kind": "bubble", "text": "कितना डरावना!"}, {"w": 12, "kind": "note", "sub": "नासा रिपोर्ट, 2019",
+                    "text": "शुरुआती पृथ्वी पर हर तरफ पिघली हुई चट्टानों का समुद्र था और आसमान में धुआँ और राख भरी रहती थी। वैज्ञानिकों के अनुसार तब तापमान हज़ारों डिग्री तक पहुँच गया था।", "mark": "धुआँ राख"}],
          "shots": shots([("अब ज़रा सोचिए, उस समय आसमान कितना डरावना दिखता होगा।", "rock", (255, 120, 40), (120, 20, 10)),
                          ("हर तरफ आग और धुआँ ही धुआँ था", "planet", (90, 20, 10), (20, 5, 5))])},
         {"type": "counter", "tone": "excited", "headline_hi": "पृथ्वी की उम्र",
@@ -4184,8 +4408,9 @@ def selftest():
          "narration_hi": "पृथ्वी पर हवा और पानी है, लेकिन चाँद पर न हवा है और न पानी"},
         {"type": "photo", "tone": "calm", "headline_hi": "", "narration_hi": n10,
          "shots": shots([("तो अब आप जान गए कि चाँद कैसे बना।", "moon", (10, 20, 60), (40, 40, 110)),
-                         ("वीडियो अच्छा लगा हो तो सब्सक्राइब ज़रूर करें", "planet", (20, 30, 90), (60, 90, 160))])},
+                         ("और यह कहानी आज भी आसमान में चमक रही है", "planet", (20, 30, 90), (60, 90, 160))])},
     ]
+    sc[2]["shots"][0]["kf"] = [{"w": 3, "fx": 0.3, "fy": 0.4, "z": 1.7}, {"w": 7, "fx": 0.7, "fy": 0.35, "z": 1.5}]
 
     for k, sc_ in enumerate(sc):
         sc_["grade"] = GRADES[k % 6]
