@@ -65,6 +65,7 @@ ALLOW_POLLI = os.environ.get("ALLOW_POLLINATIONS", "") == "1"  # watermarked + v
 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
 PEXELS_KEY = os.environ.get("PEXELS_API_KEY", "")
+PIXABAY_KEY = os.environ.get("PIXABAY_API_KEY", "")
 POLLI_KEY = os.environ.get("POLLINATIONS_KEY", "")
 CF_ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "")
 CF_TOKEN = os.environ.get("CF_API_TOKEN", "")
@@ -322,7 +323,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
+- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
@@ -372,7 +373,7 @@ Return ONLY JSON in exactly this shape:
  "tags": ["8-12 tags mixing Hindi and English"],
  "scenes": [
   {{"narration_hi": "...", "type": "photo", "tone": "suspense", "grade": "dark", "transition": "fade", "headline_hi": "",
-    "shots": [{{"text_hi": "first phrase of the narration", "prompt_en": "...", "label_hi": "key word"}}, {{"text_hi": "next phrase, same subject", "prompt_en": "", "focus_x": 0.3, "focus_y": 0.4, "label_hi": ""}}, {{"text_hi": "phrase naming something new", "prompt_en": "...", "label_hi": ""}}]}},
+    "shots": [{{"text_hi": "first phrase of the narration", "prompt_en": "...", "label_hi": "key word"}}, {{"text_hi": "next phrase, same subject", "prompt_en": "", "focus_x": 0.3, "focus_y": 0.4, "label_hi": ""}}, {{"text_hi": "phrase naming something new", "prompt_en": "...", "query_en": "lion", "label_hi": ""}}]}},
   {{"narration_hi": "...", "type": "merge", "tone": "wonder", "headline_hi": "...",
     "items": [{{"label_hi": "...", "prompt_en": "..."}}, {{"label_hi": "...", "prompt_en": "..."}}, {{"label_hi": "...", "prompt_en": "..."}}]}},
   {{"narration_hi": "...", "type": "counter", "tone": "excited", "headline_hi": "...", "counter": {{"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "..."}}}},
@@ -476,7 +477,7 @@ def validate_script(s):
                     except Exception:  # noqa
                         return None
                 shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh.get("prompt_en") or "", 400),
-                              "label_hi": clean_short(sh.get("label_hi"), 18), "fx": fr_(sh.get("focus_x")), "fy": fr_(sh.get("focus_y"))})
+                              "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50), "fx": fr_(sh.get("focus_x")), "fy": fr_(sh.get("focus_y"))})
         if typ == "photo":
             if not shots:
                 shots = [{"text_hi": sc["narration_hi"], "prompt_en": base_prompt or "a dramatic wide nature landscape", "label_hi": ""}]
@@ -1047,12 +1048,34 @@ def pexels_photo(query, out, size=(1920, 1080)):
     return True
 
 
-def gen_image(prompt, out, kind="photo", fallback_query=""):
+BAD_TAGS = {"man", "woman", "people", "girl", "boy", "child", "children", "person", "portrait", "model", "baby", "couple", "family",
+            "face", "lady", "men", "women", "kid", "kids", "student", "crowd", "wedding", "bride", "text", "logo"}
+
+
+def pixabay_photo(query, out, size=(1920, 1080)):
+    """REAL photo of the named thing from Pixabay (free key, no daily image limit, commercial use allowed, no people)."""
+    if not PIXABAY_KEY or not query:
+        return False
+    r = requests.get("https://pixabay.com/api/", params={"key": PIXABAY_KEY, "q": query[:90], "image_type": "photo", "orientation": "horizontal",
+                                                          "min_width": 1280, "safesearch": "true", "per_page": 30, "order": "popular"}, timeout=30)
+    if not r.ok:
+        raise RuntimeError(f"Pixabay HTTP {r.status_code}")
+    hits = [h for h in r.json().get("hits", []) if not (BAD_TAGS & {x.strip().lower() for x in h.get("tags", "").split(",")})]
+    if not hits:
+        return False
+    h = random.choice(hits[:8])
+    fit_image(requests.get(h.get("largeImageURL") or h["webformatURL"], timeout=60).content, out, size)
+    return True
+
+
+def gen_image(prompt, out, kind="photo", fallback_query="", query=""):
     suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB}[kind]
     size = (1080, 1080) if kind == "card" else (1920, 1080)
     full = f"{prompt}, {suffix}"
     dims = {"photo": (1024, 576), "thumb": (1024, 576), "card": (512, 512)}[kind]
     chain = [("cloudflare", lambda: img_cloudflare(full, out, size, dims))]
+    if kind == "photo" and query and PIXABAY_KEY:
+        chain.insert(0, ("pixabay", lambda: pixabay_photo(query, out, size)))  # real photo first: exact subject, no AI quota used
     if ALLOW_POLLI:
         chain.append(("pollinations", lambda: img_pollinations(full, out, size)))
     if kind != "card":
@@ -2840,7 +2863,7 @@ def make_visuals(scenes, imgdir):
                     continue
                 requested += 1
                 CF_STATE["used"] += 1
-                if gen_image(sh["prompt_en"], p, "photo"):
+                if gen_image(sh["prompt_en"], p, "photo", query=sh.get("query_en", "")):
                     sh["image"] = p
                     prev_img = p
                 elif prev_img:
@@ -3065,6 +3088,14 @@ def check():
         return "watermark-free images work"
 
     t("images(cloudflare)", cf_check)
+    if PIXABAY_KEY:
+        def pix_check():
+            if not pixabay_photo("lion", Path("check_pix.png")):
+                raise RuntimeError("Pixabay returned no photo")
+            return "real photos OK"
+        t("images(pixabay real photos)", pix_check)
+    else:
+        log("Pixabay key not set (optional): real photos disabled")
     if UPLOAD_MODE == "youtube":
         def ytc():
             from google.oauth2.credentials import Credentials
