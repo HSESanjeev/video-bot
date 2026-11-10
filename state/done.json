@@ -135,6 +135,19 @@
    "voice": "edge (Gemini voice f",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-10T08:38:07+00:00",
+   "topic_en": "How do bats 'see' with sound? The science of Echolocation",
+   "title_hi": "चमगादड़ अंधेरे में कैसे देखते हैं?",
+   "category": "animal_senses",
+   "style": "b",
+   "theme": "sky",
+   "mood": "wonder",
+   "seconds": 41,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
