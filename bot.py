@@ -324,7 +324,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. Optional on-screen helpers per shot (at most ONE per shot, and in total on about every second shot, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
+- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. EVERY shot must also have "label_hi" (1-3 Hindi words) AND "popup_en": an English description of ONE concrete object, animal, body part or symbol that the phrase mentions (e.g. "a raw carrot", "a human brain", "a burning flame", "a red heart", "a clock", "a lion"), shown as a pop-up sticker on top of the picture at the moment the word is spoken, so a viewer watching on mute still understands every sentence. Leave "popup_en" empty only if the phrase names no object at all. Optional on-screen helpers per shot (at most ONE per shot, and in total on about every second shot, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
@@ -478,7 +478,7 @@ def validate_script(s):
                     except Exception:  # noqa
                         return None
                 shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh.get("prompt_en") or "", 400),
-                              "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50),
+                              "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50), "popup_en": clean_short(sh.get("popup_en") or "", 120),
                               "ov": (({"kind": "bubble", "text": clean_short(sh.get("bubble_hi"), 40)} if str(sh.get("bubble_hi") or "").strip() else
                                       {"kind": "year", "text": clean_short(sh.get("year_hi"), 22)} if str(sh.get("year_hi") or "").strip() else
                                       {"kind": "note", "text": clean_short(sh.get("note_hi"), 90), "mark": clean_short(sh.get("mark_hi"), 30)}
@@ -971,6 +971,7 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
 
 
 CF_STATE = {"dead": False, "used": 0}
+SUBS_ON = os.environ.get("SUBTITLES", "0") == "1"  # subtitles are OFF: the visuals tell the story
 MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "14" if TEST_SEC else "48"))
 
 
@@ -1114,7 +1115,7 @@ def img_local_sd(prompt, out, size, kind="photo"):
             except Exception:  # noqa
                 pass
             LOCAL_SD["pipe"] = pipe
-        w, h = (512, 512) if kind == "card" else (768, 432)
+        w, h = (512, 512) if kind in ("card", "obj") else (768, 432)
         t0 = time.time()
         img = LOCAL_SD["pipe"](prompt=prompt[:300], num_inference_steps=2, guidance_scale=0.0, width=w, height=h).images[0]
         LOCAL_SD["n"] += 1
@@ -1131,21 +1132,26 @@ def img_local_sd(prompt, out, size, kind="photo"):
         return False
 
 
+STYLE_OBJ = ("single isolated object, centered, whole object visible, plain pure white background, studio product photo, "
+             "soft even light, sharp, no shadow, no text, no watermark")
+
+
 def gen_image(prompt, out, kind="photo", fallback_query="", query=""):
-    suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB}[kind]
-    size = (1080, 1080) if kind == "card" else (1920, 1080)
+    suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB, "obj": STYLE_OBJ}[kind]
+    size = (1080, 1080) if kind in ("card", "obj") else (1920, 1080)
     full = f"{prompt}, {suffix}"
-    dims = {"photo": (1024, 576), "thumb": (1024, 576), "card": (512, 512)}[kind]
+    dims = {"photo": (1024, 576), "thumb": (1024, 576), "card": (512, 512), "obj": (512, 512)}[kind]
     chain = [("cloudflare", lambda: img_cloudflare(full, out, size, dims))]
     if kind == "photo" and query and PIXABAY_KEY and os.environ.get("REAL_PHOTOS") == "1":
         chain.insert(0, ("pixabay", lambda: pixabay_photo(query, out, size)))  # real photo first: exact subject, no AI quota used
     chain.append(("local-sd", lambda: img_local_sd(prompt.split(", no text")[0] + ", " + {"photo": "cinematic film still, photorealistic, dramatic lighting, highly detailed",
-                                                  "thumb": "ultra dramatic hero shot, vivid, highly detailed", "card": "polished digital illustration, vibrant"}[kind], out, size, kind)))
+                                                  "thumb": "ultra dramatic hero shot, vivid, highly detailed", "card": "polished digital illustration, vibrant",
+                                                  "obj": "single isolated object on a plain white background, studio photo"}[kind], out, size, kind)))
     if ALLOW_POLLI:
         chain.append(("pollinations", lambda: img_pollinations(full, out, size)))
     if PIXABAY_KEY:  # last resort when the AI quota is used up: a real photo of the main thing in the prompt
         chain.append(("pixabay-fallback", lambda: pixabay_photo(query or fallback_query or query_from_prompt(prompt), out, size, kind)))
-    if kind != "card":
+    if kind in ("photo", "thumb"):
         chain.append(("pexels-photo", lambda: pexels_photo(fallback_query or prompt[:60], out, size)))
     for name, fn in chain:
         try:
@@ -2058,6 +2064,8 @@ def build_sub_sprites(text, pal):
 
 def make_subtrack(text, speech_dur, dur, pal, spans=None):
     items = []
+    if not SUBS_ON:
+        return items
     ok = bool(spans) and len(spans) == len(text.split())
     wi = 0
     for c, a, b in chunk_times(text, speech_dur, dur, spans):
@@ -2196,7 +2204,8 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                           "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
                           "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
                           "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4,
-                          "ov": (s_.get("ov") if j == 0 else None),
+                          "ov": (s_.get("ov") if j == 0 else None), "popup": (s_.get("popup_img") if j == 0 else None),
+                          "pop_side": rnd.choice([-1, 1]),
                           "phase": rnd.uniform(0, 6)})
         last_img = s_["image"]
     shots[-1]["t1"] = dur
@@ -2269,6 +2278,22 @@ def ov_sprite(kind, text, mark, pal):
     return sp
 
 
+def draw_popup(fr, sh, tl):
+    sp = sh.get("popup")
+    if sp is None:
+        return
+    t0, t1 = 0.12, sh["dur"] - 0.05
+    if not (t0 < tl < t1):
+        return
+    q = e_back((tl - t0) / 0.38)
+    out = cl((t1 - tl) / 0.2)
+    wob = math.sin(tl * 3.2 + sh["phase"]) * 0.025
+    cx = W * (0.5 + 0.30 * sh["pop_side"])
+    cy = H * 0.5 + math.sin(tl * 2.4 + sh["phase"]) * 8
+    s2 = sp.rotate(math.degrees(wob) * 2 + sh["pop_side"] * 4, resample=Image.BICUBIC, expand=True)
+    put(fr, s2, cx, cy, (0.15 + 0.85 * cl(q)) * (0.6 + 0.4 * out), min(1.0, (tl - t0) * 8) * out)
+
+
 def draw_ov(fr, sh, tl, pal):
     ov = sh.get("ov")
     if not ov:
@@ -2321,6 +2346,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             lo = 1 - cl((tl - (min(sh["dur"] - 0.15, 3.2) - 0.3)) / 0.3)
             lab = sh["lab"]
             put(fr, lab, 60 + lab.width / 2 - (1 - cl(lq)) * 380, H - 190, 1.0, cl((tl - 0.2) * 5) * lo)
+        draw_popup(fr, sh, tl)
         draw_ov(fr, sh, tl, pal)
         if lt is not None:
             q = e_back((t - 0.2) / 0.5)
@@ -3012,6 +3038,55 @@ def fmt_time(sec):
     return f"{int(sec // 60)}:{int(sec % 60):02d}"
 
 
+def cutout_sticker(path, maxside=360):
+    """Pop-up PNG: cut the object out of its white background, add a white sticker outline and a soft shadow."""
+    np = _np()
+    im = Image.open(path).convert("RGB")
+    a = None
+    try:
+        from rembg import remove  # best quality if available (optional)
+        a = remove(im).getchannel("A")
+    except Exception:  # noqa
+        a = None
+    if a is None:
+        from scipy import ndimage
+        arr = np.asarray(im, dtype=np.int16)
+        near_white = (arr.min(2) > 222) & ((arr.max(2) - arr.min(2)) < 34)
+        lab, n = ndimage.label(near_white)
+        border = set(np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))) - {0}
+        bg = np.isin(lab, list(border)) if border else np.zeros_like(near_white)
+        fg = ndimage.binary_fill_holes(~bg)
+        fg = ndimage.binary_opening(fg, iterations=2)
+        a = Image.fromarray((fg * 255).astype(np.uint8)).filter(ImageFilter.GaussianBlur(1.2))
+    bb = a.point(lambda v: 255 if v > 40 else 0).getbbox()
+    if not bb or (bb[2] - bb[0]) * (bb[3] - bb[1]) < 0.04 * im.width * im.height:
+        return None
+    im, a = im.crop(bb), a.crop(bb)
+    sc = maxside / max(im.size)
+    im, a = im.resize((int(im.width * sc), int(im.height * sc)), Image.LANCZOS), a.resize((int(a.width * sc), int(a.height * sc)), Image.LANCZOS)
+    pad = 26
+    W2, H2 = im.width + 2 * pad, im.height + 2 * pad
+    A = Image.new("L", (W2, H2), 0)
+    A.paste(a, (pad, pad))
+    outline = A.filter(ImageFilter.MaxFilter(13)).filter(ImageFilter.GaussianBlur(1.5)).point(lambda v: 255 if v > 90 else 0)
+    out = Image.new("RGBA", (W2, H2), (0, 0, 0, 0))
+    shadow = Image.new("RGBA", (W2, H2), (0, 0, 0, 255))
+    shadow.putalpha(outline.filter(ImageFilter.GaussianBlur(9)).point(lambda v: int(v * 0.55)))
+    out.alpha_composite(shadow, (6, 10))
+    white = Image.new("RGBA", (W2, H2), (255, 255, 255, 255))
+    white.putalpha(outline)
+    out.alpha_composite(white)
+    obj = im.convert("RGBA")
+    ob = Image.new("RGBA", (W2, H2), (0, 0, 0, 0))
+    obj.putalpha(a)
+    ob.alpha_composite(obj, (pad, pad))
+    out.alpha_composite(ob)
+    return out
+
+
+POPUPS_MAX = [int(os.environ.get("MAX_POPUPS", "10" if TEST_SEC else "40"))]
+
+
 def make_visuals(scenes, imgdir):
     """Generate every picture the plan asks for. Returns (failed, requested)."""
     failed = requested = 0
@@ -3020,6 +3095,15 @@ def make_visuals(scenes, imgdir):
         if sc["type"] == "photo":
             for k, sh in enumerate(sc["shots"]):
                 p = imgdir / f"{i:03d}_s{k}.png"
+                pp = (sh.get("popup_en") or "").strip()
+                if pp and POPUPS_MAX[0] > 0:
+                    POPUPS_MAX[0] -= 1
+                    try:
+                        po = imgdir / f"{i:03d}_s{k}_pop.png"
+                        if gen_image(pp, po, "obj"):
+                            sh["popup_img"] = cutout_sticker(po)
+                    except Exception as e:  # noqa
+                        log("popup failed:", type(e).__name__, str(e)[:100])
                 if not sh["prompt_en"].strip() and prev_img:
                     sh["image"] = prev_img  # same picture, camera moves to the part being spoken about
                     continue
