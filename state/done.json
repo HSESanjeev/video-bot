@@ -148,6 +148,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-10T10:11:55+00:00",
+   "topic_en": "Why are stars different colors and what does it tell us about their age?",
+   "title_hi": "सितारों का रंग उनकी उम्र का क्या राज़ खोलता है?",
+   "category": "stars_universe",
+   "style": "r",
+   "theme": "sunrise",
+   "mood": "wonder",
+   "seconds": 61,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
