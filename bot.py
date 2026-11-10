@@ -323,7 +323,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
+- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. Optional on-screen helpers per shot (at most ONE per shot, and in total on about one shot in three, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
@@ -334,11 +334,11 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 Use an explainer/data type (merge, split, steps, compare, counter, bars) for AT LEAST 40% of the scenes wherever the topic has a cause->effect, combination, breakup, sequence, comparison or a striking number. Include at least 2 "kinetic" scenes. Use "photo" for the hook, atmosphere, scale and the closing scene.
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
 Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in any picture, no real people.
-Every scene also has "grade" (colour grading that fits the scene: warm for fire/desert/sunrise/early Earth, cool for ocean/ice/night/space, cinematic for dramatic reveals, vivid for lively nature and animals, dark for danger and mystery, natural for calm facts) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
+Every scene also has "grade" (colour grading that fits the scene: warm for fire/desert/sunrise/early Earth, cool for ocean/ice/night/space, cinematic for dramatic reveals, vivid for lively nature and animals, dark for danger and mystery, dread for creepy/scary/dangerous night scenes (cold teal), bwred for shock, fear, anger or a dramatic turning point (black and white with red glow), redwash for violence or emergency, natural for calm facts) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
 "mood" of the whole video's background music: one of mystery, epic, wonder, calm, tense, life, space.
 """
 
-GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural"]
+GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
 TRANS_NAMES = ["fade", "zoom", "whip", "wipe", "circle", "flash", "cut"]
 TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
 MOOD_NAMES = ["mystery", "epic", "wonder", "calm", "tense", "life", "space"]
@@ -477,7 +477,11 @@ def validate_script(s):
                     except Exception:  # noqa
                         return None
                 shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh.get("prompt_en") or "", 400),
-                              "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50), "fx": fr_(sh.get("focus_x")), "fy": fr_(sh.get("focus_y"))})
+                              "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50),
+                              "ov": (({"kind": "bubble", "text": clean_short(sh.get("bubble_hi"), 40)} if str(sh.get("bubble_hi") or "").strip() else
+                                      {"kind": "year", "text": clean_short(sh.get("year_hi"), 22)} if str(sh.get("year_hi") or "").strip() else
+                                      {"kind": "note", "text": clean_short(sh.get("note_hi"), 90), "mark": clean_short(sh.get("mark_hi"), 30)}
+                                      if str(sh.get("note_hi") or "").strip() else None)), "fx": fr_(sh.get("focus_x")), "fy": fr_(sh.get("focus_y"))})
         if typ == "photo":
             if not shots:
                 shots = [{"text_hi": sc["narration_hi"], "prompt_en": base_prompt or "a dramatic wide nature landscape", "label_hi": ""}]
@@ -2050,9 +2054,22 @@ def apply_grade(im, grade):
     np = _np()
     sat = {"vivid": 1.35, "natural": 1.1, "warm": 1.15, "cool": 1.1, "cinematic": 1.2, "dark": 0.92}.get(grade, 1.1)
     im = ImageEnhance.Contrast(ImageEnhance.Color(im).enhance(sat)).enhance(1.06)
-    if grade in ("warm", "cool", "cinematic", "dark"):
+    if grade in ("warm", "cool", "cinematic", "dark", "dread", "bwred", "redwash"):
         a = np.asarray(im, dtype=np.float32)
-        if grade == "warm":
+        if grade == "dread":  # cold teal-green horror look
+            lum = a.mean(2, keepdims=True)
+            a = (a * 0.55 + lum * 0.45) * np.array([0.72, 1.05, 1.02], dtype=np.float32) * 0.9
+        elif grade == "bwred":  # black & white with a blood-red glow (shock / fear moments)
+            lum = a.mean(2, keepdims=True)
+            hh, ww = lum.shape[:2]
+            yy, xx = np.mgrid[0:hh, 0:ww].astype(np.float32)
+            glow = np.clip(1.2 - np.sqrt(((xx / ww - 0.5) / 0.75) ** 2 + ((yy / hh - 0.55) / 0.8) ** 2), 0, 1)[..., None]
+            a = lum * np.array([1.0, 1.0, 1.0], dtype=np.float32) * (1 - 0.35 * glow) + glow * np.array([170, 10, 20], dtype=np.float32) * 0.55
+            a = (a - 128) * 1.12 + 128
+        elif grade == "redwash":
+            lum = a.mean(2, keepdims=True)
+            a = (a * 0.5 + lum * 0.5) * np.array([1.25, 0.55, 0.55], dtype=np.float32)
+        elif grade == "warm":
             a[..., 0] *= 1.08
             a[..., 2] *= 0.88
         elif grade == "cool":
@@ -2138,10 +2155,96 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                           "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
                           "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
                           "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4,
+                          "ov": (s_.get("ov") if j == 0 else None),
                           "phase": rnd.uniform(0, 6)})
         last_img = s_["image"]
     shots[-1]["t1"] = dur
     return shots
+
+
+_OV = {}
+
+
+def ov_sprite(kind, text, mark, pal):
+    key = (kind, text, mark)
+    if key in _OV:
+        return _OV[key]
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    if kind == "bubble":  # comic speech bubble with the quote
+        lay = text_layer(text, load_font(42, "head"), fill=(25, 25, 25), max_w=360, spacing=8)
+        w, h = lay.width + 56, lay.height + 40
+        big = Image.new("RGBA", (w + 30, h + 60), (0, 0, 0, 0))
+        d = ImageDraw.Draw(big)
+        d.rounded_rectangle([4, 4, w + 4, h + 4], radius=34, fill=(0, 0, 0, 255))
+        d.polygon([(46, h), (28, h + 54), (96, h)], fill=(0, 0, 0, 255))
+        d.rounded_rectangle([10, 10, w - 2, h - 2], radius=30, fill=(255, 252, 240, 255))
+        d.polygon([(54, h - 4), (36, h + 44), (88, h - 4)], fill=(255, 252, 240, 255))
+        big.alpha_composite(lay, (4 + (w - lay.width) // 2, 4 + (h - lay.height) // 2))
+        sp = big.rotate(random.choice([-3, 3]), expand=True, resample=Image.BICUBIC)
+    elif kind == "note":  # torn-paper source card with highlighter
+        font = load_font(36, "sub")
+        lines = wrap_text(probe, text, font, 520)[:4]
+        marks = [m for m in mark.split() if len(m) > 1]
+        lh = int(font.size * 1.55)
+        w, h = 600, lh * len(lines) + 70
+        card = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(card)
+        rnd = random.Random(len(text))
+        top = [(x, 6 + rnd.randint(0, 6)) for x in range(0, w + 1, 20)]
+        bot = [(x, h - 6 - rnd.randint(0, 8)) for x in range(w, -1, -20)]
+        d.polygon(top + bot, fill=(246, 238, 218, 255))
+        d.rectangle([0, 14, w, 24], fill=tuple(pal["accent"]) + (255,))
+        for i, ln in enumerate(lines):
+            y = 38 + i * lh
+            tw = probe.textlength(ln, font=font)
+            if any(m in ln for m in marks):
+                d.rectangle([34, y + 6, 34 + tw, y + lh - 8], fill=(255, 226, 40, 255))
+            lay = text_layer(ln, font, fill=(30, 24, 20))
+            card.alpha_composite(lay, (34 - 6, y + (lh - lay.height) // 2 - 4))
+        sh = Image.new("RGBA", (w + 40, h + 40), (0, 0, 0, 0))
+        m = card.getchannel("A").filter(ImageFilter.GaussianBlur(8)).point(lambda v: int(v * 0.5))
+        black = Image.new("RGBA", card.size, (0, 0, 0, 255))
+        black.putalpha(m)
+        sh.alpha_composite(black, (20, 24))
+        sh.alpha_composite(card, (20, 20))
+        sp = sh.rotate(random.choice([-2, 2]), expand=True, resample=Image.BICUBIC)
+    else:  # year / time marker on a timeline
+        lay = text_layer(text, load_font(58, "title"), fill=(255, 255, 255), stroke=0)
+        pw, ph = lay.width + 56, lay.height + 22
+        w, h = max(560, pw + 60), ph + 70
+        sp = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        d = ImageDraw.Draw(sp)
+        d.line([(10, ph + 36), (w - 10, ph + 36)], fill=(255, 255, 255, 200), width=3)
+        for x in range(30, w - 20, 70):
+            d.line([(x, ph + 28), (x, ph + 44)], fill=(255, 255, 255, 170), width=2)
+        pl = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+        col = Image.new("RGBA", (pw, ph), (200, 20, 40, 255))
+        col.putalpha(rounded_mask((pw, ph), 14))
+        pl.alpha_composite(col)
+        pl.alpha_composite(lay, ((pw - lay.width) // 2, (ph - lay.height) // 2))
+        sp.alpha_composite(pl, ((w - pw) // 2, 0))
+        d.polygon([(w // 2 - 10, ph), (w // 2 + 10, ph), (w // 2, ph + 14)], fill=(200, 20, 40, 255))
+    _OV[key] = sp
+    return sp
+
+
+def draw_ov(fr, sh, tl, pal):
+    ov = sh.get("ov")
+    if not ov:
+        return
+    t0, t1 = 0.22, min(sh["dur"] - 0.08, 4.2)
+    if not (t0 < tl < t1):
+        return
+    spr = ov_sprite(ov["kind"], ov["text"], ov.get("mark", ""), pal)
+    q = e_back((tl - t0) / 0.4)
+    a = cl((tl - t0) * 6) * (1 - cl((tl - (t1 - 0.25)) / 0.25))
+    if ov["kind"] == "bubble":
+        cx, cy = W - 60 - spr.width / 2 - 20, 70 + spr.height / 2
+    elif ov["kind"] == "note":
+        cx, cy = W - 30 - spr.width / 2, 40 + spr.height / 2 - (1 - cl(q)) * 160
+    else:
+        cx, cy = W - 40 - spr.width / 2 + (1 - cl(q)) * 300, 70 + spr.height / 2
+    put(fr, spr, cx, cy, 0.7 + 0.3 * cl(q) if ov["kind"] == "bubble" else 1.0, a)
 
 
 def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
@@ -2177,6 +2280,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             lo = 1 - cl((tl - (min(sh["dur"] - 0.15, 3.2) - 0.3)) / 0.3)
             lab = sh["lab"]
             put(fr, lab, 60 + lab.width / 2 - (1 - cl(lq)) * 380, H - 190, 1.0, cl((tl - 0.2) * 5) * lo)
+        draw_ov(fr, sh, tl, pal)
         if lt is not None:
             q = e_back((t - 0.2) / 0.5)
             out = 1 - cl((t - (dur - 0.45)) / 0.35)
