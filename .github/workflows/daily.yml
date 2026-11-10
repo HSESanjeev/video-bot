@@ -82,6 +82,8 @@ jobs:
           UPLOAD_MODE: ${{ vars.UPLOAD_MODE || 'telegram' }}
           # short test videos while testing (seconds). Set Variable TEST_SECONDS = 0 for normal 3-5 minute videos.
           TEST_SECONDS: ${{ vars.TEST_SECONDS || '30' }}
+          # your own topic or full story (Variable CUSTOM_STORY). Value 0 or empty = automatic topic as usual
+          CUSTOM_STORY: ${{ vars.CUSTOM_STORY }}
         run: |
           if [ "${{ github.event.inputs.mode }}" = "check" ]; then
             python bot.py --check
