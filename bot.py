@@ -274,7 +274,10 @@ CAMERA (61-80): push in, pull out, pan, tilt, orbit, parallax, drone reveal, rac
 TEXT (81-100): kinetic type, text reveal, word highlight, lower third, chapter title, date & location title, callout -> items "title", "place" (location title), "year" (date title), "bubble" (quote), "note" (highlighted words).
 DIAGRAM (101-115): flowchart, steps, compare, layers, labels -> engine scene types steps / compare / merge / split / layers; not in photo scenes.
 VFX (116-135): grain, dust, fog, vignette, glitch, light leak, flash, split screen -> already added by the engine lightly; you only choose grade and transitions.
-TRANSITION (136-150): "trans" = fade, zoom, whip, wipe, circle, flash, glitch, cut. Zoom/whip match the camera direction; flash = shock or reveal; circle = focus on one thing; wipe = time passes / moving on; glitch = technical/digital mystery only; cut = same idea continues; fade = default.
+TRANSITION (136-150): "trans" = fade, zoom, whip, wipe, circle, flash, glitch, cut. Zoom/whip match the camera direction; flash = shock or reveal; circle = focus on one thing; wipe = time passes / moving on; cut = same idea continues; fade = default.
+
+=== STEP 3: BEAT-BY-BEAT ANALYSIS (mandatory, this is what makes you accurate) ===
+Read the scene sentence by sentence and clause by clause. Split it into BEATS: every smallest separate thing the narrator says (each subject, each part, each action, number, date, place, claim, question, reaction). Return them in "beats": [{"w": word index where the beat starts, "says": "the beat in ~5 words", "tech": "catalogue number + name of the ONE best technique for exactly this beat"}]. Then build "mains", "kf" and "items" so that EVERY beat is visibly handled by its technique. A scene with fewer than 3 beats, or with a main that has no technique and no camera movement, is WRONG. Vary techniques: never the same camera move or transition twice in a row, and match them to the tone as described above.
 
 === WHAT TO RETURN FOR EACH SCENE ===
 "mains": FULL-SCREEN pictures in order (this is the main storytelling tool). Each has "w" = index of the word where it appears (the first has w=0).
@@ -283,7 +286,7 @@ TRANSITION (136-150): "trans" = fade, zoom, whip, wipe, circle, flash, glitch, c
  RULE C - MOTION ONLY WHEN SOMETHING MOVES: add "motion": true and "clip_en" (1-3 English words for REAL stock footage) only if that moment describes movement or change of position (running, flying, flowing, erupting, burning, spinning, growing). At most one in four mains. Never ask for green-screen/isolated footage.
  RULE D - PARTS OF A SUBJECT = CAMERA KEYFRAMES ON THE SAME PICTURE: when the narrator talks about a part/detail of the subject already on screen (eyes, claws, wings, crater, tail, skin), do NOT make a new picture: use {"w":..,"same":true} with "kf", or put "kf" on the main itself.
  "kf": list of up to 4 camera keyframes [{"w": word index where the camera must ARRIVE, "fx": 0.1-0.9 horizontal position of the detail in the picture, "fy": 0.1-0.9 vertical position, "z": zoom 1.3-2.0}]. You cannot see the picture, so use typical composition: main subject near the centre, head/face upper-centre (fy~0.35), sky/top (fy~0.2), ground/bottom (fy~0.75), left/right side by the narrator's words. The camera glides (ease in/out) from keyframe to keyframe, following the narration. Use keyframes on most mains longer than 2 s and for every "look at this part" sentence; a wide establishing main may have none.
- Optional per main: "cam" (a camera move name from the catalogue, only when kf is not used), "trans" (transition INTO this main), "grade" (only if the mood truly changes), "tech": the catalogue number(s) you applied, e.g. "61,86".
+ Optional per main: "cam" (a camera move name from the catalogue, only when kf is not used), "trans" (transition INTO this main), "grade" (only if the mood truly changes), "tech": REQUIRED on every main: the catalogue number(s) you applied, e.g. "61,86". EVERY main must also move: give "kf" (preferred) or "cam"; every main except the first of the scene also needs "trans".
 "items": things drawn ON TOP of the current main, exactly on the word that names them:
    - "place": "text_hi" = place name, "sub_hi" = small line (region/country). Only for a real, named place.
    - "year": "text_hi" = date/year/period exactly as spoken.
@@ -292,7 +295,7 @@ TRANSITION (136-150): "trans" = fade, zoom, whip, wipe, circle, flash, glitch, c
    - "title": "text_hi" (1-3 words), only for the single biggest reveal of the whole video.
    - NO "popup" stickers exist any more.
    Never two items on the same word. No item before its word.
-Return JSON only: {"scenes":[{"i": <scene number>, "read": "<who is addressed + how it is said, 6 words>", "mains":[...], "items":[...]}]}"""
+Return JSON only: {"scenes":[{"i": <scene number>, "read": "<who is addressed + how it is said, 6 words>", "beats":[...], "mains":[...], "items":[...]}]}"""
 
 
 def director_prompt(chunk, topic="", nb=None):
@@ -395,6 +398,31 @@ def apply_direction(sc, d):
 
 
 DIRECTOR_REPORT = [""]
+DIR_CAMS = {"suspense": ["push", "push_br", "tilt_down", "push_tl"], "wonder": ["pull", "tilt_up", "pan_lr", "orbit"],
+             "serious": ["push", "pan_rl", "push_tl", "pull"], "excited": ["handheld", "push_br", "pan_lr", "push"],
+             "calm": ["pan_lr", "pull", "pan_rl", "tilt_up"]}
+DIR_TRANS = {"suspense": ["fade", "zoom", "fade", "flash"], "wonder": ["fade", "circle", "zoom", "fade"],
+              "serious": ["fade", "wipe", "fade", "cut"], "excited": ["whip", "zoom", "flash", "whip"], "calm": ["fade", "wipe", "fade", "circle"]}
+
+
+def ensure_techniques(sc, k0=0):
+    """Safety net: the director's choice is kept; any main it left without movement/transition/technique gets one that fits the scene tone."""
+    tone = sc.get("tone") if sc.get("tone") in DIR_CAMS else "calm"
+    last_cam = last_tr = None
+    for n, sh in enumerate(sc.get("shots", [])):
+        if sh.get("clip"):
+            continue
+        if not sh.get("kf") and sh.get("cam") not in CAMS:
+            opts = [c for c in DIR_CAMS[tone] if c != last_cam] or DIR_CAMS[tone]
+            sh["cam"] = opts[(k0 + n) % len(opts)]
+            sh["tech"] = (sh.get("tech") or "") + ("," if sh.get("tech") else "") + "cam:" + sh["cam"]
+        last_cam = sh.get("cam")
+        if n > 0 and sh.get("trans") not in TRANS_NAMES and sh.get("prompt_en"):
+            opts = [t for t in DIR_TRANS[tone] if t != last_tr] or DIR_TRANS[tone]
+            sh["trans"] = opts[(k0 + n) % len(opts)]
+        last_tr = sh.get("trans") or last_tr
+        if not sh.get("tech"):
+            sh["tech"] = "auto"
 
 
 def director_pass(scenes, topic=""):
@@ -420,15 +448,18 @@ def director_pass(scenes, topic=""):
         for i, sc in chunk:
             if i in rows and apply_direction(sc, rows[i]):
                 sc["directed"] = True
+                ensure_techniques(sc, i)
+                sc["beats"] = [b_ for b_ in (rows[i].get("beats") or []) if isinstance(b_, dict)][:12]
                 ok += 1
                 if rows[i].get("read"):
                     log(f"  scene {i}: {str(rows[i]['read'])[:60]} | mains={len(sc['shots'])} items={len(sc['items'])}")
     log(f"director: {ok}/{len(todo)} photo scenes planned word-by-word")
     allsh = [sh for sc in scenes for sh in sc.get("shots", [])] if todo else []
     techs = sorted({t.strip() for sh in allsh for t in (sh.get("tech") or "").split(",") if t.strip().isdigit()}, key=int)
-    DIRECTOR_REPORT[0] = (f"Director: {ok}/{len(todo)} scenes planned | keyframe moves {sum(1 for sh in allsh if sh.get('kf'))} | "
+    nbeats = sum(len(sc.get("beats", [])) for sc in scenes)
+    DIRECTOR_REPORT[0] = (f"Director: {ok}/{len(todo)} scenes planned | beats {nbeats} | keyframe moves {sum(1 for sh in allsh if sh.get('kf'))} | "
                           f"transitions {sum(1 for sh in allsh if sh.get('trans'))} | cams {sum(1 for sh in allsh if sh.get('cam'))} | "
-                          f"source cards {sum(1 for sc in scenes for it in sc.get('items', []) if it['kind'] == 'note')} | "
+                          f"source cards {sum(1 for sc in scenes if sc.get('type') == 'photo' for it in sc.get('items', []) if isinstance(it, dict) and it.get('kind') == 'note')} | "
                           f"techniques used: {', '.join(techs) or 'none'}")
     log(DIRECTOR_REPORT[0])
 
