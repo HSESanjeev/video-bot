@@ -51,7 +51,7 @@ W, H, FPS = 1280, 720, 30
 VOICE = os.environ.get("TTS_VOICE", "hi-IN-MadhurNeural")
 TTS_RATE = os.environ.get("TTS_RATE", "+8%")
 # measured: the 10-minute reference narrator speaks ~19% faster (syllables per voiced second) than the bot voice -> speed up whatever voice engine is used, pitch stays the same
-VOICE_SPEED = min(1.35, max(0.9, float(os.environ.get("VOICE_SPEED", "1.17"))))
+VOICE_SPEED = min(1.35, max(0.9, float(os.environ.get("VOICE_SPEED", "1.25"))))
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "auto").strip().lower()  # auto | gemini | edge
 GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 GEMINI_TTS_MODELS = [m for m in os.environ.get(
@@ -190,6 +190,9 @@ def gemini_models():
     return _models_cache
 
 
+GROUND_SRC = []
+
+
 def gemini(prompt, json_mode=False, temperature=0.8, search=False):
     """Returns (text, grounding_titles)."""
     body = {"contents": [{"parts": [{"text": prompt}]}],
@@ -222,6 +225,9 @@ def gemini(prompt, json_mode=False, temperature=0.8, search=False):
                 titles = []
                 for ch in cand.get("groundingMetadata", {}).get("groundingChunks", []):
                     t = (ch.get("web") or {}).get("title")
+                    u = (ch.get("web") or {}).get("uri")
+                    if u and all(u != x["uri"] for x in GROUND_SRC):
+                        GROUND_SRC.append({"title": t or "", "uri": u})
                     if t and t not in titles:
                         titles.append(t)
                 return text, titles
@@ -281,9 +287,16 @@ TRANSITION (136-150): "trans" = fade, zoom, whip, wipe, circle, flash, glitch, c
 === STEP 3: BEAT-BY-BEAT ANALYSIS (mandatory, this is what makes you accurate) ===
 Read the scene sentence by sentence and clause by clause. Split it into BEATS: every smallest separate thing the narrator says (each subject, each part, each action, number, date, place, claim, question, reaction). Return them in "beats": [{"w": word index where the beat starts, "says": "the beat in ~5 words", "tech": "catalogue number + name of the ONE best technique for exactly this beat"}]. Then build "mains", "kf" and "items" so that EVERY beat is visibly handled by its technique. A scene with fewer than 3 beats, or with a main that has no technique and no camera movement, is WRONG. Vary techniques: never the same camera move or transition twice in a row, and match them to the tone as described above.
 
+=== SPECIAL SCENE LAYOUTS (use them whenever the narration calls for them - they are the signature of the polished style) ===
+ "split": use it when the narrator names/lists/compares 2 or 3 separate subjects in this scene (e.g. "lion and rabbit", "two universities", "three cities", before/after). The scene becomes a SPLIT SCREEN of real photos with a red brush label card for each, each appearing exactly on its word. Return "split": [{"w": word index where the subject is named (first one w=0 or its own word), "label_hi": "name as spoken (1-5 words)", "query_en": "1-3 English words for a REAL photo", "entity_en": "exact Wikipedia-style name of that subject or empty", "prompt_en": "..."}, ...] (2-3 items). Do not also plan mains for the same words; still return normal mains as a fallback.
+ "terrain": use it when the narration names TWO real places (villages, cities, districts, parks, countries within about 1000 km) and says a distance, a journey or "from X to Y". The scene becomes a tilted real-satellite map with the two places tagged, an animated arrow and the distance. Return "terrain": {"pins":[{"label_hi":"first place as spoken","lat":..,"lon":..},{"label_hi":"second place as spoken","lat":..,"lon":..}], "regions":[{"label_hi":"district/state around","lat":..,"lon":..}]} with CORRECT real coordinates (never guess a place you do not know; omit terrain then).
+ "note" items (source caption) as described below.
+ Aim to use "split" at least once whenever a scene really names two or more subjects together.
+
 === WHAT TO RETURN FOR EACH SCENE ===
 "mains": FULL-SCREEN pictures in order (this is the main storytelling tool). Each has "w" = index of the word where it appears (the first has w=0).
  RULE A - NEW PICTURE FOR EVERY SUBJECT: whenever the narrator names a new thing (animal, plant, place, object, planet, phenomenon, material, body part, event) the screen shows a NEW full-screen real picture of exactly that thing, starting on that word. Do NOT use small stickers/overlays for objects. Typical main length 1.5-3.5 s; never keep a picture after the narrator moved to another subject.
+ RULE B0 - THE REAL THING: when the narration is about a SPECIFIC named subject (a named forest/park/city/river/mountain, a named species such as "Asiatic lion", a named object, building, institution or event), give "entity_en": its exact real English name exactly as Wikipedia would title it (e.g. "Gir Forest National Park", "Asiatic lion", "Sundarbans", "Hubble Space Telescope"). The engine then fetches the REAL photograph of that exact thing from Wikipedia/Wikimedia. Use "" only for generic moments (fog, a path, hands).
  RULE B - REAL FIRST: every new main MUST have "query_en": 1-3 plain English words that find a REAL stock photo of that exact thing (e.g. "african lion", "volcano eruption", "milky way", "coral reef"). Use the most common, concrete, photographable name; no adjectives like "powerful", no people, no text, no cut-outs, no green-screen. Also give "prompt_en": a cinematic realistic description of the same single subject (only used if no real photo exists).
  RULE C - MOTION ONLY WHEN SOMETHING MOVES: add "motion": true and "clip_en" (1-3 English words for REAL stock footage) only if that moment describes movement or change of position (running, flying, flowing, erupting, burning, spinning, growing). At most one in four mains. Never ask for green-screen/isolated footage.
  RULE D - PARTS OF A SUBJECT = CAMERA KEYFRAMES ON THE SAME PICTURE: when the narrator talks about a part/detail of the subject already on screen (eyes, claws, wings, crater, tail, skin), do NOT make a new picture: use {"w":..,"same":true} with "kf", or put "kf" on the main itself.
@@ -293,7 +306,7 @@ Read the scene sentence by sentence and clause by clause. Split it into BEATS: e
    - "place": "text_hi" = place name, "sub_hi" = small line (region/country). Only for a real, named place.
    - "year": "text_hi" = date/year/period exactly as spoken.
    - "bubble": "text_hi" (max 6 words) when someone's words are quoted.
-   - "note": SOURCE CARD, ONLY when the narration mentions a REAL source/evidence (a study, paper, report, book, inscription, record, fossil label, expedition log). "sub_hi" = the source name/year as spoken, "text_hi" = a short real paragraph (25-45 Hindi words) in the voice of that source that contains the fact, "mark_hi" = the 1-4 exact words of the paragraph the narrator is discussing (they get highlighted). Never use a note as decoration; never invent a source that the narration does not mention.
+   - "note": SOURCE CAPTION shown on the empty side of the picture while the narrator tells a fact that one of the REAL SOURCES (listed below the rules) supports. Return {"w": word where the fact starts, "kind": "note", "src": "<paragraph id exactly as listed, e.g. 2.1>", "mark_en": "1-4 consecutive English words copied exactly from that paragraph that contain the fact being told"}. The engine prints the real source title and the real paragraph, with your marked words underlined in red. Whether or not the narrator says the source name, show it when that fact is told. Use a note about every second scene (max one per ~12 seconds, never two scenes in a row with the same paragraph), only if a listed paragraph really supports what is said; never invent a source, never write the text yourself. If no real sources are listed, use no notes.
    - "title": "text_hi" (1-3 words), only for the single biggest reveal of the whole video.
    - NO "popup" stickers exist any more.
    Never two items on the same word. No item before its word.
@@ -309,7 +322,7 @@ def director_prompt(chunk, topic="", nb=None):
         line = " ".join(f"{k}:{w}({wt[k][0]:.1f})" for k, w in enumerate(wds))
         prev_ = nb.get(i - 1, "")
         parts.append(f"SCENE {i} (tone {sc.get('tone')}, {sc['speech_dur']:.0f}s, previous scene ended: \"{prev_}\"):\n{line}")
-    return DIRECTOR_RULES + f"\n\nVIDEO TOPIC: {topic}\n\n" + "\n\n".join(parts)
+    return DIRECTOR_RULES + f"\n\nVIDEO TOPIC: {topic}\n\n" + sources_block() + "\n\n" + "\n\n".join(parts)
 
 
 def parse_kf(kf, w0, w1, fx=None, fy=None):
@@ -333,7 +346,49 @@ def parse_kf(kf, w0, w1, fx=None, fy=None):
     return ded[:5] or None
 
 
+def apply_special(sc, d):
+    """Director may turn a photo scene into a split-screen list ('split') or a 3D distance map ('terrain')."""
+    wds, wt = sc["narration_hi"].split(), sc.get("wt") or []
+    if len(wt) != len(wds):
+        return False
+    sp = d.get("split")
+    if isinstance(sp, dict):
+        sp = sp.get("items")
+    if isinstance(sp, list) and 2 <= len([x for x in sp if isinstance(x, dict)]) <= 3:
+        items, lastw = [], -1
+        for x in sorted([x for x in sp if isinstance(x, dict)], key=lambda x: int(x.get("w", 0) or 0)):
+            try:
+                w = int(x.get("w", 0))
+            except Exception:  # noqa
+                continue
+            q_ = clean_short(x.get("query_en"), 50)
+            if w <= lastw or w >= len(wds) or not q_ or not clean_short(x.get("label_hi"), 40):
+                continue
+            items.append({"label_hi": clean_short(x.get("label_hi"), 40), "query_en": q_, "entity_en": clean_short(x.get("entity_en"), 70),
+                          "prompt_en": clean_short(x.get("prompt_en"), 300) or ("a realistic photo of " + q_), "t": max(0.0, wt[w][0] - 0.05)})
+            lastw = w
+        if len(items) >= 2:
+            items[0]["t"] = 0.0
+            sc["type"], sc["items"] = "multi", items[:3]
+            return True
+    tr = d.get("terrain")
+    if isinstance(tr, dict):
+        try:
+            pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (tr.get("pins") or [])[:2]]
+            regs = [{"label_hi": clean_short(r_.get("label_hi"), 20), "lat": float(r_["lat"]), "lon": float(r_["lon"])} for r_ in (tr.get("regions") or [])[:4]
+                    if clean_short(r_.get("label_hi"), 20)]
+            ok_ = len(pins) == 2 and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins)
+            if ok_ and hav_km((pins[0]["lat"], pins[0]["lon"]), (pins[1]["lat"], pins[1]["lon"])) < 1500:
+                sc["type"], sc["map"], sc["headline_hi"] = "map", {"pins": pins, "route": True, "mode": "terrain", "regions": regs}, ""
+                return True
+        except Exception:  # noqa
+            pass
+    return False
+
+
 def apply_direction(sc, d):
+    if apply_special(sc, d):
+        return True
     wds = sc["narration_hi"].split()
     nw = len(wds)
     mains, last = [], -1
@@ -368,7 +423,8 @@ def apply_direction(sc, d):
             except Exception:  # noqa
                 return None
         shots.append({"text_hi": " ".join(wds[w:w2]), "prompt_en": clean_short(m.get("prompt_en") or "", 400) if not m.get("same") else "",
-                      "query_en": clean_short(m.get("query_en") or "", 50), "motion": bool(m.get("motion")) and not m.get("same"),
+                      "query_en": clean_short(m.get("query_en") or "", 50), "entity_en": clean_short(m.get("entity_en") or "", 70) if not m.get("same") else "",
+                      "motion": bool(m.get("motion")) and not m.get("same"),
                       "clip_en": clean_short(m.get("clip_en") or "", 40), "label_hi": "", "ov": None, "popup_en": "",
                       "fx": fr_(m.get("fx")), "fy": fr_(m.get("fy")),
                       "kf": parse_kf(m.get("kf"), w, w2, m.get("fx"), m.get("fy")),
@@ -384,6 +440,14 @@ def apply_direction(sc, d):
         if kind not in ITEM_KINDS or not (0 <= w < nw) or (w, kind) in used:
             continue
         txt = clean_short(it.get("text_hi"), 260 if kind == "note" else 40)
+        if kind == "note":
+            sp_ = SRC_PARAS.get(str(it.get("src") or "").strip())
+            if not sp_:
+                continue
+            rec = {"w": w, "kind": "note", "text": sp_["text"], "mark": clean_short(it.get("mark_en"), 50), "sub": sp_["title"].replace("|", "-")[:70]}
+            used.add((w, kind))
+            items.append(rec)
+            continue
         if kind == "popup":
             if not str(it.get("popup_en") or "").strip():
                 continue
@@ -461,6 +525,7 @@ def director_pass(scenes, topic=""):
     nbeats = sum(len(sc.get("beats", [])) for sc in scenes)
     DIRECTOR_REPORT[0] = (f"Director: {ok}/{len(todo)} scenes planned | beats {nbeats} | keyframe moves {sum(1 for sh in allsh if sh.get('kf'))} | "
                           f"transitions {sum(1 for sh in allsh if sh.get('trans'))} | cams {sum(1 for sh in allsh if sh.get('cam'))} | "
+                          f"split-screens {sum(1 for sc in scenes if sc.get('type') == 'multi' and sc.get('directed'))} | terrain maps {sum(1 for sc in scenes if sc.get('type') == 'map' and sc.get('directed'))} | "
                           f"source cards {sum(1 for sc in scenes if sc.get('type') == 'photo' for it in sc.get('items', []) if isinstance(it, dict) and it.get('kind') == 'note')} | "
                           f"techniques used: {', '.join(techs) or 'none'}")
     log(DIRECTOR_REPORT[0])
@@ -518,6 +583,78 @@ Return JSON: [{{"topic_en": "...", "topic_hi": "..."}}]"""
 
 
 # --------------------------------------------------------------------------- research + script
+
+# --------------------------------------------------------------------------- real sources: pages the research really used, with their real paragraphs
+SRC_PARAS = {}   # "1.2" -> {"title","url","text"}
+SRC_LIST = []    # [{"title","url"}]
+
+
+def trim_words(t, n=36):
+    w = t.split()
+    if len(w) <= n:
+        return t
+    cut = " ".join(w[:n])
+    k = max(cut.rfind(". "), cut.rfind("? "), cut.rfind("! "))
+    return cut[:k + 1] if k > len(cut) * 0.5 else cut.rstrip(",;:") + "."
+
+
+def collect_sources(max_src=8):
+    """Open the pages the web-search research was grounded on and keep their REAL paragraphs for on-screen source captions."""
+    import html as _html
+    SRC_PARAS.clear()
+    SRC_LIST.clear()
+    for g in GROUND_SRC[:20]:
+        if len(SRC_LIST) >= max_src:
+            break
+        try:
+            r = requests.get(g["uri"], headers={"User-Agent": "Mozilla/5.0 (compatible; nature-video-bot/1.0)"}, timeout=25, allow_redirects=True)
+            if not r.ok or "html" not in r.headers.get("content-type", "html"):
+                continue
+            h = r.text[:1_500_000]
+            tt = re.search(r"<title[^>]*>(.*?)</title>", h, re.S | re.I)
+            title = _html.unescape(_strip_html(tt.group(1))).replace("|", "-")[:90] if tt else (g["title"] or r.url)
+            paras = []
+            for m in re.findall(r"<p[^>]*>(.*?)</p>", h, re.S | re.I):
+                t = _html.unescape(_strip_html(m))
+                nw = len(t.split())
+                if 25 <= nw <= 140 and sum(c.isascii() and c.isalpha() for c in t) > 0.7 * len(t) and "cookie" not in t.lower():
+                    paras.append(trim_words(t))
+                if len(paras) >= 4:
+                    break
+            if not paras:
+                continue
+            k = len(SRC_LIST) + 1
+            SRC_LIST.append({"title": title, "url": r.url})
+            for j, t in enumerate(paras, 1):
+                SRC_PARAS[f"{k}.{j}"] = {"title": title, "url": r.url, "text": t}
+        except Exception as e:  # noqa
+            log("  source page failed:", type(e).__name__)
+    log(f"real sources collected: {len(SRC_LIST)} pages, {len(SRC_PARAS)} paragraphs")
+
+
+def sources_block():
+    if not SRC_PARAS:
+        return "REAL SOURCES: none were retrieved, so do NOT use any \"note\" items."
+    out = ["REAL SOURCES (the research really used these pages; paragraph id, source title, real text):"]
+    for k, v in SRC_PARAS.items():
+        out.append(f'[{k}] {v["title"][:70]}: "{v["text"]}"')
+    return "\n".join(out)
+
+
+def research_story(story, topic):
+    """Sources for the owner's own story: search the web for pages that confirm its facts (the story itself is never changed)."""
+    body = " ".join(story.split())
+    parts = [body[i:i + 1800] for i in range(0, min(len(body), 5400), 1800)] or [topic]
+    for k, part in enumerate(parts):
+        prompt = (f"Story topic: {topic}\nStory excerpt (Hindi or English):\n{part}\n\nUsing web search, find reliable English-language sources "
+                  "(Wikipedia, NASA, Britannica, WWF, government or university pages, major news) that confirm the specific facts, names, numbers and places in this excerpt. "
+                  "List the facts you could confirm as short English bullets.")
+        try:
+            gemini(prompt, search=True, temperature=0.2)
+        except Exception as e:  # noqa
+            log("story source search failed:", str(e)[:100])
+
+
 def research(topic):
     prompt = (f"Topic: {topic}\nUsing web search, collect the key well-established scientific facts about this topic "
               "(origins, mechanisms, widely accepted figures with rounded numbers, and the most surprising true facts). "
@@ -589,6 +726,9 @@ Return ONLY JSON in exactly this shape:
  "mood": "wonder",
  "thumb_text_hi": "3-5 Hindi words that create a CURIOSITY GAP: a shocking true claim or an unanswered question that makes the viewer need to click to learn the answer; never reveal the answer, never a lie",
  "thumb_sub_hi": "a short Hindi teaser line, 2-5 words, that adds intrigue without spoiling (e.g. जवाब चौंका देगा / 4 अरब साल पहले...)",
+ "thumb_entity_en": "exact English Wikipedia article title of the real place/animal/thing the thumbnail photo should show (e.g. Gir National Park, Asiatic lion, Moon); empty if it cannot be photographed",
+ "thumb_query_en": "2-3 English words for a real stock photo of that same subject",
+ "thumb_layout": "one of bottom, top, side: where the headline sits so it never covers the main subject",
  "thumb_badge_hi": "one short Hindi word like रहस्य / सच / विज्ञान",
  "thumb_prompt_en": "the ONE most intriguing visual of THIS exact topic for the thumbnail: a single clear subject shown as a dramatic close-up or surprising scene that makes people ask a question (e.g. for ants: a giant ant lifting a huge leaf; for Earth: a glowing molten planet). Be specific to the topic, never generic. No text or letters in the image",
  "thumb_prompt2_en": "the contrasting counterpart for a then/now thumbnail (e.g. molten young Earth vs today's blue Earth); empty string if the topic has no natural contrast",
@@ -628,11 +768,12 @@ def to_num(x, default=None):
         return default
 
 
-def validate_script(s):
-    if not isinstance(s, dict) or not isinstance(s.get("scenes"), list) or len(s["scenes"]) < (4 if TEST_SEC else 8):
+def validate_script(s, verbatim=False, min_scenes=None):
+    need = min_scenes if min_scenes is not None else (4 if TEST_SEC else 8)
+    if not isinstance(s, dict) or not isinstance(s.get("scenes"), list) or len(s["scenes"]) < need:
         raise ValueError("script has too few scenes")
     for idx, sc in enumerate(s["scenes"]):
-        sc["narration_hi"] = clean_narration(sc.get("narration_hi", ""))
+        sc["narration_hi"] = " ".join(str(sc.get("narration_hi", "")).split()) if verbatim else clean_narration(sc.get("narration_hi", ""))
         if not sc["narration_hi"]:
             raise ValueError("empty narration")
         tone = str(sc.get("tone") or "calm").lower().strip()
@@ -644,7 +785,7 @@ def validate_script(s):
                 q_ = clean_short(it.get("query_en"), 50)
                 items.append({"label_hi": clean_short(it.get("label_hi"), 40) or " ",
                               "prompt_en": clean_short(it.get("prompt_en"), 400) or ("a realistic photo of " + q_),
-                              "query_en": q_})
+                              "query_en": q_, "entity_en": clean_short(it.get("entity_en"), 70)})
         sc["items"] = []
         if typ in NEED_ITEMS:
             lo, hi = NEED_ITEMS[typ]
@@ -738,7 +879,7 @@ def validate_script(s):
                     except Exception:  # noqa
                         return None
                 shots.append({"text_hi": clean_narration(sh.get("text_hi", "")), "prompt_en": clean_short(sh.get("prompt_en") or "", 400),
-                              "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50), "motion": bool(sh.get("motion")), "clip_en": clean_short(sh.get("clip_en") or "", 40),
+                              "label_hi": clean_short(sh.get("label_hi"), 18), "query_en": clean_short(sh.get("query_en") or "", 50), "entity_en": clean_short(sh.get("entity_en") or "", 70), "motion": bool(sh.get("motion")), "clip_en": clean_short(sh.get("clip_en") or "", 40),
                               "popup_en": clean_short(sh.get("popup_en") or "", 120),
                               "ov": (({"kind": "title", "text": clean_short(sh.get("title_hi"), 24)} if str(sh.get("title_hi") or "").strip() else
                                       {"kind": "place", "text": clean_short(sh.get("place_hi"), 28) + "|" + clean_short(sh.get("place_sub_hi"), 40)}
@@ -781,11 +922,76 @@ def validate_script(s):
     first = s["scenes"][0]["shots"][0]["prompt_en"]
     s["thumb_prompt_en"] = (s.get("thumb_prompt_en") or first).strip()
     s["thumb_prompt2_en"] = (s.get("thumb_prompt2_en") or "").strip()
+    s["thumb_entity_en"] = clean_short(s.get("thumb_entity_en"), 70)
+    s["thumb_query_en"] = clean_short(s.get("thumb_query_en"), 50)
+    s["thumb_layout"] = s.get("thumb_layout") if s.get("thumb_layout") in ("bottom", "top", "side") else ""
     return s
 
 
 def word_count(s):
     return sum(len(sc["narration_hi"].split()) for sc in s["scenes"])
+
+
+
+def story_scenes(story):
+    """Cut the owner's story into scenes WITHOUT changing a single word: (title or '', [narration chunks])."""
+    lines = [l.strip() for l in story.strip().splitlines() if l.strip()]
+    title = ""
+    if len(lines) > 1 and len(lines[0]) <= 120 and not re.search(r"[।?!\.]$", lines[0]):
+        title, lines = lines[0], lines[1:]  # a heading line is the title and is not narrated
+    text = " ".join(lines)
+    sents = [x.strip() for x in re.split(r"(?<=[।?!\.])\s+", text) if x.strip()]
+    chunks, cur = [], []
+    for sn in sents:
+        cur.append(sn)
+        n = sum(len(c.split()) for c in cur)
+        if n >= 26:
+            chunks.append(" ".join(cur))
+            cur = []
+    if cur:
+        if chunks and sum(len(c.split()) for c in cur) < 12:
+            chunks[-1] += " " + " ".join(cur)
+        else:
+            chunks.append(" ".join(cur))
+    return title, chunks
+
+
+def own_story_script(story, topic_en):
+    """Script made from the owner's story: narration is EXACTLY his words; Gemini only adds tone, picture hints and metadata."""
+    title, chunks = story_scenes(story)
+    if not chunks:
+        raise ValueError("story is empty")
+    listing = "\n".join(f"{i}: {c}" for i, c in enumerate(chunks))
+    prompt = f"""A Hindi documentary video will narrate the numbered scenes below WORD FOR WORD (never change the text). For each scene return how it should sound and one picture hint, and give the video metadata.
+Return ONLY JSON: {{"title_hi": "catchy Hindi title (max 70 chars)", "description_hi": "2-3 lines Hindi", "tags": ["8 tags"], "mood": "one of {', '.join(MOOD_NAMES)}",
+ "thumb_prompt_en": "dramatic realistic hero photo prompt of the main subject, no text", "thumb_prompt2_en": "", "thumb_text_hi": "2-4 curiosity words in Hindi", "thumb_entity_en": "exact Wikipedia title of the real subject of the thumbnail photo", "thumb_query_en": "2-3 words stock photo query", "thumb_layout": "bottom, top or side", "thumb_badge_hi": "", "thumb_sub_hi": "", "thumb_left_hi": "", "thumb_right_hi": "",
+ "scenes": [{{"i": 0, "tone": "one of {', '.join(TONE_NAMES)}", "image_prompt_en": "realistic photo of the main subject of this scene", "query_en": "1-3 English words for a real stock photo", "entity_en": "exact Wikipedia-style name of the specific place/animal/thing or empty"}}]}}
+Title of the story: {title or topic_en}
+SCENES:
+{listing}"""
+    meta = {}
+    try:
+        meta = gemini_json(prompt, 0.4)
+    except Exception as e:  # noqa
+        log("story metadata failed, using defaults:", str(e)[:100])
+    rows = {int(r.get("i")): r for r in (meta.get("scenes") or []) if isinstance(r, dict) and str(r.get("i", "")).isdigit()}
+    scenes = []
+    for i, c in enumerate(chunks):
+        r = rows.get(i, {})
+        scenes.append({"narration_hi": c, "type": "photo", "tone": r.get("tone") or "calm", "headline_hi": "",
+                       "image_prompt_en": r.get("image_prompt_en") or "", "shots": [], "grade": "", "transition": "",
+                       "query_en_scene": r.get("query_en") or "", "entity_en_scene": r.get("entity_en") or ""})
+    script = {"title_hi": meta.get("title_hi") or title or topic_en, "description_hi": meta.get("description_hi") or "",
+              "tags": meta.get("tags") or [], "mood": meta.get("mood") or "", "thumb_prompt_en": meta.get("thumb_prompt_en") or "",
+              "thumb_prompt2_en": meta.get("thumb_prompt2_en") or "", "thumb_text_hi": meta.get("thumb_text_hi") or "", "thumb_entity_en": meta.get("thumb_entity_en") or "", "thumb_query_en": meta.get("thumb_query_en") or "", "thumb_layout": meta.get("thumb_layout") or "",
+              "thumb_badge_hi": meta.get("thumb_badge_hi") or "", "thumb_sub_hi": meta.get("thumb_sub_hi") or "",
+              "thumb_left_hi": meta.get("thumb_left_hi") or "", "thumb_right_hi": meta.get("thumb_right_hi") or "", "scenes": scenes}
+    script = validate_script(script, verbatim=True, min_scenes=1)
+    for sc, raw in zip(script["scenes"], scenes):  # fallback shot carries the scene's real-photo hints
+        if sc["shots"]:
+            sc["shots"][0]["query_en"] = clean_short(raw.get("query_en_scene"), 50)
+            sc["shots"][0]["entity_en"] = clean_short(raw.get("entity_en_scene"), 70)
+    return script
 
 
 def write_script(topic, cat, style, target_sec, facts, wpm):
@@ -797,7 +1003,7 @@ Improve this explainer-video script JSON:
 - Replace difficult words with simple ones; make sure a 15-year-old understands everything on first listen.
 - Keep scene 1 a truthful suspense hook (25-30 words, type "photo") that does not reveal the answer.
 - Check that every picture matches the words spoken at that moment (each shot's prompt_en must show exactly what its text_hi says; a merge scene must really show A and B combining into the result named in the narration; counter/bars numbers must be correct and round). Fix types/items/labels/headlines/shots where they do not teach.
-- Keep many scenes as merge/split/steps/compare/counter/bars (about 40%) and kinetic scenes, and a grade + transition on every scene. Every shot must show what is spoken at that moment.
+- Keep at least 80% of the scenes as type photo (real-photo documentary scenes); no merge/split/steps/compare/bars/kinetic cards; map or multi (split-screen list of real photos) are welcome; and a grade + transition on every scene. Every shot must show what is spoken at that moment.
 - Keep roughly the same number of scenes (+/-2) and total narration length (+/-10%, now about {word_count(script)} words).
 - Keep numbers in narration written in Hindi words, no English letters in narration, keep every field and the exact JSON shape.
 Return ONLY the improved JSON.
@@ -821,11 +1027,11 @@ def rescale_script(script, target_words):
 
 # --------------------------------------------------------------------------- voice
 TONES = {
-    "suspense": ("+2%", "-2Hz", "hushed and gripping, slow and deliberate with tense pauses, like a true-crime documentary storyteller"),
-    "wonder": ("+8%", "+1Hz", "engaged and full of wonder, steady confident storytelling with warmth"),
-    "serious": ("+6%", "-1Hz", "serious, firm and grounded, steady pace with weight on the key words"),
-    "excited": ("+13%", "+2Hz", "gripping and animated, building momentum as the story turns, still controlled"),
-    "calm": ("+8%", "+0Hz", "natural, confident and engaging, a steady documentary storyteller with clear pauses between sentences"),
+    "suspense": ("+6%", "-1Hz", "hushed but quick and gripping, with short tense pauses, like a true-crime documentary storyteller"),
+    "wonder": ("+10%", "+2Hz", "lively and full of wonder, confident storytelling with warmth and energy"),
+    "serious": ("+8%", "+0Hz", "serious, firm and grounded but brisk, weight on the key words"),
+    "excited": ("+15%", "+3Hz", "gripping, animated and fast, building momentum as the story turns, still controlled"),
+    "calm": ("+10%", "+1Hz", "calm yet energetic, confident and engaging, a quick documentary storyteller with crisp pauses between sentences"),
 }
 
 
@@ -861,7 +1067,7 @@ def tts_gemini(text, out_path, tone=None):
     if gap < GEMINI_TTS_GAP:
         time.sleep(GEMINI_TTS_GAP - gap)
     style = TONES.get(tone or "", TONES["calm"])[2]
-    prompt = (f"Say in a CALM, warm, natural male voice at a brisk, flowing documentary pace (clearly faster than slow reading, no long drawn-out words), like a thoughtful Hindi storyteller narrating a documentary, never shouting or over-acting, "
+    prompt = (f"Say in a calm but ENERGETIC, confident, warm male voice, quick and lively like a top Hindi YouTube documentary narrator (clearly fast, crisp, no drawn-out words, rising and falling with the meaning, a smile in the voice), never shouting or over-acting, "
               f"{style}, with natural pauses at commas and full stops: {text}")
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
@@ -1003,7 +1209,7 @@ FONT_NAMES = {
     "label": ["Mukta-ExtraBold.ttf", "Hind-Bold.ttf", "Mukta-Bold.ttf"],
     "head": ["YatraOne-Regular.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
     "title": ["Khand-Bold.ttf", "YatraOne-Regular.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
-    "thumb": ["RozhaOne-Regular.ttf", "Khand-Bold.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
+    "thumb": ["Mukta-ExtraBold.ttf", "Hind-Bold.ttf", "Mukta-Bold.ttf"],
 }
 SYS_FONTS = [
     "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
@@ -1510,7 +1716,79 @@ STYLE_OBJ = ("single isolated object, centered, whole object visible, plain pure
              "soft even light, sharp, no shadow, no text, no watermark")
 
 
-def gen_image(prompt, out, kind="photo", fallback_query="", query=""):
+
+# --------------------------------------------------------------------------- REAL photo of the exact named thing (Wikipedia / Wikimedia Commons)
+IMG_CREDITS = []
+WIKI_UA = {"User-Agent": "nature-video-bot/1.0 (educational video project; https://github.com)"}
+BAD_TITLE = ("map", "diagram", "logo", "flag", "stamp", "drawing", "svg", "icon", "chart", "graph", "coat of arms", "poster", "cover", "screenshot",
+             "illustration", "painting", "skeleton", "locator", "location", "plan of", "scheme", "emblem", "signature", "portrait of")
+OK_LIC = ("cc by", "cc0", "public domain", "pd", "cc-by", "attribution", "gfdl", "no restrictions")
+
+
+def _lic_ok(meta):
+    lic = (meta.get("LicenseShortName", {}).get("value") or "").lower()
+    if not lic:
+        return False
+    if "nc" in lic.split() or "-nc" in lic or " nc" in lic or "nd" in lic.split() or "-nd" in lic:
+        return False
+    return any(x in lic for x in OK_LIC)
+
+
+def _strip_html(t):
+    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", "", t or "")).strip()
+
+
+def wiki_real_photo(query, out, size):
+    """Find a REAL, openly licensed photo of exactly this thing (Wikipedia article lead image, else Wikimedia Commons search)."""
+    q = (query or "").strip()
+    if not q:
+        return False
+    cands = []  # (url, title, author, license, page)
+    try:
+        r = requests.get("https://en.wikipedia.org/w/api.php", headers=WIKI_UA, timeout=25, params={
+            "action": "query", "format": "json", "generator": "search", "gsrsearch": q, "gsrlimit": 4, "prop": "pageimages|info",
+            "piprop": "original", "inprop": "url"})
+        pages = sorted((r.json().get("query", {}) or {}).get("pages", {}).values(), key=lambda x: x.get("index", 99))
+        for pg in pages:
+            o = pg.get("original") or {}
+            if o.get("source") and (o.get("width") or 0) >= 1000 and (o.get("width") or 1) / (o.get("height") or 1) >= 1.15 \
+                    and o["source"].lower().split("?")[0].endswith((".jpg", ".jpeg", ".png")) and not any(b in o["source"].lower() for b in BAD_TITLE):
+                cands.append((o["source"], pg.get("title", q), "", "see Wikipedia", pg.get("fullurl", "")))
+    except Exception as e:  # noqa
+        log("  wikipedia lookup failed:", type(e).__name__)
+    try:
+        r = requests.get("https://commons.wikimedia.org/w/api.php", headers=WIKI_UA, timeout=25, params={
+            "action": "query", "format": "json", "generator": "search", "gsrsearch": q + " filetype:bitmap", "gsrnamespace": 6, "gsrlimit": 12,
+            "prop": "imageinfo", "iiprop": "url|extmetadata|mime|size", "iiurlwidth": 1920})
+        pages = sorted((r.json().get("query", {}) or {}).get("pages", {}).values(), key=lambda x: x.get("index", 99))
+        for pg in pages:
+            ii = (pg.get("imageinfo") or [{}])[0]
+            title = pg.get("title", "")
+            meta = ii.get("extmetadata", {})
+            if ii.get("mime") not in ("image/jpeg", "image/png") or (ii.get("width") or 0) < 1400 or (ii.get("width") or 1) / (ii.get("height") or 1) < 1.3:
+                continue
+            if any(b in title.lower() for b in BAD_TITLE) or not _lic_ok(meta):
+                continue
+            cands.append((ii.get("thumburl") or ii.get("url"), title, _strip_html(meta.get("Artist", {}).get("value")),
+                          meta.get("LicenseShortName", {}).get("value", ""), ii.get("descriptionurl", "")))
+    except Exception as e:  # noqa
+        log("  commons lookup failed:", type(e).__name__)
+    for url, title, author, lic, page in cands[:6]:
+        try:
+            data = requests.get(url, headers=WIKI_UA, timeout=60).content
+            im = Image.open(io.BytesIO(data))
+            if im.width < 900 or green_frac(im) > 0.22:
+                continue
+            fit_image(data, out, size)
+            IMG_CREDITS.append(f"{title.replace('File:', '')[:60]} — {author[:40] or 'Wikimedia'} ({lic or 'open licence'}) {page}".strip())
+            log(f"  real photo found on Wikimedia for '{q}': {title[:50]}")
+            return True
+        except Exception:  # noqa
+            continue
+    return False
+
+
+def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity=""):
     suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB, "obj": STYLE_OBJ}[kind]
     size = (1080, 1080) if kind in ("card", "obj") else (1920, 1080)
     full = f"{prompt}, {suffix}"
@@ -1518,11 +1796,15 @@ def gen_image(prompt, out, kind="photo", fallback_query="", query=""):
     chain = [("cloudflare", lambda: img_cloudflare(full, out, size, dims))]
     rq = query or fallback_query or query_from_prompt(prompt)
     if kind in ("photo", "thumb") and rq and os.environ.get("REAL_PHOTOS") != "0":
-        # REAL free picture of the exact subject first; AI is only the last resort
+        # REAL free picture of the exact subject first: the named place/animal/thing from Wikipedia & Commons, then stock photos; AI is the last resort
+        real = []
+        if os.environ.get("REAL_WIKI", "1") != "0" and kind == "photo":
+            real.append(("wikimedia", lambda: wiki_real_photo(entity or rq, out, size)))
         if PIXABAY_KEY:
-            chain.insert(0, ("pixabay", lambda: pixabay_photo(rq, out, size)))
+            real.append(("pixabay", lambda: pixabay_photo(rq, out, size)))
         if kind == "photo":
-            chain.insert(1 if PIXABAY_KEY else 0, ("pexels-real", lambda: pexels_photo(rq, out, size)))
+            real.append(("pexels-real", lambda: pexels_photo(rq, out, size)))
+        chain = real + chain
     chain.append(("local-sd", lambda: img_local_sd(prompt.split(", no text")[0] + ", " + {"photo": "cinematic film still, photorealistic, dramatic lighting, highly detailed",
                                                   "thumb": "ultra dramatic hero shot, vivid, highly detailed", "card": "polished digital illustration, vibrant",
                                                   "obj": "single isolated object on a plain white background, studio photo"}[kind], out, size, kind)))
@@ -2679,9 +2961,10 @@ def ov_sprite(kind, text, mark, pal):
             body, src = text, ""
         f_head, f_body = load_font(38, "head"), load_font(31, "sub")
         wmax = 600
-        head_lines = wrap_text(probe, ("स्रोत: " + src) if src else "", f_head, 520)[:3] if src else []
-        lines = wrap_text(probe, body, f_body, 500)[:8]
-        marks = [m.strip("।,.?!\"'") for m in mark.split() if len(m.strip("।,.?!\"'")) > 1]
+        lat = sum(c.isascii() for c in body) > 0.8 * max(1, len(body))
+        head_lines = wrap_text(probe, (("Source: " if lat else "स्रोत: ") + src) if src else "", f_head, 520)[:3] if src else []
+        lines = wrap_text(probe, body, f_body, 520)[:9]
+        marks = [m.strip("।,.?!\"'").lower() for m in mark.split() if len(m.strip("।,.?!\"'")) > 1]
         lh_h, lh_b = int(f_head.size * 1.38), int(f_body.size * 1.55)
         pad = 18
         w = wmax + 2 * pad
@@ -2689,33 +2972,40 @@ def ov_sprite(kind, text, mark, pal):
         card = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         und = Image.new("RGBA", (w, h), (0, 0, 0, 0))
         du = ImageDraw.Draw(und)
+        dc = ImageDraw.Draw(card)
+        txt_layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        dt = ImageDraw.Draw(txt_layer)
         y = pad
         for ln in head_lines:
-            lay = text_layer(ln, f_head, fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(2, 3, 4, 0.7))
-            card.alpha_composite(lay, ((w - lay.width) // 2, y))
+            tw_ = dt.textlength(ln, font=f_head)
+            dt.text(((w - tw_) / 2, y + int(f_head.size * 1.05)), ln, font=f_head, fill=(255, 255, 255, 255), stroke_width=2, stroke_fill=(0, 0, 0, 255), anchor="ls")
             y += lh_h
         y += 10 if head_lines else 0
-        sp_w = 9
+        sp_w = dt.textlength(" ", font=f_body) * 0.9
         for ln in lines:
             wds = ln.split()
-            lays = [text_layer(wd, f_body, fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(2, 3, 4, 0.7)) for wd in wds]
-            boxes = [ly.getchannel("A").point(lambda v: 255 if v > 40 else 0).getbbox() or (0, 0, ly.width, ly.height) for ly in lays]
-            iw = [b[2] - b[0] for b in boxes]
+            iw = [dt.textlength(wd, font=f_body) for wd in wds]
             tot = sum(iw) + sp_w * (len(wds) - 1)
             x = (w - tot) / 2
             run = None
-            for k_, (wd, ly, bx, ww) in enumerate(zip(wds, lays, boxes, iw)):
-                card.alpha_composite(ly, (int(x - bx[0]), y + (lh_b - ly.height) // 2 - 3))
-                hit = any(m in wd or (len(wd) > 2 and wd.strip("।,.?!\"'") in m) for m in marks)
+            base = y + int(f_body.size * 1.12)
+            for k_, (wd, ww) in enumerate(zip(wds, iw)):
+                dt.text((x, base), wd, font=f_body, fill=(255, 255, 255, 255), stroke_width=2, stroke_fill=(0, 0, 0, 255), anchor="ls")
+                wl_ = wd.lower().strip("।,.?!\"'();:")
+                hit = any((wl_ == m) or (not m.isascii() and (m in wl_ or (len(wl_) > 2 and wl_ in m))) for m in marks)
                 if hit:
                     run = (run[0], x + ww) if run else (x, x + ww)
                 if (not hit or k_ == len(wds) - 1) and run:
-                    pts_ = [(xx, y + lh_b - 8 + 2.2 * math.sin(xx / 9.0)) for xx in range(int(run[0]) - 3, int(run[1]) + 4, 5)]
+                    pts_ = [(xx, base + 9 + 2.2 * math.sin(xx / 9.0)) for xx in range(int(run[0]) - 3, int(run[1]) + 4, 5)]
                     if len(pts_) > 1:
                         du.line(pts_, fill=(232, 28, 40, 255), width=5, joint="curve")
                     run = None
                 x += ww + sp_w
             y += lh_b
+        shd = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        shd.putalpha(txt_layer.getchannel("A").filter(ImageFilter.GaussianBlur(3)).point(lambda v: int(v * 0.8)))
+        card.alpha_composite(shd, (2, 3))
+        card.alpha_composite(txt_layer)
         scrim = Image.new("RGBA", (w + 80, h + 80), (0, 0, 0, 0))
         sm = Image.new("L", (w + 80, h + 80), 0)
         ImageDraw.Draw(sm).rounded_rectangle([40, 40, w + 40, h + 40], 30, fill=150)
@@ -3245,7 +3535,7 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
     # when each item is named
     ts = []
     for k, it in enumerate(items):
-        t_ = find_word_time(sc, it["label_hi"]) if k > 0 else 0.0
+        t_ = it["t"] if it.get("t") is not None else (find_word_time(sc, it["label_hi"]) if k > 0 else 0.0)
         ts.append(t_)
     base_t = [0.0] + [1.0 + k * max(1.2, (speech_dur - 1.5) / n) for k in range(1, n)]
     ts = [t_ if (t_ is not None and (k == 0 or t_ > ts[k - 1] + 0.7)) else base_t[k] for k, t_ in enumerate(ts)]
@@ -4152,14 +4442,13 @@ def _style_line(l, f, key, size):
     return tight(_style_line_raw(l, f, key, size))
 
 
+THUMB_ACC = [(255, 224, 0)]
+
+
 def _style_line_raw(l, f, key, size):
-    stroke = max(6, min(15, int(size * 0.075)))
-    ext = max(4, int(size * 0.05))
-    if key:
-        return text_layer(l, f, fill=(255, 245, 90), fill2=(255, 160, 0), stroke=stroke, stroke_fill=(10, 12, 32),
-                          shadow=(6, 10, 8, 0.8), extrude=(ext, (150, 65, 0)))
-    return text_layer(l, f, fill=(255, 255, 255), fill2=(205, 225, 255), stroke=stroke, stroke_fill=(10, 12, 32),
-                      shadow=(6, 10, 8, 0.8), extrude=(ext, (30, 45, 110)))
+    """Plain, readable thumbnail text: flat white (accent colour for the key line), thick dark outline, soft shadow. No 3D, no gradient."""
+    stroke = max(6, min(16, int(size * 0.08)))
+    return text_layer(l, f, fill=THUMB_ACC[0] if key else (255, 255, 255), stroke=stroke, stroke_fill=(8, 8, 12), shadow=(4, 7, 8, 0.75))
 
 
 def _partitions(words, k):
@@ -4220,14 +4509,14 @@ def pill(text, size, bg, border=(255, 255, 255), fg=(255, 255, 255), role="label
     return out
 
 
-THUMB_FONTS = ["RozhaOne-Regular.ttf", "Khand-Bold.ttf", "YatraOne-Regular.ttf", "Modak-Regular.ttf", "Mukta-ExtraBold.ttf"]
+THUMB_FONTS = ["Mukta-ExtraBold.ttf"]  # plain, normal bold Hindi font (no decorative fonts)
+THUMB_ACCENT = [(255, 224, 0), (255, 86, 70), (90, 225, 255), (150, 240, 90), (255, 160, 40)]
 
 
 def shuffle_thumb_font():
     """Pick a different stylish bold Hindi display font for each video's thumbnail (only fonts that were downloaded)."""
     have = [f for f in THUMB_FONTS if (ROOT / "fonts" / f).exists() or (Path("fonts") / f).exists()]
-    random.shuffle(have)
-    FONT_NAMES["thumb"] = have + ["Khand-Bold.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"]
+    FONT_NAMES["thumb"] = have + ["Mukta-ExtraBold.ttf", "Hind-Bold.ttf", "Mukta-Bold.ttf"]
     font_path.cache_clear()
 
 
@@ -4400,6 +4689,105 @@ def make_thumb_split(img_a, img_b, text, left, right, out):
         canvas.alpha_composite(rp, (W - rp.width - 36, H - rp.height - 28))
     final = canvas.convert("RGB").filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
     final.save(out, "JPEG", quality=93)
+
+
+def sharpness(im):
+    np = _np()
+    g = np.asarray(im.convert("L").resize((640, 360)), dtype=np.float32)
+    return float((np.abs(np.diff(g, axis=0)).mean() + np.abs(np.diff(g, axis=1)).mean()) / 2)
+
+
+def make_thumb_clean(img, text, out, layout="bottom", accent=None, size=(1920, 1080)):
+    """Full real photo (no cut-outs, nothing pasted on the subject), plain bold headline on a soft dark gradient.
+    layout: bottom | top | side (text goes to the emptier side of the picture, away from faces/bodies)."""
+    np = _np()
+    TW, TH = size
+    base = Image.open(img).convert("RGB") if not isinstance(img, Image.Image) else img.convert("RGB")
+    sc_ = max(TW / base.width, TH / base.height)
+    base = base.resize((max(TW, int(base.width * sc_ + .5)), max(TH, int(base.height * sc_ + .5))), Image.LANCZOS)
+    cx = subject_center(base)[0]
+    left = int(min(base.width - TW, max(0, cx * base.width - TW / 2)))
+    pic = base.crop((left, (base.height - TH) // 2, left + TW, (base.height - TH) // 2 + TH))
+    pic = ImageEnhance.Contrast(ImageEnhance.Color(ImageOps.autocontrast(pic, cutoff=0.5)).enhance(1.12)).enhance(1.08)
+    pic = pic.filter(ImageFilter.UnsharpMask(radius=2, percent=70, threshold=3)).convert("RGBA")
+    THUMB_ACC[0] = accent or THUMB_ACCENT[0]
+    shuffle_thumb_font()
+    ys = np.linspace(0, 1, TH)[:, None]
+    xs = np.linspace(0, 1, TW)[None, :]
+    side = empty_side(pic) if layout == "side" else None
+    if layout == "top":
+        a = np.clip((0.55 - ys) / 0.55, 0, 1) ** 1.15 * 225 * np.ones((1, TW))
+        box = (int(TW * 0.04), int(TH * 0.04), int(TW * 0.92), int(TH * 0.40))
+    elif layout == "side":
+        d = xs if side == "left" else 1 - xs
+        a = np.clip((0.62 - d) / 0.62, 0, 1) ** 1.1 * 225 * np.ones((TH, 1))
+        box = (int(TW * (0.03 if side == "left" else 0.45)), int(TH * 0.12), int(TW * 0.52), int(TH * 0.76))
+    else:
+        a = np.clip((ys - 0.50) / 0.50, 0, 1) ** 1.15 * 230 * np.ones((1, TW))
+        box = (int(TW * 0.04), int(TH * 0.58), int(TW * 0.92), int(TH * 0.38))
+    shade = np.zeros((TH, TW, 4), np.uint8)
+    shade[..., 0:3] = (4, 5, 16)
+    shade[..., 3] = a.astype(np.uint8)
+    pic.alpha_composite(Image.fromarray(shade))
+    bx, by, bw, bh = box
+    layers, fs = title_layers([text], bw, bh, start=330, text=text, max_lines=3)
+    ov = ov_of(fs)
+    tot = sum(l.height for l, _ in layers) - ov * (len(layers) - 1)
+    y = by + (bh - tot) // 2 if layout != "bottom" else by + bh - tot
+    for lay, key in layers:
+        if layout == "side":
+            x = bx if side == "left" else bx + bw - lay.width
+        else:
+            x = bx + (bw - lay.width) // 2
+        pic.alpha_composite(lay, (max(0, x), max(0, y)))
+        y += lay.height - ov
+    im = pic.convert("RGB")
+    q = 94
+    while True:  # YouTube accepts thumbnails up to 2 MB
+        im.save(out, "JPEG", quality=q, optimize=True, subsampling=0 if q > 90 else 2)
+        if Path(out).stat().st_size <= 1_900_000 or q <= 70:
+            break
+        q -= 4
+
+
+def pick_thumb_layout(script, topic):
+    """Different layout and accent colour for different stories (and never the same as last time)."""
+    st = load_json(STATE / "thumb.json", {})
+    opts = ["bottom", "side", "top"]
+    h = sum(ord(c) for c in topic)
+    want = script.get("thumb_layout") if script.get("thumb_layout") in opts else opts[h % 3]
+    if want == st.get("layout"):
+        want = opts[(opts.index(want) + 1) % 3]
+    acc = [i for i in range(len(THUMB_ACCENT)) if i != st.get("accent")]
+    ai = acc[h % len(acc)]
+    save_json(STATE / "thumb.json", {"layout": want, "accent": ai})
+    return want, THUMB_ACCENT[ai]
+
+
+def real_thumb_image(script, topic_en, imgdir, fallback):
+    """Real photo of exactly what the story is about (Wikipedia/Commons first, then stock), else the sharpest picture used in the video."""
+    ent = script.get("thumb_entity_en") or ""
+    q = script.get("thumb_query_en") or ""
+    cands = []
+    for k, (e, qq) in enumerate(((ent, q), (q, q), (topic_en, topic_en))):
+        if not (e or qq):
+            continue
+        pth = imgdir / f"thumb_real{k}.png"
+        try:
+            if os.environ.get("REAL_WIKI", "1") != "0" and e and wiki_real_photo(e, pth, (1920, 1080)):
+                cands.append((sharpness(Image.open(pth)), pth))
+                break
+            if PIXABAY_KEY and qq and pixabay_photo(qq, pth, (1920, 1080)):
+                cands.append((sharpness(Image.open(pth)), pth))
+                break
+        except Exception as ex:  # noqa
+            log("  real thumbnail lookup failed:", type(ex).__name__)
+    if cands:
+        return max(cands)[1]
+    ai = imgdir / "thumb.png"
+    if gen_image(script["thumb_prompt_en"], ai, "thumb", query=q):
+        return ai
+    return fallback
 
 
 # --------------------------------------------------------------------------- delivery
@@ -4607,7 +4995,7 @@ def make_visuals(scenes, imgdir):
                     continue
                 requested += 1
                 CF_STATE["used"] += 1
-                if gen_image(sh["prompt_en"], p, "photo", query=sh.get("query_en", "")):
+                if gen_image(sh["prompt_en"], p, "photo", query=sh.get("query_en", ""), entity=sh.get("entity_en", "")):
                     sh["image"] = p
                     prev_img = p
                 elif prev_img:
@@ -4630,7 +5018,7 @@ def make_visuals(scenes, imgdir):
             for k, it in enumerate(sc["items"]):
                 requested += 1
                 p = imgdir / f"{i:03d}_{k}.png"
-                if gen_image(it["prompt_en"], p, "photo" if sc["type"] == "multi" else "card", query=it.get("query_en", "")):
+                if gen_image(it["prompt_en"], p, "photo" if sc["type"] == "multi" else "card", query=it.get("query_en", ""), entity=it.get("entity_en", "")):
                     it["image"] = p
                 else:
                     it["image"] = None
@@ -4684,12 +5072,18 @@ def pipeline():
     wpm = float(wpms.get("gemini" if use_g else "edge", WPM))
     log(f"TOPIC: {topic_en} | category={cat} | style={style[0]} | theme={pal['name']} | target={target}s | wpm={wpm:.0f}")
 
+    GROUND_SRC.clear()
     if own_story:
+        research_story(own_story, topic_en)  # only to find real sources for the on-screen source captions; the story itself is never changed
         facts, sources = ("THE OWNER'S OWN STORY. Follow it faithfully: keep its facts, names, order and meaning, and only polish the wording into natural spoken Hindi "
                           "and cut it into scenes. Do not add new facts.\n" + own_story[:12000]), []
     else:
         facts, sources = research(topic_en)
-    script = write_script(topic_en, cat, style, target, facts, wpm)
+    try:
+        collect_sources()
+    except Exception as e:  # noqa
+        log("collect_sources failed:", str(e)[:100])
+    script = own_story_script(own_story, topic_en) if own_story else write_script(topic_en, cat, style, target, facts, wpm)
     scenes = script["scenes"]
     mood = script["mood"] or MOOD_MAP.get(cat, "wonder")
     kinds = {}
@@ -4702,7 +5096,7 @@ def pipeline():
     total = ffprobe_dur(voice)
     log(f"voice ({VOICE_USED[0]}) length {fmt_time(total)} (target {fmt_time(target)})")
     lo_ok, hi_ok = ((target * 0.5, target * 1.8) if own_story else (TEST_SEC * 0.4, TEST_SEC * 2.2) if TEST_SEC else (MIN_SEC - 30, MAX_SEC + 45))
-    if not (lo_ok <= total <= hi_ok):
+    if not own_story and not (lo_ok <= total <= hi_ok):
         new_words = int(word_count(script) * target / total)
         log(f"length far off-range, rescaling script to ~{new_words} words")
         try:
@@ -4740,21 +5134,16 @@ def pipeline():
     log(f"final video {fmt_time(ffprobe_dur(final))}, {final.stat().st_size / 1e6:.1f} MB")
 
     any_img = next((sh["image"] for s in scenes for sh in s["shots"] if sh.get("image")), None)
-    hero = imgdir / "thumb.png"
-    if not gen_image(script["thumb_prompt_en"], hero, "thumb"):
-        hero = any_img
+    hero = real_thumb_image(script, topic_en, imgdir, any_img)
     thumb = outdir / "thumbnail.jpg"
     text = script["thumb_text_hi"] or script["title_hi"]
-    style = random.choice(["left", "right", "bottom"])
-    log("thumbnail layout:", style)
-    if style == "bottom":
-        make_thumb_bottom(hero, text, thumb)
-    else:
-        make_thumb_hero(hero, text, "", "", thumb, side=style)
+    layout, accent = pick_thumb_layout(script, topic_en)
+    log("thumbnail layout:", layout)
+    make_thumb_clean(hero, text, thumb, layout, accent)
     thumb2 = None
     if script["thumb_prompt2_en"]:
         other = imgdir / "thumb2.png"
-        if gen_image(script["thumb_prompt2_en"], other, "thumb"):
+        if gen_image(script["thumb_prompt2_en"], other, "thumb", query=script.get("thumb_query2_en") or ""):
             try:
                 thumb2 = outdir / "thumbnail_thenow.jpg"
                 make_thumb_split(hero, other, text, script["thumb_left_hi"], script["thumb_right_hi"], thumb2)
@@ -4764,9 +5153,14 @@ def pipeline():
 
     tags3 = " ".join("#" + re.sub(r"\s+", "", t) for t in script["tags"][:3])
     lines = [script["description_hi"], ""]
-    if sources:
+    if SRC_LIST:
+        lines.append("📚 Sources:")
+        lines += [f"• {x['title']} — {x['url']}" for x in SRC_LIST]
+    elif sources:
         lines.append("📚 जानकारी के लिए खोज में देखे गए स्रोत: " + ", ".join(sources))
-    lines += ["🤖 इस वीडियो में AI से बनी तस्वीरें और AI आवाज़ का उपयोग किया गया है।", "", tags3]
+    if IMG_CREDITS:
+        lines += ["🖼 Image credits (Wikimedia Commons / Wikipedia, open licences):"] + ["• " + c for c in IMG_CREDITS[:25]]
+    lines += ["🤖 इस वीडियो में AI आवाज़ और कहीं-कहीं AI से बनी तस्वीरों का उपयोग किया गया है।", "", tags3]
     meta = {"title": script["title_hi"], "description": "\n".join(lines), "tags": script["tags"]}
     (outdir / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
 
