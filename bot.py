@@ -491,6 +491,113 @@ def ensure_techniques(sc, k0=0):
             sh["tech"] = "auto"
 
 
+def _numbered(sc):
+    wds, wt = sc["narration_hi"].split(), sc.get("wt") or []
+    return " ".join(f"{k}:{w}" for k, w in enumerate(wds))
+
+
+def director_extras(scenes, topic=""):
+    """Second, narrow passes that GUARANTEE the signature techniques are tried on every scene that can use them
+    (the big director prompt alone was skipping them): split-screen lists, 3D distance maps, real-source captions, camera keyframes."""
+    ph = [(i, sc) for i, sc in enumerate(scenes) if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
+    stat = {"split": 0, "terrain": 0, "map": 0, "notes": 0, "kf": 0}
+    # 1) split-screen / terrain: one short focused question per batch of scenes
+    for a in range(0, len(ph), 4):
+        batch = ph[a:a + 4]
+        listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
+        prompt = f"""Film editor task. Hindi narration, every word numbered (index:word). Video topic: {topic}
+For EACH scene decide ONLY these two things:
+(1) "split": the narrator names or lists 2 or 3 SEPARATE subjects in this scene (two animals, two cities, two universities, before/after...). Return a list of 2-3 {{"w": word index where that subject is first spoken (the first item's w may be its own word), "label_hi": "name as spoken", "query_en": "1-3 English words for a real photo of exactly it", "entity_en": "exact Wikipedia article title or empty", "prompt_en": "realistic photo of it"}}.
+(2) "terrain": the narrator names TWO real places that are less than ~1000 km apart (villages, cities, districts, parks) as a journey, distance or 'from X to Y'. Return {{"pins":[{{"label_hi":"..","lat":..,"lon":..}},{{"label_hi":"..","lon":..,"lat":..}}],"regions":[{{"label_hi":"..","lat":..,"lon":..}}]}} with CORRECT coordinates; never guess unknown places.
+(3) "map": the narrator names 1-3 real places (country, state, forest, city) where the story happens and no split/terrain applies. Return {{"pins":[{{"label_hi":"place as spoken","lat":..,"lon":..}}]}} with correct coordinates (never guess).
+Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"terrain":null,"map":null}}]}}
+{listing}"""
+        try:
+            out = gemini_json(prompt, 0.2)
+        except Exception as e:  # noqa
+            log("extras (split/terrain) failed:", str(e)[:100])
+            continue
+        for r in (out.get("scenes") or []):
+            try:
+                i = int(r.get("i"))
+            except Exception:  # noqa
+                continue
+            sc = scenes[i] if 0 <= i < len(scenes) else None
+            if sc is None or sc["type"] != "photo" or not any(i == j for j, _ in batch):
+                continue
+            if i > 0 and scenes[i - 1]["type"] in ("multi", "map"):  # keep a rhythm: not two special layouts in a row
+                continue
+            d = {"split": r.get("split")} if r.get("split") else {"terrain": r.get("terrain")} if r.get("terrain") else {}
+            if d and apply_special(sc, d):
+                sc["directed"] = True
+                stat["split" if sc["type"] == "multi" else "terrain"] += 1
+            elif r.get("map") and isinstance(r["map"], dict) and stat["map"] < max(1, len(ph) // 3):
+                try:
+                    pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (r["map"].get("pins") or [])[:3]]
+                    if pins and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins):
+                        far = len(pins) > 1 and max(hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins) > 2500
+                        sc["type"], sc["map"], sc["headline_hi"] = "map", {"pins": pins, "route": False, "mode": "globe" if far else "flat"}, ""
+                        sc["directed"] = True
+                        stat["map"] += 1
+                except Exception:  # noqa
+                    pass
+    # 2) real source captions: match each scene to a REAL paragraph that supports a fact in it
+    if SRC_PARAS:
+        ph = [(i, sc) for i, sc in enumerate(scenes) if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
+        paras = "\n".join(f'[{k}] {v["title"][:60]}: "{v["text"]}"' for k, v in SRC_PARAS.items())
+        for a in range(0, len(ph), 6):
+            batch = ph[a:a + 6]
+            listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
+            prompt = f"""Hindi narration scenes (index:word) and REAL source paragraphs. Pick scenes where a paragraph REALLY states the same fact (same place/animal/number/claim). Never force a match: a paragraph about something else must not be used; an invented or fictional part of the story has no source.
+Return ONLY JSON: {{"matches":[{{"i": scene, "w": word index in the scene where the fact is spoken, "src": "paragraph id like 1.2", "mark_en": "the 1-6 words copied EXACTLY from that paragraph that state the fact"}}]}} (empty list if none).
+PARAGRAPHS:
+{paras}
+SCENES:
+{listing}"""
+            try:
+                out = gemini_json(prompt, 0.1)
+            except Exception as e:  # noqa
+                log("extras (sources) failed:", str(e)[:100])
+                continue
+            for m in (out.get("matches") or []):
+                try:
+                    i, w = int(m.get("i")), int(m.get("w"))
+                except Exception:  # noqa
+                    continue
+                sc = scenes[i] if 0 <= i < len(scenes) else None
+                sp_ = SRC_PARAS.get(str(m.get("src") or "").strip())
+                if sc is None or not sp_ or sc["type"] != "photo" or not (0 <= w < len(sc["narration_hi"].split())):
+                    continue
+                if any(isinstance(it, dict) and it.get("kind") == "note" for it in sc.get("items", [])):
+                    continue
+                if i > 0 and any(isinstance(it, dict) and it.get("kind") == "note" for it in scenes[i - 1].get("items", [])):
+                    continue
+                mk = clean_short(m.get("mark_en"), 50)
+                if mk and mk.lower() not in sp_["text"].lower():
+                    mk = ""
+                sc.setdefault("items", []).append({"w": w, "kind": "note", "text": sp_["text"], "mark": mk, "sub": sp_["title"].replace("|", "-")[:70]})
+                stat["notes"] += 1
+    # 3) camera keyframes: every main that stays on screen for a while gets a visible camera glide on the part being spoken
+    for i, sc in enumerate(scenes):
+        if sc["type"] != "photo" or not sc.get("shots"):
+            continue
+        w0 = 0
+        for sh in sc["shots"]:
+            n = len(str(sh.get("text_hi") or "").split())
+            w1 = w0 + n
+            if not sh.get("kf") and not sh.get("clip") and n >= 5:
+                fx = sh.get("fx") or (0.5 + (0.12 if (i + w0) % 2 else -0.12))
+                fy = sh.get("fy") or 0.42
+                kf = parse_kf([{"w": min(w1 - 1, w0 + n // 2), "fx": fx, "fy": fy, "z": 1.5}], w0, w1, fx, fy)
+                if kf:
+                    sh["kf"] = kf
+                    sh["tech"] = (sh.get("tech") or "") + ("," if sh.get("tech") else "") + "kf"
+                    stat["kf"] += 1
+            w0 = w1
+    log("extras:", stat)
+    return stat
+
+
 def director_pass(scenes, topic=""):
     """After the voice exists: plan pictures, camera keyframes and on-screen items on the exact spoken words
     (falls back to the script's own shots)."""
@@ -520,6 +627,10 @@ def director_pass(scenes, topic=""):
                 if rows[i].get("read"):
                     log(f"  scene {i}: {str(rows[i]['read'])[:60]} | mains={len(sc['shots'])} items={len(sc['items'])}")
     log(f"director: {ok}/{len(todo)} photo scenes planned word-by-word")
+    try:
+        director_extras(scenes, topic)
+    except Exception as e:  # noqa
+        log("director_extras failed:", type(e).__name__, str(e)[:100])
     allsh = [sh for sc in scenes for sh in sc.get("shots", [])] if todo else []
     techs = sorted({t.strip() for sh in allsh for t in (sh.get("tech") or "").split(",") if t.strip().isdigit()}, key=int)
     nbeats = sum(len(sc.get("beats", [])) for sc in scenes)
@@ -1436,7 +1547,11 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
     tmp.unlink(missing_ok=True)
     if im.width < 400 or im.height < 400:
         raise ValueError("image too small")
-    im = ImageOps.fit(im, size, Image.LANCZOS)
+    try:
+        cx, cy = subject_center(im)
+        im = ImageOps.fit(im, size, Image.LANCZOS, centering=(min(0.85, max(0.15, cx)), min(0.7, max(0.3, cy))))
+    except Exception:  # noqa
+        im = ImageOps.fit(im, size, Image.LANCZOS)
     im.save(out_png)
 
 
@@ -1751,6 +1866,9 @@ def wiki_real_photo(query, out, size):
         pages = sorted((r.json().get("query", {}) or {}).get("pages", {}).values(), key=lambda x: x.get("index", 99))
         for pg in pages:
             o = pg.get("original") or {}
+            tw_, qw_ = norm_words(pg.get("title", "")), norm_words(q)
+            if tw_ and qw_ and not (tw_ <= qw_ or qw_ <= tw_ or len(tw_ & qw_) >= max(1, min(len(tw_), len(qw_)) - 0)):
+                continue  # article is about something else (e.g. "lion and rabbit" must not give the Miniature Lion Lop rabbit breed)
             if o.get("source") and (o.get("width") or 0) >= 1000 and (o.get("width") or 1) / (o.get("height") or 1) >= 1.15 \
                     and o["source"].lower().split("?")[0].endswith((".jpg", ".jpeg", ".png")) and not any(b in o["source"].lower() for b in BAD_TITLE):
                 cands.append((o["source"], pg.get("title", q), "", "see Wikipedia", pg.get("fullurl", "")))
@@ -4821,6 +4939,59 @@ def tg_send_file(path, kind, caption=""):
     return bool(ok)
 
 
+def _srt_t(t):
+    t = max(0.0, t)
+    return f"{int(t // 3600):02d}:{int(t % 3600 // 60):02d}:{int(t % 60):02d},{int(round((t % 1) * 1000)) % 1000:03d}"
+
+
+def write_subtitles(scenes, outdir):
+    """Subtitle file (NOT burned into the video) + an edit plan, so an editor can read what is said when and what was placed there."""
+    srt, plan, t0, n = [], [], 0.0, 0
+    for i, sc in enumerate(scenes):
+        wds, wt = sc["narration_hi"].split(), sc.get("wt")
+        sd = sc.get("speech_dur") or sc.get("dur") or 1.0
+        if not wt or len(wt) != len(wds):
+            per = sd / max(1, len(wds))
+            wt = [(k * per, (k + 1) * per) for k in range(len(wds))]
+        k = 0
+        while k < len(wds):
+            e = min(len(wds), k + 7)
+            for j in range(k + 3, min(len(wds), k + 9)):  # prefer to break at the end of a phrase
+                if wds[j - 1].endswith(("।", ",", "?", "!", ".")):
+                    e = j
+                    break
+            n += 1
+            srt.append(f"{n}\n{_srt_t(t0 + wt[k][0])} --> {_srt_t(t0 + wt[e - 1][1])}\n{' '.join(wds[k:e])}\n")
+            k = e
+        what = {"photo": "PHOTO", "map": "MAP", "multi": "SPLIT-SCREEN", "counter": "COUNTER"}.get(sc.get("type"), str(sc.get("type")).upper())
+        m = sc.get("map") or {}
+        if sc.get("type") == "map":
+            what += f" ({m.get('mode', 'flat')}: " + ", ".join(p_.get("label_hi", "") for p_ in m.get("pins", [])) + ")"
+        plan.append(f"[{fmt_time(t0)}-{fmt_time(t0 + sc.get('dur', 0))}] SCENE {i + 1} - {what} - tone {sc.get('tone')}\n  SAYS: {sc['narration_hi']}")
+        for it in sc.get("items", []) if sc.get("type") == "multi" else []:
+            plan.append(f"  split item @{it.get('t', 0):.1f}s: {it.get('label_hi')} ({it.get('entity_en') or it.get('query_en')})")
+        wlen = 0
+        for sh in sc.get("shots", []):
+            nw_ = len(str(sh.get("text_hi") or "").split())
+            ts = t0 + (wt[min(wlen, len(wt) - 1)][0] if wt else 0)
+            wlen += nw_
+            if sh.get("prompt_en") or sh.get("clip"):
+                plan.append(f"  {_srt_t(ts)[:8]} PICTURE: {sh.get('entity_en') or sh.get('query_en') or sh.get('prompt_en', '')[:60]}"
+                            + (f" | clip: {sh['clip_en']}" if sh.get("clip") else "") + (f" | camera: {sh.get('cam')}" if sh.get("cam") else "")
+                            + (f" | transition: {sh.get('trans')}" if sh.get("trans") else ""))
+            elif sh.get("kf"):
+                plan.append(f"  {_srt_t(ts)[:8]} CAMERA moves to a detail of the same picture")
+        for it in sc.get("items", []):
+            if isinstance(it, dict) and it.get("kind") and sc.get("type") == "photo":
+                ts = t0 + (wt[min(it.get("w", 0), len(wt) - 1)][0] if wt else 0)
+                plan.append(f"  {_srt_t(ts)[:8]} {str(it['kind']).upper()}: {str(it.get('text') or it.get('popup_en') or '')[:80]}" + (f" (source: {it.get('sub')})" if it["kind"] == "note" else ""))
+        t0 += sc.get("dur", 0)
+    a, b = Path(outdir) / "subtitles.srt", Path(outdir) / "edit_plan.txt"
+    a.write_text("\n".join(srt), encoding="utf-8")
+    b.write_text("EDIT PLAN (time = minute:second in the video)\n\n" + "\n".join(plan), encoding="utf-8")
+    return a, b
+
+
 def sanitize_yt(s, n):
     return re.sub(r"[<>]", "", s)[:n].strip()
 
@@ -5191,6 +5362,11 @@ def pipeline():
         notify("TITLE:\n" + meta["title"] + "\n\nDESCRIPTION:\n" + meta["description"] + "\n\nTAGS:\n" + ", ".join(meta["tags"]))
         ok = tg_send_file(final, "video", (meta["title"] + "\n" + DIRECTOR_REPORT[0]) if DIRECTOR_REPORT[0] else meta["title"])
         tg_send_file(thumb, "doc", "Thumbnail 1")
+        try:
+            for f_, cap_ in zip(write_subtitles(scenes, outdir), ("Subtitles (SRT) - video par nahi dikhte, sirf editor ke liye", "Edit plan - kis time par kya laga hai")):
+                tg_send_file(f_, "doc", cap_)
+        except Exception as e:  # noqa
+            log("subtitle file failed:", type(e).__name__, str(e)[:100])
         if thumb2:
             tg_send_file(thumb2, "doc", "Thumbnail 2 (then/now)")
         if not ok:
