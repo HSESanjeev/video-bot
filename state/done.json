@@ -226,6 +226,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-11T12:01:04+00:00",
+   "topic_en": "Why are some moons in our solar system more likely to host life than Mars?",
+   "title_hi": "क्या मंगल से बेहतर हैं बृहस्पति के चंद्रमा?",
+   "category": "solar_system",
+   "style": "r",
+   "theme": "mint",
+   "mood": "wonder",
+   "seconds": 41,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
