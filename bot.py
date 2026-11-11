@@ -50,6 +50,8 @@ WPM_FILE = STATE / "wpm.json"
 W, H, FPS = 1280, 720, 30
 VOICE = os.environ.get("TTS_VOICE", "hi-IN-MadhurNeural")
 TTS_RATE = os.environ.get("TTS_RATE", "+8%")
+# measured: the 10-minute reference narrator speaks ~19% faster (syllables per voiced second) than the bot voice -> speed up whatever voice engine is used, pitch stays the same
+VOICE_SPEED = min(1.35, max(0.9, float(os.environ.get("VOICE_SPEED", "1.17"))))
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "auto").strip().lower()  # auto | gemini | edge
 GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 GEMINI_TTS_MODELS = [m for m in os.environ.get(
@@ -596,10 +598,9 @@ Return ONLY JSON in exactly this shape:
  "scenes": [
   {{"narration_hi": "...", "type": "photo", "tone": "suspense", "grade": "dark", "transition": "fade", "headline_hi": "",
     "shots": [{{"text_hi": "first phrase of the narration", "prompt_en": "...", "label_hi": "key word"}}, {{"text_hi": "next phrase, same subject", "prompt_en": "", "focus_x": 0.3, "focus_y": 0.4, "label_hi": ""}}, {{"text_hi": "phrase naming something new", "prompt_en": "...", "query_en": "lion", "label_hi": ""}}]}},
-  {{"narration_hi": "...", "type": "merge", "tone": "wonder", "headline_hi": "...",
-    "items": [{{"label_hi": "...", "prompt_en": "..."}}, {{"label_hi": "...", "prompt_en": "..."}}, {{"label_hi": "...", "prompt_en": "..."}}]}},
-  {{"narration_hi": "...", "type": "counter", "tone": "excited", "headline_hi": "...", "counter": {{"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "..."}}}},
-  {{"narration_hi": "...", "type": "kinetic", "tone": "serious", "keywords_hi": ["...", "..."], "image_prompt_en": "..."}}
+   {{"narration_hi": "...", "type": "multi", "tone": "wonder", "headline_hi": "",
+    "items": [{{"label_hi": "name of first thing", "query_en": "real photo search words", "prompt_en": "..."}}, {{"label_hi": "name of second thing", "query_en": "...", "prompt_en": "..."}}]}},
+ {{"narration_hi": "...", "type": "counter", "tone": "excited", "headline_hi": "...", "counter": {{"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "..."}}}},
  ]
 }}"""
 
@@ -707,6 +708,15 @@ def validate_script(s):
             else:
                 typ = "photo"
         else:
+            typ = "photo"
+        if typ in ("merge", "split", "steps", "compare", "kinetic") and os.environ.get("KEEP_EXPLAINERS") != "1":
+            # cartoon explainer cards look cheap: every such scene becomes a real-photo scene (the director then edits it word by word)
+            if typ == "kinetic":
+                raw_shots = [{"text_hi": "", "prompt_en": clean_short(sc.get("image_prompt_en"), 400) or "a dramatic cinematic nature scene", "query_en": ""}]
+            else:
+                raw_shots = [{"text_hi": it["label_hi"] or "x", "prompt_en": it["prompt_en"], "query_en": it.get("query_en", "")} for it in sc["items"]]
+            sc["shots"] = raw_shots or sc.get("shots")
+            sc["items"] = []
             typ = "photo"
         gr = str(sc.get("grade") or "").lower().strip()
         sc["grade"] = gr if gr in GRADES else TONE_GRADE.get(sc["tone"], "natural")
@@ -919,7 +929,7 @@ def make_voice(scenes, tdir, synth=None):
         synth(sc["narration_hi"], src, sc.get("tone"))
         pad = HOOK_GAP if i == 0 else SCENE_GAP
         run(["ffmpeg", "-y", "-i", src, "-ar", "44100", "-ac", "1", "-af",
-             f"silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.05,apad=pad_dur={pad}", wav])
+             f"silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.05,atempo={VOICE_SPEED:.3f},apad=pad_dur={pad}", wav])
         total = ffprobe_dur(wav)
         sc["dur"] = total
         sc["speech_dur"] = max(0.5, total - pad)
@@ -3335,6 +3345,100 @@ def find_word_time(sc, label):
     return None
 
 
+
+ISO3 = {"IN": "IND", "PK": "PAK", "BD": "BGD", "NP": "NPL", "LK": "LKA", "BT": "BTN", "AF": "AFG", "CN": "CHN", "ID": "IDN", "US": "USA",
+        "GB": "GBR", "CA": "CAN", "AU": "AUS", "NZ": "NZL", "ZA": "ZAF", "KE": "KEN", "NG": "NGA", "EG": "EGY", "ET": "ETH", "TZ": "TZA",
+        "BR": "BRA", "AR": "ARG", "MX": "MEX", "CL": "CHL", "PE": "PER", "CO": "COL", "FR": "FRA", "DE": "DEU", "IT": "ITA", "ES": "ESP",
+        "RU": "RUS", "JP": "JPN", "KR": "KOR", "TH": "THA", "VN": "VNM", "MY": "MYS", "PH": "PHL", "TR": "TUR", "IR": "IRN", "SA": "SAU",
+        "MM": "MMR", "NL": "NLD", "SE": "SWE", "NO": "NOR", "PL": "POL", "UA": "UKR", "MG": "MDG", "CD": "COD", "UG": "UGA", "GH": "GHA"}
+
+
+def real_terrain_ground(pts, regs, CW, CH, to_px, lon_lat_of):
+    """REAL ground: NASA GIBS satellite relief (public domain) + real district/state borders from geoBoundaries.
+    Returns (RGBA canvas, [(label, px, py)] or None on any problem -> caller falls back to the drawn terrain."""
+    np = _np()
+    try:
+        lo_a, la_a = lon_lat_of(0, 0)
+        lo_b, la_b = lon_lat_of(CW, CH)
+        lonmin, lonmax, latmin, latmax = min(lo_a, lo_b), max(lo_a, lo_b), min(la_a, la_b), max(la_a, la_b)
+        url = ("https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi?SERVICE=WMS&REQUEST=GetMap&VERSION=1.1.1"
+               f"&LAYERS=BlueMarble_ShadedRelief&STYLES=&SRS=EPSG:4326&BBOX={lonmin:.5f},{latmin:.5f},{lonmax:.5f},{latmax:.5f}"
+               "&WIDTH=1400&HEIGHT=%d&FORMAT=image/jpeg" % max(300, int(1400 * (CH / CW))))
+        r = requests.get(url, timeout=60)
+        if not r.ok or "image" not in r.headers.get("content-type", ""):
+            raise RuntimeError("gibs " + str(r.status_code))
+        sat = Image.open(io.BytesIO(r.content)).convert("RGB").resize((CW, CH), Image.LANCZOS)
+        a = np.asarray(sat, np.float32)
+        a = a * (0.80 + 0.40 * fnoise(CW, CH, 21, 6))[..., None]  # fine ground detail on top of the soft satellite relief
+        a = np.clip((a - 128) * 1.18 + 128 + 6, 0, 255)
+        img = Image.fromarray(a.astype(np.uint8)).convert("RGBA")
+    except Exception as e:  # noqa
+        log("real map: satellite failed:", type(e).__name__, str(e)[:80])
+        return None
+    names = []
+    try:  # borders
+        cc = requests.get(f"https://nominatim.openstreetmap.org/reverse?format=json&zoom=3&lat={pts[0][0]}&lon={pts[0][1]}",
+                          headers={"User-Agent": "nature-video-bot/1.0"}, timeout=25).json().get("address", {}).get("country_code", "").upper()
+        iso = ISO3.get(cc)
+        feats = None
+        for lvl in ("ADM2", "ADM1"):
+            if not iso:
+                break
+            cache = ROOT / f"gb_{iso}_{lvl}.json"
+            if cache.exists():
+                feats = json.loads(cache.read_text()).get("features")
+            else:
+                meta = requests.get(f"https://www.geoboundary.org/api/current/gbOpen/{iso}/{lvl}/", timeout=40).json()
+                if isinstance(meta, list):
+                    meta = meta[0]
+                u = meta.get("simplifiedGeometryGeoJSON") or meta.get("gjDownloadURL")
+                gj = requests.get(u, timeout=120).json()
+                try:
+                    cache.write_text(json.dumps(gj))
+                except Exception:  # noqa
+                    pass
+                feats = gj.get("features")
+            if feats:
+                break
+        if feats:
+            tint = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
+            td = ImageDraw.Draw(tint)
+            edge = Image.new("L", (CW, CH), 0)
+            ed = ImageDraw.Draw(edge)
+            cols = [(70, 160, 60), (215, 140, 40), (120, 120, 110), (110, 170, 80), (190, 110, 50)]
+            n_used = 0
+            for fi, f in enumerate(feats):
+                g = f.get("geometry") or {}
+                polys = g.get("coordinates", []) if g.get("type") == "MultiPolygon" else [g.get("coordinates", [])] if g.get("type") == "Polygon" else []
+                for poly in polys:
+                    if not poly:
+                        continue
+                    ring = np.array(poly[0], np.float64)[:, :2]
+                    if ring[:, 0].max() < lonmin or ring[:, 0].min() > lonmax or ring[:, 1].max() < latmin or ring[:, 1].min() > latmax:
+                        continue
+                    xy = [to_px(la, lo) for lo, la in ring]
+                    td.polygon(xy, fill=cols[hash(str((f.get("properties") or {}).get("shapeName", fi))) % len(cols)] + (95,))
+                    ed.line(xy + [xy[0]], fill=255, width=7)
+                    n_used += 1
+                    nm = (f.get("properties") or {}).get("shapeName")
+                    if nm:
+                        xs_, ys_ = zip(*xy)
+                        names.append((nm, sum(xs_) / len(xs_), sum(ys_) / len(ys_), xy))
+            if n_used:
+                img.alpha_composite(tint)
+                glow = edge.filter(ImageFilter.GaussianBlur(6)).point(lambda v: min(255, int(v * 1.1)))
+                wl = Image.new("RGBA", (CW, CH), (255, 255, 255, 0))
+                wl.putalpha(glow)
+                img.alpha_composite(wl)
+                ln = Image.new("RGBA", (CW, CH), (255, 255, 255, 0))
+                ln.putalpha(edge.filter(ImageFilter.MinFilter(3)).point(lambda v: int(v * 0.95)))
+                img.alpha_composite(ln)
+    except Exception as e:  # noqa
+        log("real map: borders failed:", type(e).__name__, str(e)[:80])
+    log("real map: satellite OK, border regions drawn:", len(names))
+    return img, names
+
+
 TERRAIN_COLS = [(84, 134, 50), (178, 118, 44), (112, 108, 98), (122, 142, 68), (150, 98, 58), (96, 120, 88)]
 
 
@@ -3367,35 +3471,52 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         a_ = rnd.random() * 6.28
         centres.append((CW / 2 + math.cos(a_) * CW * 0.45, CH / 2 + math.sin(a_) * CH * 0.45))
         names.append(None)
+    def lon_lat_of(px, py):
+        return lon0 + ((px - CW / 2) / sc_ + xc) / kx, lat0 - ((py - CH / 2) / sc_ + yc)
+    real = real_terrain_ground(pts, regs, CW, CH, to_px, lon_lat_of) if os.environ.get("REAL_MAP", "1") != "0" else None
+    if real:  # region names come from the real polygons that contain the named points
+        img, polys = real
+        for r_i, r_ in enumerate(regs):
+            cxy = to_px(r_["lat"], r_["lon"])
+            best_ = None
+            for nm_, cx_, cy_, xy_ in polys:
+                xs_, ys_ = zip(*xy_)
+                if min(xs_) <= cxy[0] <= max(xs_) and min(ys_) <= cxy[1] <= max(ys_):
+                    d_ = math.hypot(cx_ - cxy[0], cy_ - cxy[1])
+                    if best_ is None or d_ < best_[0]:
+                        best_ = (d_, cx_, cy_)
+            if best_:
+                centres[r_i] = (best_[1], best_[2])
     # --- ground: warped nearest-region fields with fractal terrain texture
-    LW, LH = CW // 4, CH // 4
-    gx, gy = np.meshgrid(np.arange(LW, dtype=np.float32) * 4, np.arange(LH, dtype=np.float32) * 4)
-    wx = (fnoise(LW, LH, 11, 4) - 0.5) * 220
-    wy = (fnoise(LW, LH, 12, 4) - 0.5) * 220
-    d = np.stack([(gx + wx - cx) ** 2 + (gy + wy - cy) ** 2 for cx, cy in centres])
-    lab_s = d.argmin(0).astype(np.uint8)
-    lab = np.asarray(Image.fromarray(lab_s).resize((CW, CH), Image.NEAREST))
-    tex = fnoise(CW, CH, 5, 6)
-    gyy, gxx = np.gradient(tex)
-    shade = np.clip(1.0 + (gxx + gyy) * 60, 0.6, 1.5)
-    ground = np.zeros((CH, CW, 3), np.float32)
-    for k in range(len(centres)):
-        col = np.array(TERRAIN_COLS[k % len(TERRAIN_COLS)], np.float32)
-        ground[lab == k] = col
-    ground = ground * (0.55 + 0.9 * tex)[..., None] * shade[..., None]
-    ground *= np.clip(1.15 - 0.35 * np.hypot((np.arange(CW)[None, :] - CW / 2) / CW, (np.arange(CH)[:, None] - CH / 2) / CH), 0.6, 1.1)[..., None]
-    img = Image.fromarray(np.clip(ground, 0, 255).astype(np.uint8)).convert("RGBA")
-    edge = np.zeros((CH, CW), np.uint8)
-    edge[:, 1:] |= (lab[:, 1:] != lab[:, :-1]).astype(np.uint8)
-    edge[1:, :] |= (lab[1:, :] != lab[:-1, :]).astype(np.uint8)
-    em = Image.fromarray(edge * 255).filter(ImageFilter.MaxFilter(5))
-    glow = em.filter(ImageFilter.GaussianBlur(7)).point(lambda v: min(255, int(v * 1.2)))
-    wl = Image.new("RGBA", (CW, CH), (255, 255, 255, 0))
-    wl.putalpha(glow)
-    img.alpha_composite(wl)
-    line = Image.new("RGBA", (CW, CH), (255, 255, 255, 0))
-    line.putalpha(em.point(lambda v: int(v * 0.9)))
-    img.alpha_composite(line)
+    if not real:
+        LW, LH = CW // 4, CH // 4
+        gx, gy = np.meshgrid(np.arange(LW, dtype=np.float32) * 4, np.arange(LH, dtype=np.float32) * 4)
+        wx = (fnoise(LW, LH, 11, 4) - 0.5) * 220
+        wy = (fnoise(LW, LH, 12, 4) - 0.5) * 220
+        d = np.stack([(gx + wx - cx) ** 2 + (gy + wy - cy) ** 2 for cx, cy in centres])
+        lab_s = d.argmin(0).astype(np.uint8)
+        lab = np.asarray(Image.fromarray(lab_s).resize((CW, CH), Image.NEAREST))
+        tex = fnoise(CW, CH, 5, 6)
+        gyy, gxx = np.gradient(tex)
+        shade = np.clip(1.0 + (gxx + gyy) * 60, 0.6, 1.5)
+        ground = np.zeros((CH, CW, 3), np.float32)
+        for k in range(len(centres)):
+            col = np.array(TERRAIN_COLS[k % len(TERRAIN_COLS)], np.float32)
+            ground[lab == k] = col
+        ground = ground * (0.55 + 0.9 * tex)[..., None] * shade[..., None]
+        ground *= np.clip(1.15 - 0.35 * np.hypot((np.arange(CW)[None, :] - CW / 2) / CW, (np.arange(CH)[:, None] - CH / 2) / CH), 0.6, 1.1)[..., None]
+        img = Image.fromarray(np.clip(ground, 0, 255).astype(np.uint8)).convert("RGBA")
+        edge = np.zeros((CH, CW), np.uint8)
+        edge[:, 1:] |= (lab[:, 1:] != lab[:, :-1]).astype(np.uint8)
+        edge[1:, :] |= (lab[1:, :] != lab[:-1, :]).astype(np.uint8)
+        em = Image.fromarray(edge * 255).filter(ImageFilter.MaxFilter(5))
+        glow = em.filter(ImageFilter.GaussianBlur(7)).point(lambda v: min(255, int(v * 1.2)))
+        wl = Image.new("RGBA", (CW, CH), (255, 255, 255, 0))
+        wl.putalpha(glow)
+        img.alpha_composite(wl)
+        line = Image.new("RGBA", (CW, CH), (255, 255, 255, 0))
+        line.putalpha(em.point(lambda v: int(v * 0.9)))
+        img.alpha_composite(line)
     for (cx, cy), nm in zip(centres, names):  # big region names lying on the ground
         if not nm:
             continue
