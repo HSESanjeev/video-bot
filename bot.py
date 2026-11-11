@@ -341,6 +341,8 @@ def apply_direction(sc, d):
             continue
         if not mains:
             w = 0
+        if not m.get("same") and not str(m.get("prompt_en") or "").strip() and str(m.get("query_en") or "").strip():
+            m["prompt_en"] = "a realistic cinematic photo of " + str(m["query_en"]).strip()
         if m.get("same") or not str(m.get("prompt_en") or "").strip():
             if not mains:
                 continue
@@ -348,7 +350,9 @@ def apply_direction(sc, d):
                  "trans": m.get("trans"), "grade": m.get("grade")}
         mains.append((w, m))
         last = w
-    if not mains or mains[0][0] != 0 or not str(mains[0][1].get("prompt_en") or "").strip():
+    if mains and mains[0][0] != 0:
+        mains[0] = (0, mains[0][1])
+    if not mains or not str(mains[0][1].get("prompt_en") or "").strip():
         return False
     shots = []
     for k, (w, m) in enumerate(mains):
@@ -363,7 +367,8 @@ def apply_direction(sc, d):
                       "clip_en": clean_short(m.get("clip_en") or "", 40), "label_hi": "", "ov": None, "popup_en": "",
                       "fx": fr_(m.get("fx")), "fy": fr_(m.get("fy")),
                       "kf": parse_kf(m.get("kf"), w, w2, m.get("fx"), m.get("fy")),
-                      "cam": str(m.get("cam") or ""), "trans": str(m.get("trans") or ""), "grade": str(m.get("grade") or "")})
+                      "cam": str(m.get("cam") or ""), "trans": str(m.get("trans") or ""), "grade": str(m.get("grade") or ""),
+                      "tech": str(m.get("tech") or "")})
     items, used = [], set()
     for it in sorted([x for x in (d.get("items") or []) if isinstance(x, dict)], key=lambda x: int(x.get("w", 0) or 0)):
         try:
@@ -389,6 +394,9 @@ def apply_direction(sc, d):
     return True
 
 
+DIRECTOR_REPORT = [""]
+
+
 def director_pass(scenes, topic=""):
     """After the voice exists: plan pictures, camera keyframes and on-screen items on the exact spoken words
     (falls back to the script's own shots)."""
@@ -407,6 +415,8 @@ def director_pass(scenes, topic=""):
                     break
             except Exception as e:  # noqa
                 log("director retry:", str(e)[:120])
+        if not rows:
+            log("director: Gemini gave no usable plan for scenes", [i for i, _ in chunk])
         for i, sc in chunk:
             if i in rows and apply_direction(sc, rows[i]):
                 sc["directed"] = True
@@ -414,6 +424,13 @@ def director_pass(scenes, topic=""):
                 if rows[i].get("read"):
                     log(f"  scene {i}: {str(rows[i]['read'])[:60]} | mains={len(sc['shots'])} items={len(sc['items'])}")
     log(f"director: {ok}/{len(todo)} photo scenes planned word-by-word")
+    allsh = [sh for sc in scenes for sh in sc.get("shots", [])] if todo else []
+    techs = sorted({t.strip() for sh in allsh for t in (sh.get("tech") or "").split(",") if t.strip().isdigit()}, key=int)
+    DIRECTOR_REPORT[0] = (f"Director: {ok}/{len(todo)} scenes planned | keyframe moves {sum(1 for sh in allsh if sh.get('kf'))} | "
+                          f"transitions {sum(1 for sh in allsh if sh.get('trans'))} | cams {sum(1 for sh in allsh if sh.get('cam'))} | "
+                          f"source cards {sum(1 for sc in scenes for it in sc.get('items', []) if it['kind'] == 'note')} | "
+                          f"techniques used: {', '.join(techs) or 'none'}")
+    log(DIRECTOR_REPORT[0])
 
 
 # --------------------------------------------------------------------------- topic
@@ -4237,7 +4254,7 @@ def pipeline():
 
     if UPLOAD_MODE != "youtube":
         notify("TITLE:\n" + meta["title"] + "\n\nDESCRIPTION:\n" + meta["description"] + "\n\nTAGS:\n" + ", ".join(meta["tags"]))
-        ok = tg_send_file(final, "video", meta["title"])
+        ok = tg_send_file(final, "video", (meta["title"] + "\n" + DIRECTOR_REPORT[0]) if DIRECTOR_REPORT[0] else meta["title"])
         tg_send_file(thumb, "doc", "Thumbnail 1")
         if thumb2:
             tg_send_file(thumb2, "doc", "Thumbnail 2 (then/now)")
