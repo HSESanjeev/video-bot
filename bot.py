@@ -254,7 +254,7 @@ def gemini_json(prompt, temperature=0.8):
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
 ITEM_KINDS = {"bubble": 3.2, "note": 6.5, "place": 3.8, "year": 3.8, "title": 3.2}
-ITEM_SLOT = {"bubble": "A", "note": "N", "place": "B", "year": "C", "title": "D", "popup": "P"}
+ITEM_SLOT = {"bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P"}
 
 DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
 
@@ -547,11 +547,13 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
 - "compare": two things side by side. items = [A, B].
+- "multi": REAL-PHOTO SPLIT SCREEN, the documentary way to enumerate 2-3 things the narrator lists one after another (two universities, two animals, three cities, before/after, different examples). items = 2-3 of {"label_hi": "short name shown on a red brush card (1-5 words, may be English proper noun)", "query_en": "1-3 English words for a REAL stock photo of exactly that thing", "prompt_en": "realistic description of the same thing"}. The picture of each item appears, with its red label card, exactly when the narrator names it. Use this whenever 2-3 separate things are named in a row; never invent names.
 - "counter": one striking number counting up on screen (age, distance, size, speed, count). "counter": {"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "अरब साल पहले"} plus "headline_hi" (what the number is). The narration says the number in words.
 - "bars": compare 2-4 real sizes as animated bars. "bars": [{"label_hi": "पृथ्वी", "value": 12742, "unit_hi": "किमी"}, ...]. Same unit for all, rounded well-established values only.
 - "map": use whenever the narrator names a country, region, city, route, journey or migration. "map": {"mode": "flat", "route": false, "pins": [{"label_hi": "भारत", "lat": 22.0, "lon": 79.0}, ...]} (1-4 real places with correct latitude/longitude; route true draws an animated line through the pins in order, e.g. a journey or spread; mode "globe" for far-apart places). The narration says the place names.
+- "map" with mode "terrain" (BEST for a distance or "from this place to that place" within about 1000 km, e.g. two villages/cities/districts): a tilted satellite-style terrain map with big region names on the ground, two yellow place tags, an animated arrow between them and the distance written on it; the camera follows each point. Format: "map": {"mode": "terrain", "pins": [{"label_hi": "शरीफपुरा गाँव", "lat": 27.4, "lon": 79.6}, {"label_hi": "बिरपुर गाँव", "lat": 27.3, "lon": 79.5}], "regions": [{"label_hi": "फ़र्रुख़ाबाद", "lat": 27.4, "lon": 79.6}, {"label_hi": "मैनपुरी", "lat": 27.2, "lon": 79.0}]} where regions are the 2-4 districts/states/countries around the two places (centre lat/lon). Exactly 2 pins with correct coordinates; the narration names the first place, then the second, and says the distance. The distance is computed automatically.
 - "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook and key insights.
-Use an explainer/data type (merge, split, steps, compare, counter, bars, map) for AT LEAST 40% of the scenes wherever the topic has a cause->effect, combination, breakup, sequence, comparison or a striking number. Include at least 2 "kinetic" scenes. Use "photo" for the hook, atmosphere, scale and the closing scene.
+STYLE TARGET = a real documentary: use type "photo" for at least 80% of ALL scenes, because every photo scene is edited word by word with real pictures, camera keyframes, maps, dates and source cards by the director. Cartoon-style explainer cards (merge, split, steps, compare, bars) look cheap, so use them ONLY if a point truly cannot be shown with real pictures, and then at most one in the whole video. Use "counter" only for one really striking number, "map" whenever places/routes are named (this is the preferred explainer), "kinetic" at most once (the re-hook). Photo scenes should have 22-40 words of narration (several different subjects/details per scene give the director more to show).
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
 Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in any picture, no real people.
 Every scene also has "grade" (colour grading that fits the scene: warm for fire/desert/sunrise/early Earth, cool for ocean/ice/night/space, cinematic for dramatic reveals, vivid for lively nature and animals, dark for danger and mystery, dread for creepy/scary/dangerous night scenes (cold teal), bwred for shock, fear, anger or a dramatic turning point (black and white with red glow), redwash for violence or emergency, natural for calm facts) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
@@ -568,7 +570,7 @@ TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
 def build_script_prompt(topic, cat, style, target_sec, facts, words):
     n_scenes = max(5 if TEST_SEC else 14, round(words / 21))
     test_note = ("\nTEST MODE: this is a very short test video. Use only about 5-6 scenes, a hook of 15-18 words, no long recap. "
-                 "Ignore the minimum counts below but include at least one explainer scene (merge/split/steps/compare/counter/bars) and one kinetic scene.\n") if TEST_SEC else ""
+                 "Ignore the minimum counts below. Almost all scenes must be type photo (map or counter allowed once if natural); no merge/split/steps/compare/bars.\n") if TEST_SEC else ""
     return f"""You are a script writer and film editor for a Hindi nature & science explainer YouTube channel.
 TOPIC: {topic}
 CATEGORY: {cat}
@@ -602,7 +604,7 @@ Return ONLY JSON in exactly this shape:
 }}"""
 
 
-NEED_ITEMS = {"merge": (3, 3), "split": (3, 3), "steps": (3, 4), "compare": (2, 2)}
+NEED_ITEMS = {"merge": (3, 3), "split": (3, 3), "steps": (3, 4), "compare": (2, 2), "multi": (2, 3)}
 
 
 def clean_narration(t):
@@ -637,9 +639,11 @@ def validate_script(s):
         typ = str(sc.get("type") or "photo").lower().strip()
         items = []
         for it in (sc.get("items") or []):
-            if isinstance(it, dict) and str(it.get("prompt_en") or "").strip():
-                items.append({"label_hi": clean_short(it.get("label_hi"), 26) or " ",
-                              "prompt_en": clean_short(it.get("prompt_en"), 400)})
+            if isinstance(it, dict) and (str(it.get("prompt_en") or "").strip() or str(it.get("query_en") or "").strip()):
+                q_ = clean_short(it.get("query_en"), 50)
+                items.append({"label_hi": clean_short(it.get("label_hi"), 40) or " ",
+                              "prompt_en": clean_short(it.get("prompt_en"), 400) or ("a realistic photo of " + q_),
+                              "query_en": q_})
         sc["items"] = []
         if typ in NEED_ITEMS:
             lo, hi = NEED_ITEMS[typ]
@@ -680,8 +684,20 @@ def validate_script(s):
                 if -80 <= la <= 80 and -180 <= lo <= 180 and clean_short(pn.get("label_hi"), 20):
                     pins.append({"label_hi": clean_short(pn.get("label_hi"), 20), "lat": la, "lon": lo})
             if pins:
-                sc["map"] = {"pins": pins, "route": bool(mp.get("route")) and len(pins) >= 2,
-                             "mode": "globe" if str(mp.get("mode")) == "globe" else "flat"}
+                regs = []
+                for rg in (mp.get("regions") or [])[:5]:
+                    try:
+                        la, lo = float(rg.get("lat")), float(rg.get("lon"))
+                    except Exception:  # noqa
+                        continue
+                    if -80 <= la <= 80 and -180 <= lo <= 180 and clean_short(rg.get("label_hi"), 20):
+                        regs.append({"label_hi": clean_short(rg.get("label_hi"), 20), "lat": la, "lon": lo})
+                md = str(mp.get("mode"))
+                if md == "terrain" and len(pins) >= 2 and hav_km((pins[0]["lat"], pins[0]["lon"]), (pins[1]["lat"], pins[1]["lon"])) < 1500:
+                    sc["map"] = {"pins": pins[:2], "route": True, "mode": "terrain", "regions": regs}
+                else:
+                    sc["map"] = {"pins": pins, "route": bool(mp.get("route")) and len(pins) >= 2,
+                                 "mode": "globe" if md == "globe" else "flat"}
             else:
                 typ = "photo"
         elif typ == "kinetic":
@@ -2647,47 +2663,60 @@ def ov_sprite(kind, text, mark, pal):
         d.polygon([(54, h - 4), (36, h + 44), (88, h - 4)], fill=(255, 252, 240, 255))
         big.alpha_composite(lay, (4 + (w - lay.width) // 2, 4 + (h - lay.height) // 2))
         sp = big.rotate(random.choice([-3, 3]), expand=True, resample=Image.BICUBIC)
-    elif kind in ("note", "note0"):  # torn-paper SOURCE card: a real paragraph, the discussed words highlighted (note0 = no highlight yet)
+    elif kind in ("note", "note0", "note_u"):  # SOURCE caption: plain text straight on the picture (no paper), discussed phrase underlined in red
         body, _, src = text.rpartition("|")
         if not body:
             body, src = text, ""
-        font = load_font(34, "sub")
-        wmax = 680
-        lines = wrap_text(probe, body, font, wmax)[:7]
+        f_head, f_body = load_font(38, "head"), load_font(31, "sub")
+        wmax = 600
+        head_lines = wrap_text(probe, ("स्रोत: " + src) if src else "", f_head, 520)[:3] if src else []
+        lines = wrap_text(probe, body, f_body, 500)[:8]
         marks = [m.strip("।,.?!\"'") for m in mark.split() if len(m.strip("।,.?!\"'")) > 1]
-        lh = int(font.size * 1.6)
-        head_h = 58 if src else 30
-        w, h = wmax + 90, head_h + lh * len(lines) + 56
+        lh_h, lh_b = int(f_head.size * 1.38), int(f_body.size * 1.55)
+        pad = 18
+        w = wmax + 2 * pad
+        h = pad + lh_h * len(head_lines) + (10 if head_lines else 0) + lh_b * len(lines) + pad
         card = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        d = ImageDraw.Draw(card)
-        rnd = random.Random(len(text))
-        top = [(x, 5 + rnd.randint(0, 7)) for x in range(0, w + 1, 18)]
-        bot = [(x, h - 6 - rnd.randint(0, 8)) for x in range(w, -1, -18)]
-        d.polygon(top + bot, fill=(244, 236, 214, 255))
-        for yy in range(head_h + 16, h - 20, lh):  # faint ruled lines like old paper
-            d.line([(30, yy + lh - 6), (w - 30, yy + lh - 6)], fill=(210, 198, 170, 120), width=1)
-        if src:
-            sl = text_layer(src, load_font(30, "head"), fill=(120, 40, 30))
-            card.alpha_composite(sl, (40, 20))
-            d.line([(40, 20 + sl.height + 6), (w - 40, 20 + sl.height + 6)], fill=(120, 40, 30, 200), width=3)
-        sp_w = probe.textlength(" ", font=font)
-        for li, ln in enumerate(lines):
-            y = head_h + 14 + li * lh
-            x = 45.0
-            for wd in ln.split():
-                tw = probe.textlength(wd, font=font)
-                if kind == "note" and any(m in wd or (len(wd) > 2 and wd.strip("।,.?!\"'") in m) for m in marks):
-                    d.rounded_rectangle([x - 4, y + 5, x + tw + 4, y + lh - 9], 6, fill=(255, 226, 40, 235))
-                lay = text_layer(wd, font, fill=(30, 24, 20))
-                card.alpha_composite(lay, (int(x) - 6, y + (lh - lay.height) // 2 - 4))
-                x += tw + sp_w
-        sh = Image.new("RGBA", (w + 40, h + 40), (0, 0, 0, 0))
-        m = card.getchannel("A").filter(ImageFilter.GaussianBlur(8)).point(lambda v: int(v * 0.55))
-        black = Image.new("RGBA", card.size, (0, 0, 0, 255))
-        black.putalpha(m)
-        sh.alpha_composite(black, (20, 26))
-        sh.alpha_composite(card, (20, 20))
-        sp = sh.rotate(-1.5 if len(text) % 2 else 1.5, expand=True, resample=Image.BICUBIC)
+        und = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        du = ImageDraw.Draw(und)
+        y = pad
+        for ln in head_lines:
+            lay = text_layer(ln, f_head, fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(2, 3, 4, 0.7))
+            card.alpha_composite(lay, ((w - lay.width) // 2, y))
+            y += lh_h
+        y += 10 if head_lines else 0
+        sp_w = 9
+        for ln in lines:
+            wds = ln.split()
+            lays = [text_layer(wd, f_body, fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(2, 3, 4, 0.7)) for wd in wds]
+            boxes = [ly.getchannel("A").point(lambda v: 255 if v > 40 else 0).getbbox() or (0, 0, ly.width, ly.height) for ly in lays]
+            iw = [b[2] - b[0] for b in boxes]
+            tot = sum(iw) + sp_w * (len(wds) - 1)
+            x = (w - tot) / 2
+            run = None
+            for k_, (wd, ly, bx, ww) in enumerate(zip(wds, lays, boxes, iw)):
+                card.alpha_composite(ly, (int(x - bx[0]), y + (lh_b - ly.height) // 2 - 3))
+                hit = any(m in wd or (len(wd) > 2 and wd.strip("।,.?!\"'") in m) for m in marks)
+                if hit:
+                    run = (run[0], x + ww) if run else (x, x + ww)
+                if (not hit or k_ == len(wds) - 1) and run:
+                    pts_ = [(xx, y + lh_b - 8 + 2.2 * math.sin(xx / 9.0)) for xx in range(int(run[0]) - 3, int(run[1]) + 4, 5)]
+                    if len(pts_) > 1:
+                        du.line(pts_, fill=(232, 28, 40, 255), width=5, joint="curve")
+                    run = None
+                x += ww + sp_w
+            y += lh_b
+        scrim = Image.new("RGBA", (w + 80, h + 80), (0, 0, 0, 0))
+        sm = Image.new("L", (w + 80, h + 80), 0)
+        ImageDraw.Draw(sm).rounded_rectangle([40, 40, w + 40, h + 40], 30, fill=150)
+        scrim.putalpha(sm.filter(ImageFilter.GaussianBlur(26)))
+        full = Image.new("RGBA", scrim.size, (0, 0, 0, 0))
+        if kind == "note_u":
+            full.alpha_composite(und, (40, 40))
+        else:
+            full.alpha_composite(scrim)
+            full.alpha_composite(card, (40, 40))
+        sp = full
     elif kind == "place":  # location tag, bottom-left (big name + small region line)
         main_, _, sub_ = text.partition("|")
         a1 = text_layer(main_.strip(), load_font(70, "title"), fill=(255, 255, 255), shadow=(0, 4, 8, 0.8))
@@ -2746,6 +2775,24 @@ def draw_popup(fr, sh, tl):
     put(fr, s2, cx, cy, (0.15 + 0.85 * cl(q)) * (0.6 + 0.4 * out), min(1.0, (tl - t0) * 8) * out)
 
 
+def empty_side(img):
+    """'left' or 'right': the half of the picture with less detail / no skin tones, where overlay text will not cover a face or body."""
+    np = _np()
+    a = np.asarray(img.convert("RGB").resize((128, 72)), np.float32)
+    lum = a.mean(2)
+    gy, gx = np.gradient(lum)
+    en = np.hypot(gx, gy)
+    r, g, b = a[..., 0], a[..., 1], a[..., 2]
+    skin = ((r > 95) & (g > 40) & (b > 20) & (r > g) & (g > b) & (r - g > 12)).astype(np.float32)
+    best, side = 1e9, "right"
+    for nm, x0, x1 in (("left", 0, 56), ("right", 72, 128)):
+        zone = (slice(20, 68), slice(x0, x1))
+        sc_ = float(en[zone].mean() + 0.35 * lum[zone].std() + 40.0 * skin[zone].mean())
+        if sc_ < best - (0.0 if nm == "left" else 0.0):
+            best, side = sc_, nm
+    return side
+
+
 def draw_ov(fr, sh, tl, pal):
     ov = sh.get("ov")
     if not ov:
@@ -2753,16 +2800,18 @@ def draw_ov(fr, sh, tl, pal):
     t0, t1 = 0.22, min(sh["dur"] - 0.08, 5.0 if ov["kind"] in ("place", "year") else (6.5 if ov["kind"] == "note" else 4.2))
     if not (t0 < tl < t1):
         return
-    if ov["kind"] == "note":  # source card: dim the picture, paper slides in, the discussed words get highlighted
-        a = cl((tl - t0) * 5) * (1 - cl((tl - (t1 - 0.3)) / 0.3))
+    if ov["kind"] == "note":  # source caption on the empty side of the picture, discussed phrase gets underlined
+        a = cl((tl - t0) * 4) * (1 - cl((tl - (t1 - 0.35)) / 0.35))
         if a > 0.01:
-            fr.paste(Image.blend(fr, Image.new("RGB", fr.size, (0, 0, 0)), 0.45 * a))
-        qn = e_out(cl((tl - t0) / 0.5))
-        s0 = ov_sprite("note0", ov["text"], ov.get("mark", ""), pal)
-        s1 = ov_sprite("note", ov["text"], ov.get("mark", ""), pal)
-        cx, cy = W / 2, H / 2 + (1 - qn) * 260
-        put(fr, s0, cx, cy, 1.1 + 0.08 * qn, a)
-        put(fr, s1, cx, cy, 1.1 + 0.08 * qn, a * cl((tl - t0 - 0.8) * 2.5))
+            s0 = ov_sprite("note0", ov["text"], ov.get("mark", ""), pal)
+            su = ov_sprite("note_u", ov["text"], ov.get("mark", ""), pal)
+            cx = W * (0.26 if ov.get("side") == "left" else 0.74)
+            cy = H * 0.52 + (1 - e_out(cl((tl - t0) / 0.5))) * 28
+            put(fr, s0, cx, cy, 1.0, a)
+            pu = e_out(cl((tl - t0 - 0.9) / 0.9))  # red underline is drawn left to right
+            if pu > 0.02:
+                cw_ = max(2, int(su.width * pu))
+                put(fr, su.crop((0, 0, cw_, su.height)), cx - (su.width - cw_) / 2, cy, 1.0, a)
         return
     spr = ov_sprite(ov["kind"], ov["text"], ov.get("mark", ""), pal)
     q = e_back((tl - t0) / 0.4)
@@ -2847,6 +2896,9 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
         draw_ov(fr, sh, tl, pal)
         for x_ in items:
             if x_["t0"] <= t < x_["t1"]:
+                ov_ = x_["ps"].get("ov")
+                if ov_ and ov_["kind"] == "note" and "side" not in ov_:
+                    ov_["side"] = empty_side(fr)  # keep the text off the person / subject
                 draw_popup(fr, x_["ps"], t - x_["t0"])
                 draw_ov(fr, x_["ps"], t - x_["t0"], pal)
         if lt is not None:
@@ -3141,9 +3193,344 @@ def pin_sprite(pal):
     return im.resize((s, s), Image.LANCZOS)
 
 
+
+# --------------------------------------------------------------------------- split-screen list of real photos with red brush label cards
+def brush_card(text, pal=None):
+    """Red torn-brush label card with white bold text (like the reference 'University of ...' cards)."""
+    font = load_font(46, "title")
+    lay = text_layer(text, font, fill=(255, 255, 255), stroke=2, stroke_fill=(90, 0, 0))
+    w, h = lay.width + 110, lay.height + 56
+    rnd = random.Random(len(text) * 7 + 3)
+    card = Image.new("RGBA", (w + 40, h + 40), (0, 0, 0, 0))
+    d = ImageDraw.Draw(card)
+    top = [(20 + x, 20 + rnd.randint(-4, 8)) for x in range(0, w + 1, 12)]
+    bot = [(20 + x, 20 + h - rnd.randint(-4, 8)) for x in range(w, -1, -12)]
+    pts = [(20 - rnd.randint(6, 22), 20 + h * 0.5)] + top + [(20 + w + rnd.randint(6, 22), 20 + h * 0.45)] + bot
+    d.polygon(pts, fill=(196, 28, 30, 255))
+    for _ in range(18):  # dry-brush streaks
+        y = 20 + rnd.randint(6, h - 6)
+        d.line([(20 + rnd.randint(0, w // 3), y), (20 + rnd.randint(w // 2, w), y + rnd.randint(-2, 2))], fill=(150, 10, 14, 120), width=rnd.randint(1, 3))
+    sh = Image.new("RGBA", card.size, (0, 0, 0, 0))
+    sh.putalpha(card.getchannel("A").filter(ImageFilter.GaussianBlur(7)).point(lambda v: int(v * 0.55)))
+    out = Image.new("RGBA", card.size, (0, 0, 0, 0))
+    out.alpha_composite(sh, (4, 7))
+    out.alpha_composite(card)
+    out.alpha_composite(lay, ((out.width - lay.width) // 2, (out.height - lay.height) // 2 - 2))
+    return out
+
+
+def make_multi_draw(sc, dur, speech_dur, pal, events):
+    np = _np()
+    items = sc["items"][:3]
+    n = len(items)
+    imgs = []
+    for it in items:
+        try:
+            im = Image.open(it["image"]).convert("RGB") if it.get("image") else Image.new("RGB", (W, H), (40, 40, 50))
+        except Exception:  # noqa
+            im = Image.new("RGB", (W, H), (40, 40, 50))
+        sc_ = max(W * 1.25 / im.width, H * 1.25 / im.height)
+        imgs.append(im.resize((int(im.width * sc_), int(im.height * sc_)), Image.LANCZOS))
+    cards = [brush_card(it["label_hi"], pal) for it in items]
+    # when each item is named
+    ts = []
+    for k, it in enumerate(items):
+        t_ = find_word_time(sc, it["label_hi"]) if k > 0 else 0.0
+        ts.append(t_)
+    base_t = [0.0] + [1.0 + k * max(1.2, (speech_dur - 1.5) / n) for k in range(1, n)]
+    ts = [t_ if (t_ is not None and (k == 0 or t_ > ts[k - 1] + 0.7)) else base_t[k] for k, t_ in enumerate(ts)]
+    for k in range(1, n):
+        events += [(ts[k], "whoosh_soft", 0.8)]
+    slant = 70  # divider leans like the reference
+
+    def dividers(t):
+        """x of each divider at the middle of the screen: panel k occupies [div[k], div[k+1]]."""
+        xs_ = []
+        for k in range(1, n):
+            final = W * k / n
+            q = e_io(cl((t - ts[k]) / 0.65))
+            xs_.append(lerp(W + slant + 40, final, q) if t >= ts[k] - 0.01 else W + slant + 40)
+        return [-slant - 40] + xs_ + [W + slant + 40]
+
+    def draw(t):
+        dv = dividers(t)
+        fr = Image.new("RGB", (W, H), (10, 10, 12))
+        for k in range(n):
+            xl, xr = dv[k], dv[k + 1]
+            if xr - xl < 4:
+                continue
+            tl_ = max(0.0, t - (ts[k] - 0.2))
+            z = 1.0 + 0.10 * cl(tl_ / 5.0)
+            im = imgs[k]
+            cw_, ch_ = W / (z * 1.25) * 1.25 / 1.25, H / z
+            # crop window of the zoomed image (cover), slowly drifting
+            vw, vh = im.width / (1.25 * z), im.height / (1.25 * z)
+            ox = (im.width - vw) / 2 + (0.06 * im.width) * (cl(tl_ / 6.0) - 0.5) * (1 if k % 2 == 0 else -1)
+            oy = (im.height - vh) / 2
+            crop = im.crop((int(ox), int(oy), int(ox + vw), int(oy + vh))).resize((W, H), Image.BILINEAR)
+            m = Image.new("L", (W, H), 0)
+            ImageDraw.Draw(m).polygon([(xl + slant, 0), (xr + slant, 0), (xr - slant, H), (xl - slant, H)], fill=255)
+            if k == 0:
+                ImageDraw.Draw(m).polygon([(-10, 0), (xr + slant, 0), (xr - slant, H), (-10, H)], fill=255)
+            if k == n - 1:
+                ImageDraw.Draw(m).polygon([(xl + slant, 0), (W + 10, 0), (W + 10, H), (xl - slant, H)], fill=255)
+            fr.paste(crop, (0, 0), m)
+        d = ImageDraw.Draw(fr)
+        for k in range(1, n):  # white divider line
+            if dv[k] < W + slant:
+                d.line([(dv[k] + slant, 0), (dv[k] - slant, H)], fill=(255, 255, 255), width=5)
+        a = np.asarray(fr, np.float32)  # cinematic vignette + slight darkening
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        vg = 1.0 - 0.45 * (((xx - W / 2) / (W / 2)) ** 2 + ((yy - H / 2) / (H / 2)) ** 2) / 2
+        fr = Image.fromarray(np.clip(a * (0.9 * vg)[..., None], 0, 255).astype(np.uint8)).convert("RGBA")
+        dv = dividers(t)
+        for k in range(n):
+            q = t - (ts[k] + 0.2)
+            if q < 0:
+                continue
+            pw = max(120.0, min(dv[k + 1], W) - max(dv[k], 0) - 2 * slant * 0.6)  # visible width of this panel
+            cs = min(0.72, (pw - 30) / cards[k].width)
+            cx = (max(dv[k], 0) + min(dv[k + 1], W)) / 2
+            cx = min(max(cx, cards[k].width / 2 * cs + 8), W - cards[k].width / 2 * cs - 8)
+            put(fr, cards[k], cx, H - 110 + lerp(40, 0, e_out(q / 0.4)), cs * (0.9 + 0.1 * e_back(q / 0.5)), cl(q * 5))
+        return fr.convert("RGB")
+    return draw
+
+
+# --------------------------------------------------------------------------- 3D terrain map (distance / "from one place to another")
+def fnoise(w, h, seed, octaves=5):
+    np = _np()
+    rng = np.random.RandomState(seed)
+    acc, amp, tot = np.zeros((h, w), np.float32), 1.0, 0.0
+    for o in range(octaves):
+        gw = 4 * 2 ** o
+        gh = max(2, int(gw * h / w))
+        g = rng.rand(gh, gw).astype(np.float32)
+        acc += amp * np.asarray(Image.fromarray(g, mode="F").resize((w, h), Image.BICUBIC), np.float32)
+        tot += amp
+        amp *= 0.5
+    return acc / tot
+
+
+def homography(src, dst):
+    np = _np()
+    A, b = [], []
+    for (x, y), (u, v) in zip(src, dst):
+        A.append([x, y, 1, 0, 0, 0, -u * x, -u * y])
+        b.append(u)
+        A.append([0, 0, 0, x, y, 1, -v * x, -v * y])
+        b.append(v)
+    h = np.linalg.solve(np.array(A, float), np.array(b, float))
+    return np.append(h, 1.0).reshape(3, 3)
+
+
+def find_word_time(sc, label):
+    wt, wds = sc.get("wt"), sc["narration_hi"].split()
+    if not wt or len(wt) != len(wds):
+        return None
+    toks = [x.strip("।,?!") for x in label.split() if len(x.strip("।,?!")) > 1]
+    for k, w_ in enumerate(wds):
+        if any(tk in w_ or (len(w_) > 2 and w_.strip("।,?!") in tk) for tk in toks):
+            return max(0.8, wt[k][0] - 0.05)
+    return None
+
+
+TERRAIN_COLS = [(84, 134, 50), (178, 118, 44), (112, 108, 98), (122, 142, 68), (150, 98, 58), (96, 120, 88)]
+
+
+def make_terrain_draw(sc, dur, speech_dur, pal, events):
+    """Tilted satellite-style terrain map: coloured regions with white borders and big place names lying on the ground,
+    two tagged places, an animated arc arrow between them and the distance written along it; the camera follows each point."""
+    np = _np()
+    m = sc["map"]
+    pins = m["pins"][:2]
+    pts = [(p["lat"], p["lon"]) for p in pins]
+    regs = [dict(r) for r in (m.get("regions") or [])][:5]
+    allp = pts + [(r["lat"], r["lon"]) for r in regs]
+    lat0 = sum(a for a, _ in allp) / len(allp)
+    lon0 = sum(o for _, o in allp) / len(allp)
+    kx = math.cos(math.radians(lat0))
+    xs = [(o - lon0) * kx for _, o in allp]
+    ys = [-(a - lat0) for a, _ in allp]
+    span = max(max(xs) - min(xs), max(ys) - min(ys), 0.04)
+    CW, CH = 1800, 1100
+    sc_ = min(CW * 0.5, CH * 0.5) / (span / 2 * 1.0 + 1e-9) * 0.62
+    xc, yc = (max(xs) + min(xs)) / 2, (max(ys) + min(ys)) / 2
+
+    def to_px(a, o):
+        return CW / 2 + ((o - lon0) * kx - xc) * sc_, CH / 2 + (-(a - lat0) - yc) * sc_
+    pp = [to_px(*q) for q in pts]
+    centres = [to_px(r["lat"], r["lon"]) for r in regs]
+    names = [r.get("label_hi") for r in regs]
+    rnd = random.Random(int(abs(lat0 * 1000 + lon0 * 77)))
+    while len(centres) < 4:  # anonymous extra patches so the ground never looks like one flat block
+        a_ = rnd.random() * 6.28
+        centres.append((CW / 2 + math.cos(a_) * CW * 0.45, CH / 2 + math.sin(a_) * CH * 0.45))
+        names.append(None)
+    # --- ground: warped nearest-region fields with fractal terrain texture
+    LW, LH = CW // 4, CH // 4
+    gx, gy = np.meshgrid(np.arange(LW, dtype=np.float32) * 4, np.arange(LH, dtype=np.float32) * 4)
+    wx = (fnoise(LW, LH, 11, 4) - 0.5) * 220
+    wy = (fnoise(LW, LH, 12, 4) - 0.5) * 220
+    d = np.stack([(gx + wx - cx) ** 2 + (gy + wy - cy) ** 2 for cx, cy in centres])
+    lab_s = d.argmin(0).astype(np.uint8)
+    lab = np.asarray(Image.fromarray(lab_s).resize((CW, CH), Image.NEAREST))
+    tex = fnoise(CW, CH, 5, 6)
+    gyy, gxx = np.gradient(tex)
+    shade = np.clip(1.0 + (gxx + gyy) * 60, 0.6, 1.5)
+    ground = np.zeros((CH, CW, 3), np.float32)
+    for k in range(len(centres)):
+        col = np.array(TERRAIN_COLS[k % len(TERRAIN_COLS)], np.float32)
+        ground[lab == k] = col
+    ground = ground * (0.55 + 0.9 * tex)[..., None] * shade[..., None]
+    ground *= np.clip(1.15 - 0.35 * np.hypot((np.arange(CW)[None, :] - CW / 2) / CW, (np.arange(CH)[:, None] - CH / 2) / CH), 0.6, 1.1)[..., None]
+    img = Image.fromarray(np.clip(ground, 0, 255).astype(np.uint8)).convert("RGBA")
+    edge = np.zeros((CH, CW), np.uint8)
+    edge[:, 1:] |= (lab[:, 1:] != lab[:, :-1]).astype(np.uint8)
+    edge[1:, :] |= (lab[1:, :] != lab[:-1, :]).astype(np.uint8)
+    em = Image.fromarray(edge * 255).filter(ImageFilter.MaxFilter(5))
+    glow = em.filter(ImageFilter.GaussianBlur(7)).point(lambda v: min(255, int(v * 1.2)))
+    wl = Image.new("RGBA", (CW, CH), (255, 255, 255, 0))
+    wl.putalpha(glow)
+    img.alpha_composite(wl)
+    line = Image.new("RGBA", (CW, CH), (255, 255, 255, 0))
+    line.putalpha(em.point(lambda v: int(v * 0.9)))
+    img.alpha_composite(line)
+    for (cx, cy), nm in zip(centres, names):  # big region names lying on the ground
+        if not nm:
+            continue
+        for (px_, py_) in pp:  # keep the big name clear of the two tags
+            dd = math.hypot(cx - px_, cy - py_)
+            if dd < 330:
+                ux_, uy_ = ((cx - px_) / dd, (cy - py_) / dd) if dd > 1 else (0.0, -1.0)
+                cx, cy = px_ + ux_ * 340, py_ + uy_ * 340
+        lay = text_layer(nm.upper() if nm.isascii() else nm, load_font(150, "title"), fill=(255, 255, 255), stroke=3, stroke_fill=(30, 30, 30))
+        lay = lay.rotate(-10 if int(cx) % 2 else 8, expand=True, resample=Image.BICUBIC)
+        sh = Image.new("RGBA", lay.size, (0, 0, 0, 0))
+        sh.putalpha(lay.getchannel("A").filter(ImageFilter.GaussianBlur(6)).point(lambda v: int(v * 0.6)))
+        pos = (int(cx - lay.width / 2), int(cy - lay.height / 2))
+        img.alpha_composite(sh, (pos[0] + 6, pos[1] + 8))
+        img.alpha_composite(lay, pos)
+    # --- tilt (perspective): far edge narrower, like a camera looking down at an angle
+    OW, OH = 1800, 1012
+    quad = [(300, 70), (1500, 70), (1960, OH), (-160, OH)]
+    Hm = homography([(0, 0), (CW, 0), (CW, CH), (0, CH)], quad)
+    Hi = np.linalg.inv(Hm)
+    Hi = Hi / Hi[2, 2]
+    tilt = img.transform((OW, OH), Image.PERSPECTIVE, tuple(Hi.flatten()[:8]), Image.BICUBIC)
+    back = Image.new("RGBA", (OW, OH), (22, 26, 32, 255))
+    fog = np.linspace(0.75, 0.0, int(OH * 0.4)).astype(np.float32)
+    back.alpha_composite(tilt)
+    ti = np.asarray(back.convert("RGB"), np.float32).copy()
+    ti[:len(fog)] = ti[:len(fog)] * (1 - fog[:, None, None]) + np.array([30, 34, 40], np.float32) * fog[:, None, None]
+    TI = Image.fromarray(ti.astype(np.uint8))
+
+    def proj(x, y):
+        v = Hm @ np.array([x, y, 1.0])
+        return float(v[0] / v[2]), float(v[1] / v[2])
+    A_, B_ = proj(*pp[0]), proj(*pp[1])
+    ctl = ((A_[0] + B_[0]) / 2, (A_[1] + B_[1]) / 2 - (0.42 * math.hypot(B_[0] - A_[0], B_[1] - A_[1]) + 70))
+    arc = [((1 - f) ** 2 * A_[0] + 2 * (1 - f) * f * ctl[0] + f * f * B_[0], (1 - f) ** 2 * A_[1] + 2 * (1 - f) * f * ctl[1] + f * f * B_[1])
+           for f in [k / 70 for k in range(71)]]
+    km = hav_km(pts[0], pts[1])
+    ktxt = (f"{km:.1f}" if km < 10 else f"{km:,.0f}") + " किमी दूर"
+    mid_i = 38
+    ang = math.degrees(math.atan2(arc[mid_i + 2][1] - arc[mid_i - 2][1], arc[mid_i + 2][0] - arc[mid_i - 2][0]))
+    if ang > 90:
+        ang -= 180  # always readable, never upside down
+    elif ang < -90:
+        ang += 180
+    ktxt_sp = quick_text(ktxt, 72, (255, 255, 255), stroke=7, stroke_fill=(25, 25, 25), role="label")
+    ktxt_sp = ktxt_sp.rotate(-ang, expand=True, resample=Image.BICUBIC)
+    nx, ny = -(arc[mid_i + 2][1] - arc[mid_i - 2][1]), (arc[mid_i + 2][0] - arc[mid_i - 2][0])
+    nn = math.hypot(nx, ny) or 1
+    kpos = (arc[mid_i][0] + nx / nn * 44, arc[mid_i][1] + ny / nn * 44)
+    if kpos[1] > arc[mid_i][1]:
+        kpos = (arc[mid_i][0] - nx / nn * 44, arc[mid_i][1] - ny / nn * 44)  # keep the text above the line
+    tags = []
+    for p_ in pins:
+        lay = text_layer('"' + p_["label_hi"] + '"', load_font(34, "label"), fill=(40, 30, 0))
+        w_, h_ = lay.width + 34, lay.height + 18
+        tg = Image.new("RGBA", (w_, h_), (0, 0, 0, 0))
+        bx = Image.new("RGBA", (w_, h_), (255, 214, 10, 255))
+        bx.putalpha(rounded_mask((w_, h_), 8))
+        tg.alpha_composite(bx)
+        tg.alpha_composite(lay, ((w_ - lay.width) // 2, (h_ - lay.height) // 2 - 1))
+        tags.append(tg)
+    # --- timing: each place appears when it is named; the arrow runs between them
+    t1 = find_word_time(sc, pins[0]["label_hi"]) or 1.2
+    t2 = find_word_time(sc, pins[1]["label_hi"])
+    if t2 is None or t2 < t1 + 1.4:
+        t2 = t1 + 2.4
+    t_arr0 = t1 + 0.5
+    t_text = t2 + 0.15
+    events += [(0.2, "whoosh_soft", 0.8), (t1, "pop", 0.8), (t2, "pop", 0.8), (t_text, "ding", 0.7)]
+    pin_img = pin_sprite(pal)
+    ext = max(abs(A_[0] - B_[0]) * 1.6, abs(A_[1] - B_[1]) * 2.2, 160.0)
+    z_far, z_near = 1.0, max(1.5, min(3.0, OW * 0.62 / ext))
+    z_end = max(1.2, min(2.6, OW * 0.8 / ext))
+    kfs = [(0.0, z_far, OW / 2, OH / 2), (max(0.5, t1 - 0.7), z_near, A_[0], A_[1] - 40), (t_arr0 + 0.3, z_near, A_[0], A_[1] - 40),
+           (t2 - 0.1, z_near * 0.95, B_[0], B_[1] - 60), (max(t2 + 0.5, min(t2 + 2.0, dur - 0.4)), z_end, (A_[0] + B_[0]) / 2 - 40, (A_[1] + B_[1]) / 2 - 120)]
+
+    def cam(t):
+        if t <= kfs[0][0]:
+            return kfs[0][1:]
+        for a_, b_ in zip(kfs, kfs[1:]):
+            if t <= b_[0]:
+                q = e_io(cl((t - a_[0]) / max(1e-3, b_[0] - a_[0])))
+                return math.exp(lerp(math.log(a_[1]), math.log(b_[1]), q)), lerp(a_[2], b_[2], q), lerp(a_[3], b_[3], q)
+        return kfs[-1][1:]
+
+    def draw(t):
+        z, cx, cy = cam(t)
+        vw = OW / z
+        vh = vw * H / W
+        cx = min(OW - vw / 2, max(vw / 2, cx))
+        cy = min(OH - vh / 2, max(vh / 2, cy))
+        l, tp = cx - vw / 2, cy - vh / 2
+        fr = TI.crop((int(l), int(tp), int(l + vw), int(tp + vh))).resize((W, H), Image.BILINEAR)
+        k = W / vw
+
+        def sp(x, y):
+            return (x - l) * k, (y - tp) * k
+        ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        d = ImageDraw.Draw(ov)
+        prog = cl((t - t_arr0) / max(0.4, t2 - t_arr0 - 0.1))
+        n = int(prog * 70)
+        if n >= 1:
+            ptsl = [sp(*q) for q in arc[:n + 1]]
+            d.line(ptsl, fill=(255, 255, 255, 70), width=int(20 * k), joint="curve")
+            d.line(ptsl, fill=(255, 255, 255, 255), width=max(4, int(9 * k)), joint="curve")
+            (x1, y1), (x2, y2) = ptsl[-2] if len(ptsl) > 1 else ptsl[-1], ptsl[-1]
+            a_ = math.atan2(y2 - y1, x2 - x1)
+            hs = 34 * k
+            d.polygon([(x2 + math.cos(a_) * hs * 0.9, y2 + math.sin(a_) * hs * 0.9),
+                       (x2 + math.cos(a_ + 2.5) * hs, y2 + math.sin(a_ + 2.5) * hs),
+                       (x2 + math.cos(a_ - 2.5) * hs, y2 + math.sin(a_ - 2.5) * hs)], fill=(255, 255, 255, 255))
+        fr = fr.convert("RGBA")
+        fr.alpha_composite(ov)
+        for i, (pt_, tt) in enumerate(((A_, t1), (B_, t2))):
+            q = t - tt
+            if q < 0:
+                continue
+            x, y = sp(*pt_)
+            sz = max(0.75, min(1.3, k))
+            ring = 1.0 + (q % 1.4) / 1.4 * 1.8
+            put(fr, soft_circle(22, (255, 255, 255), 0.5), x, y, ring * sz, 0.6 * (1 - (q % 1.4) / 1.4) * cl(q * 3))
+            put(fr, pin_img, x, y - 10 * sz, sz * e_back(q / 0.4), cl(q * 6))
+            put(fr, tags[i], x, y - (62 + lerp(-40, 0, e_out(q / 0.35))) * sz, sz, cl((q - 0.1) * 4))
+        if t > t_text:
+            x, y = sp(*kpos)
+            put(fr, ktxt_sp, x, y, max(0.7, min(1.4, k * 1.1)) * (0.9 + 0.1 * e_out(cl((t - t_text) / 0.4))), cl((t - t_text) * 4))
+        return fr.convert("RGB")
+    return draw
+
+
 def make_map_draw(sc, dur, speech_dur, pal, events):
     np = _np()
     m = sc["map"]
+    if m.get("mode") == "terrain" and len(m["pins"]) >= 2:
+        return make_terrain_draw(sc, dur, speech_dur, pal, events)
     pins = m["pins"]
     route = m["route"] and len(pins) >= 2
     mode = m["mode"]
@@ -3485,7 +3872,9 @@ def render_scene(i, sc, out, pal, ctx, prev_sc, last):
     dur, sp = sc["dur"], sc["speech_dur"]
     events = []
     typ = sc["type"]
-    if typ in ("merge", "split", "steps", "compare"):
+    if typ == "multi":
+        draw = make_multi_draw(sc, dur, sp, pal, events)
+    elif typ in ("merge", "split", "steps", "compare"):
         draw = make_explainer(sc, dur, pal, events)
     elif typ == "counter":
         draw = make_counter_draw(sc, dur, sp, pal, events)
@@ -4120,7 +4509,7 @@ def make_visuals(scenes, imgdir):
             for k, it in enumerate(sc["items"]):
                 requested += 1
                 p = imgdir / f"{i:03d}_{k}.png"
-                if gen_image(it["prompt_en"], p, "card"):
+                if gen_image(it["prompt_en"], p, "photo" if sc["type"] == "multi" else "card", query=it.get("query_en", "")):
                     it["image"] = p
                 else:
                     it["image"] = None
@@ -4448,6 +4837,10 @@ def selftest():
         {"type": "map", "tone": "calm", "headline_hi": "सफ़र", "grade": "natural",
          "map": {"mode": "flat", "route": True, "pins": [{"label_hi": "अफ़्रीका", "lat": 5.0, "lon": 20.0}, {"label_hi": "भारत", "lat": 22.0, "lon": 79.0}]},
          "narration_hi": "यह सफ़र अफ़्रीका से शुरू हुआ और धीरे-धीरे भारत तक पहुँचा"},
+        {"type": "map", "tone": "calm", "headline_hi": "", "grade": "natural",
+         "map": {"mode": "terrain", "route": True, "pins": [{"label_hi": "शरीफपुरा गाँव", "lat": 27.40, "lon": 79.62}, {"label_hi": "बिरपुर गाँव", "lat": 27.28, "lon": 79.50}],
+                 "regions": [{"label_hi": "फ़र्रुख़ाबाद", "lat": 27.45, "lon": 79.70}, {"label_hi": "मैनपुरी", "lat": 27.20, "lon": 79.35}]},
+         "narration_hi": "शरीफपुरा गाँव से बिरपुर गाँव की दूरी बस पंद्रह किलोमीटर है और बीच में दोनों जिलों की सीमा पड़ती है"},
         {"type": "kinetic", "tone": "excited", "keywords_hi": ["टक्कर", "मलबा", "चाँद!"], "headline_hi": "",
          "image_prompt_en": "x", "image": art(t0 / "k.png", "rock", (255, 120, 40), (60, 10, 60), 1920),
          "narration_hi": "याद रखिए, टक्कर से मलबा बना, और उसी मलबे से हमारा चाँद"},
