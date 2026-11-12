@@ -583,6 +583,46 @@ Return ONLY JSON: {{"shots":[{{"id":"S0.1","query_en":"","entity_en":"","prompt_
     return len(need)
 
 
+def _sent_of_word(sc, w):
+    for k, (a, b, _t0, _t1) in enumerate(sc["sent"]):
+        if a <= w < b:
+            return k
+    return len(sc["sent"]) - 1 if w >= 0 else 0
+
+
+def _word_of_label(words, label):
+    toks = [t.strip("।,?!\"'") for t in (label or "").split() if len(t.strip("।,?!\"'")) > 1]
+    for k, w in enumerate(words):
+        w_ = w.strip("।,?!\"'")
+        if any(t in w_ or (len(w_) > 2 and w_ in t) for t in toks):
+            return k
+    return None
+
+
+def split_scene(scenes, sc, j0, j1):
+    """Cut a scene into up to three scenes at sentence borders: [sentences before] [sentences j0..j1] [sentences after].
+    Returns the middle one. Time slots, word times and shots are cut with it, so nothing runs past its sentence."""
+    sent, words = sc["sent"], sc["narration_hi"].split()
+    shots_ok = len(sc.get("shots") or []) == len(sent)
+    parts = []
+    for ja, jb in ((0, j0 - 1), (j0, j1), (j1 + 1, len(sent) - 1)):
+        if jb < ja:
+            continue
+        aw, bw, ta, tb = sent[ja][0], sent[jb][1], sent[ja][2], sent[jb][3]
+        pt = dict(sc)
+        pt["narration_hi"] = " ".join(words[aw:bw])
+        pt["wt"] = [(x - ta, y - ta) for x, y in sc["wt"][aw:bw]] if sc.get("wt") else None
+        pt["sent"] = [(a - aw, b - aw, x - ta, y - ta) for a, b, x, y in sent[ja:jb + 1]]
+        pt["dur"] = tb - ta
+        pt["speech_dur"] = max(0.5, pt["dur"] - (sc["dur"] - sc["speech_dur"] if jb == len(sent) - 1 else 0.1))
+        pt["shots"] = [dict(x) for x in sc["shots"][ja:jb + 1]] if shots_ok else []
+        pt["items"] = [dict(it, w=it["w"] - aw) for it in sc.get("items", []) if isinstance(it, dict) and "w" in it and aw <= it["w"] < bw]
+        parts.append((ja, pt))
+    i = scenes.index(sc)
+    scenes[i:i + 1] = [pt for _, pt in parts]
+    return next(pt for ja, pt in parts if ja == j0)
+
+
 def director_extras(scenes, topic=""):
     """Second, narrow passes that GUARANTEE the signature techniques are tried on every scene that can use them
     (the big director prompt alone was skipping them): split-screen lists, 3D distance maps, real-source captions, camera keyframes."""
@@ -593,6 +633,7 @@ def director_extras(scenes, topic=""):
     except Exception as e:  # noqa
         log("snap_to_sentences failed:", type(e).__name__, str(e)[:100])
     # 1) split-screen / terrain: one short focused question per batch of scenes
+    decisions = []
     for a in range(0, len(ph), 4):
         batch = ph[a:a + 4]
         listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
@@ -613,31 +654,64 @@ Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[
                 i = int(r.get("i"))
             except Exception:  # noqa
                 continue
-            sc = scenes[i] if 0 <= i < len(scenes) else None
-            if sc is None or sc["type"] != "photo" or not any(i == j for j, _ in batch):
-                continue
-            if i > 0 and scenes[i - 1]["type"] in ("multi", "map"):  # keep a rhythm: not two special layouts in a row
-                continue
-            d = {"split": r.get("split")} if r.get("split") else {"terrain": r.get("terrain")} if r.get("terrain") else {}
-            if d and apply_special(sc, d):
-                sc["directed"] = True
-                stat["split" if sc["type"] == "multi" else "terrain"] += 1
-            elif r.get("map") and isinstance(r["map"], dict) and stat["map"] < max(1, len(ph) // 3):
+            if 0 <= i < len(scenes) and any(i == j for j, _ in batch) and scenes[i]["type"] == "photo":
+                decisions.append((scenes[i], r))
+    # the special layout (split-screen / map) takes ONLY the sentence(s) that talk about it, and must finish inside that sentence's time slot
+    for sc, r in decisions:
+        if sc not in scenes or sc["type"] != "photo":
+            continue
+        idx = scenes.index(sc)
+        if idx > 0 and scenes[idx - 1]["type"] in ("multi", "map"):  # keep a rhythm: not two special layouts in a row
+            continue
+        kind = "split" if r.get("split") else "terrain" if r.get("terrain") else "map" if (r.get("map") and stat["map"] < max(1, len(ph) // 3)) else ""
+        if not kind:
+            continue
+        words = sc["narration_hi"].split()
+        ws = []
+        if kind == "split":
+            for x in (r["split"] if isinstance(r["split"], list) else (r["split"].get("items") or [])):
                 try:
-                    pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (r["map"].get("pins") or [])[:5]]
-                    if pins and not any(re.search(r"दुनिया|पृथ्वी|धरती|विश्व|संसार|ग्रह|brahm|ब्रह्मांड|world|earth|planet|universe", p_["label_hi"], re.I) for p_ in pins) and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins):
-                        spread = max([hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins] + [0])
-                        if len(pins) >= 3 and spread < 1500:  # several places close together: terrain background, pins in the order named, an arrow from each to the next
-                            mp_ = {"pins": pins, "route": True, "mode": "terrain", "regions": []}
-                        elif len(pins) >= 2:
-                            mp_ = {"pins": pins, "route": True, "mode": "globe" if spread > 2500 else "flat"}
-                        else:
-                            mp_ = {"pins": pins, "route": False, "mode": "flat"}
-                        sc["type"], sc["map"], sc["headline_hi"] = "map", mp_, ""
-                        sc["directed"] = True
-                        stat["map"] += 1
+                    ws.append(int(x.get("w", 0)))
                 except Exception:  # noqa
                     pass
+        else:
+            pl = (r[kind].get("pins") or []) if isinstance(r.get(kind), dict) else []
+            ws = [w_ for w_ in (_word_of_label(words, q_.get("label_hi", "")) for q_ in pl if isinstance(q_, dict)) if w_ is not None]
+        part, off = sc, 0
+        if sc.get("sent") and ws:
+            j0, j1 = _sent_of_word(sc, min(ws)), _sent_of_word(sc, max(ws))
+            if j1 - j0 > 2:
+                j1 = j0 + 2
+            if sc["sent"][j1][3] - sc["sent"][j0][2] < 1.6:  # too short to show an animation: leave the pictures
+                continue
+            part, off = split_scene(scenes, sc, j0, j1), sc["sent"][j0][0]
+        if kind == "split":
+            lst_ = [dict(x, w=int(x.get("w", 0)) - off) for x in (r["split"] if isinstance(r["split"], list) else (r["split"].get("items") or [])) if isinstance(x, dict)]
+            ok_ = apply_special(part, {"split": lst_})
+        elif kind == "terrain":
+            ok_ = apply_special(part, {"terrain": r["terrain"]})
+        else:
+            ok_ = False
+            try:
+                pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (r["map"].get("pins") or [])[:5]]
+                if pins and not any(re.search(r"दुनिया|पृथ्वी|धरती|विश्व|संसार|ग्रह|brahm|ब्रह्मांड|world|earth|planet|universe", p_["label_hi"], re.I) for p_ in pins) and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins):
+                    spread = max([hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins] + [0])
+                    if len(pins) == 2 and spread < 1500:  # exactly two places: the terrain map with the distance
+                        mp_ = {"pins": pins, "route": True, "mode": "terrain", "regions": []}
+                    elif len(pins) >= 3 and spread < 1500:  # several places close together: terrain background, pins in the order named, an arrow from each to the next
+                        mp_ = {"pins": pins, "route": True, "mode": "terrain", "regions": []}
+                    elif len(pins) >= 2:
+                        mp_ = {"pins": pins, "route": True, "mode": "globe" if spread > 2500 else "flat"}
+                    else:
+                        mp_ = {"pins": pins, "route": False, "mode": "flat"}
+                    part["type"], part["map"], part["headline_hi"] = "map", mp_, ""
+                    ok_ = True
+                    kind = "map"
+            except Exception:  # noqa
+                pass
+        if ok_:
+            part["directed"] = True
+            stat["split" if part["type"] == "multi" else "map" if kind == "map" else "terrain"] += 1
     # 2) real source captions: match each scene to a REAL paragraph that supports a fact in it
     if SRC_PARAS:
         ph = [(i, sc) for i, sc in enumerate(scenes) if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
@@ -1364,50 +1438,106 @@ VOICE_FX = ("highpass=f=75,equalizer=f=150:t=q:w=1.2:g=2.5,equalizer=f=3200:t=q:
             "acompressor=threshold=0.1:ratio=3:attack=8:release=150:makeup=2,aecho=0.7:0.4:38:0.10")
 
 
-SENT_GAP = 0.14
+def align_boundaries(sil, weights, total):
+    """The narration was spoken in ONE go. Find, among the real pauses (silences) of that audio, the ones that sit between the sentences.
+    weights = text length of every sentence; returns the speech-start time of sentences 2..N (None where no pause could be matched)."""
+    n = len(weights)
+    if n <= 1:
+        return []
+    tw = float(sum(weights))
+    exp = [total * w / tw for w in weights]  # expected length of every sentence
+    M = len(sil)
+    INF = 1e9
+    # dp[k][j]: best cost with boundary k (between sentence k and k+1) placed at pause j
+    dp = [[INF] * M for _ in range(n - 1)]
+    bk = [[-1] * M for _ in range(n - 1)]
+    for j in range(M):
+        mid = (sil[j][0] + sil[j][1]) / 2
+        dp[0][j] = abs(mid - exp[0]) / (exp[0] + 0.8) - 0.4 * min(sil[j][1] - sil[j][0], 0.8)
+    for k in range(1, n - 1):
+        for j in range(M):
+            mid = (sil[j][0] + sil[j][1]) / 2
+            bestc, bestp = INF, -1
+            for jp in range(j):
+                if dp[k - 1][jp] >= INF:
+                    continue
+                midp = (sil[jp][0] + sil[jp][1]) / 2
+                c = dp[k - 1][jp] + abs((mid - midp) - exp[k]) / (exp[k] + 0.8)
+                if c < bestc:
+                    bestc, bestp = c, jp
+            if bestp >= 0:
+                dp[k][j] = bestc - 0.4 * min(sil[j][1] - sil[j][0], 0.8)
+                bk[k][j] = bestp
+    best, bj = INF, -1
+    for j in range(M):
+        if dp[n - 2][j] < INF:
+            midl = (sil[j][0] + sil[j][1]) / 2
+            c = dp[n - 2][j] + abs((total - midl) - exp[n - 1]) / (exp[n - 1] + 0.8)
+            if c < best:
+                best, bj = c, j
+    if bj < 0:  # fewer pauses than sentences: proportional guess
+        acc, out = 0.0, []
+        for k in range(n - 1):
+            acc += exp[k]
+            out.append(acc)
+        return out
+    pick = [bj]
+    for k in range(n - 2, 0, -1):
+        pick.append(bk[k][pick[-1]])
+    pick.reverse()
+    return [sil[j][1] for j in pick]
 
 
 def make_voice(scenes, tdir, synth=None):
-    """Every SENTENCE is spoken (and timed) on its own, so each sentence's picture/clip can start and end exactly with it."""
+    """The whole narration is spoken in ONE go (one voice, one mood). The pauses of that recording are then matched to the full stops of the text, so
+    every sentence has an exact time slot on the voice timeline; its picture/clip/map must start and end inside that slot."""
     synth = synth or tts_one
     tdir.mkdir(parents=True, exist_ok=True)
-    wavs = []
+    full = " ".join(sc["narration_hi"].strip() for sc in scenes)
+    src, master = tdir / "master.src", tdir / "master.wav"
+    synth(full, src, "calm")
     trim = "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.03"
+    run(["ffmpeg", "-y", "-i", src, "-ar", "44100", "-ac", "1", "-af", f"{trim},areverse,{trim},areverse,atempo={VOICE_SPEED:.3f},apad=pad_dur=0.6", master])
+    total = ffprobe_dur(master)
+    speech_end = total - 0.6
+    sents = []  # (scene index, first word, end word, text)
     for i, sc in enumerate(scenes):
         wds = sc["narration_hi"].split()
-        rng = sentence_ranges(wds) or [[0, len(wds)]]
-        pad = HOOK_GAP if i == 0 else SCENE_GAP
-        wt, sent, t0 = [], [], 0.0
-        for q, (a, b) in enumerate(rng):
-            txt = " ".join(wds[a:b])
-            src = tdir / f"s{i:03d}_{q}.src"
-            wav = tdir / f"s{i:03d}_{q}.wav"
-            synth(txt, src, sc.get("tone"))
-            last = q == len(rng) - 1
-            run(["ffmpeg", "-y", "-i", src, "-ar", "44100", "-ac", "1", "-af",
-                 f"{trim},areverse,{trim},areverse,atempo={VOICE_SPEED:.3f},apad=pad_dur={pad if last else SENT_GAP}", wav])
-            total = ffprobe_dur(wav)
-            gap = pad if last else SENT_GAP
-            sd = max(0.3, total - gap)
+        for a, b in (sentence_ranges(wds) or [[0, len(wds)]]):
+            sents.append((i, a, b, " ".join(wds[a:b])))
+    sil = [x for x in detect_silences(master) if 0.2 < x[0] and x[1] < speech_end - 0.1]
+    starts = align_boundaries(sil, [max(1, sum(len(w) + 1 for w in t.split())) for _, _, _, t in sents], speech_end)
+    # sentence k owns [B[k], B[k+1]]: it starts when it is spoken (just before) and keeps the pause that follows it
+    B = [0.0] + [max(0.05, t - 0.04) for t in starts] + [total]
+    for k in range(1, len(B)):
+        B[k] = max(B[k], B[k - 1] + 0.3)
+    B[-1] = max(B[-1], B[-2] + 0.3)
+    for i, sc in enumerate(scenes):
+        idx = [k for k, st in enumerate(sents) if st[0] == i]
+        t_a = B[idx[0]]
+        t_b = B[idx[-1] + 1]
+        sc["dur"] = t_b - t_a
+        wt, sent = [], []
+        for k in idx:
+            _i, a, b, txt = sents[k]
+            s0, s1 = B[k], B[k + 1]
+            sl = tdir / f"sl{k:04d}.wav"
+            run(["ffmpeg", "-y", "-ss", f"{s0:.3f}", "-t", f"{s1 - s0:.3f}", "-i", master, sl])
+            sp_dur = max(0.3, (s1 - s0) - 0.12)
             try:
-                sp_ = word_spans(txt, wav, sd)
+                sp_ = word_spans(txt, sl, sp_dur)
             except Exception as e:  # noqa
                 log("word timing failed:", str(e)[:100])
-                sp_ = [(sd * k / max(1, b - a), sd * (k + 1) / max(1, b - a)) for k in range(b - a)]
-            wt += [(t0 + x, t0 + y) for x, y in sp_]
-            sent.append((a, b, t0, t0 + sd))
-            t0 += total
-            wavs.append(wav)
-        sc["dur"] = t0
-        sc["speech_dur"] = max(0.5, sent[-1][3])
-        sc["wt"] = wt if len(wt) == len(wds) else None
-        sc["sent"] = sent  # (first word, end word, start s, end s) of every sentence, exact
+                sp_ = [(sp_dur * q / max(1, b - a), sp_dur * (q + 1) / max(1, b - a)) for q in range(b - a)]
+            wt += [(s0 - t_a + x, s0 - t_a + y) for x, y in sp_]
+            sent.append((a, b, s0 - t_a, s1 - t_a))
+        sc["speech_dur"] = max(0.5, sc["dur"] - 0.15)
+        sc["wt"] = wt if len(wt) == len(sc["narration_hi"].split()) else None
+        sc["sent"] = sent  # (first word, end word, start s, end s): the sentence's time slot inside the scene
         if i % 8 == 0:
-            log(f"voice {i + 1}/{len(scenes)}")
-    lst = tdir / "voice_list.txt"
-    lst.write_text("".join(f"file '{w.resolve()}'\n" for w in wavs))
-    raw = tdir / "voice_raw.wav"
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", raw])
+            log(f"voice timeline {i + 1}/{len(scenes)}")
+    wavs = []
+    raw = master
     voice = tdir / "voice.wav"
     try:
         run(["ffmpeg", "-y", "-i", raw, "-af", VOICE_FX, "-ar", "44100", voice])
@@ -3999,6 +4129,9 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
         ts.append(t_)
     base_t = [0.0] + [1.0 + k * max(1.2, (speech_dur - 1.5) / n) for k in range(1, n)]
     ts = [t_ if (t_ is not None and (k == 0 or t_ > ts[k - 1] + 0.7)) else base_t[k] for k, t_ in enumerate(ts)]
+    if n > 1 and ts[-1] > dur - 1.1 and dur > 1.5:  # all panels must be in place before the sentence ends
+        f_ = max(0.3, (dur - 1.1) / ts[-1])
+        ts = [t_ * f_ for t_ in ts]
     for k in range(1, n):
         events += [(ts[k], "whoosh_soft", 0.8)]
     slant = 70  # divider leans like the reference
@@ -4343,10 +4476,15 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
     tp_ = []
     for k_, p_ in enumerate(pins):
         t_ = find_word_time(sc, p_["label_hi"])
-        floor_ = (tp_[-1] + 1.4) if tp_ else 1.2
-        tp_.append(t_ if (t_ is not None and t_ >= floor_) else floor_ + (1.0 if tp_ else 0.0))
+        gap_ = min(1.4, max(0.45, (dur - 1.4) / max(1, len(pins) - 1)))
+        floor_ = (tp_[-1] + gap_) if tp_ else min(1.2, 0.15 * dur)
+        tp_.append(t_ if (t_ is not None and t_ >= floor_) else floor_ + (min(1.0, gap_) if tp_ else 0.0))
+    if tp_[-1] > dur - 1.0 and dur > 1.5:  # the whole animation must end inside the sentence's time slot
+        f_ = max(0.3, (dur - 1.0) / tp_[-1])
+        tp_ = [t_ * f_ for t_ in tp_]
+    kk = min(1.0, max(0.3, dur / (tp_[-1] + 2.2)))  # shorter sentence -> shorter camera moves
     t1, t2 = tp_[0], tp_[1]
-    t_arr0 = t1 + 0.5
+    t_arr0 = t1 + 0.5 * kk
     t_text = t2 + 0.15
     events += [(0.2, "whoosh_soft", 0.8)] + [(t_, "pop", 0.8) for t_ in tp_] + ([(t_text, "ding", 0.7)] if NP == 2 else [])
     pin_img = pin_sprite(pal)
@@ -4354,8 +4492,8 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
     z_far, z_near = 1.0, max(1.5, min(3.0, OW * 0.62 / ext))
     z_end = max(1.2, min(2.6, OW * 0.8 / ext))
     if NP == 2:
-        kfs = [(0.0, z_far, OW / 2, OH / 2), (max(0.5, t1 - 0.7), z_near, A_[0], A_[1] - 40), (t_arr0 + 0.3, z_near, A_[0], A_[1] - 40),
-               (t2 - 0.1, z_near * 0.95, B_[0], B_[1] - 60), (max(t2 + 0.5, min(t2 + 2.0, dur - 0.4)), z_end, (A_[0] + B_[0]) / 2 - 40, (A_[1] + B_[1]) / 2 - 120)]
+        kfs = [(0.0, z_far, OW / 2, OH / 2), (max(0.05, t1 - 0.7 * kk), z_near, A_[0], A_[1] - 40), (t_arr0 + 0.3 * kk, z_near, A_[0], A_[1] - 40),
+               (max(t_arr0 + 0.35 * kk, t2 - 0.1), z_near * 0.95, B_[0], B_[1] - 60), (max(t2 + 0.5 * kk, min(t2 + 2.0, dur - 0.3)), z_end, (A_[0] + B_[0]) / 2 - 40, (A_[1] + B_[1]) / 2 - 120)]
     else:  # several places: the camera follows every pin in turn, then pulls back to show them all
         xs2, ys2 = [q[0] for q in P_], [q[1] for q in P_]
         ext2 = max((max(xs2) - min(xs2)) * 1.5, (max(ys2) - min(ys2)) * 2.1, 200.0)
@@ -4363,9 +4501,9 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         z_pin = max(1.5, min(2.4, zq * 1.25))
         kfs = [(0.0, z_far, OW / 2, OH / 2)]
         for k_, q_ in enumerate(P_):
-            kfs.append((max(kfs[-1][0] + 0.3, tp_[k_] - 0.5), z_pin, q_[0], q_[1] - 50))
-            kfs.append((kfs[-1][0] + 0.9, z_pin, q_[0], q_[1] - 50))
-        kfs.append((max(kfs[-1][0] + 0.6, min(tp_[-1] + 2.0, dur - 0.4)), zq, (min(xs2) + max(xs2)) / 2, (min(ys2) + max(ys2)) / 2 - 100))
+            kfs.append((max(kfs[-1][0] + 0.1, tp_[k_] - 0.5 * kk), z_pin, q_[0], q_[1] - 50))
+            kfs.append((kfs[-1][0] + 0.9 * kk, z_pin, q_[0], q_[1] - 50))
+        kfs.append((max(kfs[-1][0] + 0.3, min(tp_[-1] + 2.0, dur - 0.3)), zq, (min(xs2) + max(xs2)) / 2, (min(ys2) + max(ys2)) / 2 - 100))
 
     def cam(t):
         if t <= kfs[0][0]:
@@ -4391,7 +4529,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(ov)
         for li, arc_l in enumerate(arcs):
-            a0 = tp_[li] + 0.5
+            a0 = tp_[li] + 0.5 * kk
             a1 = tp_[li + 1] - 0.1
             prog = cl((t - a0) / max(0.4, a1 - a0))
             n = int(prog * 70)
@@ -4463,11 +4601,15 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
     pin_km = [0.0]
     for a, b in zip(pts, pts[1:]):
         pin_km.append(pin_km[-1] + hav_km(a, b))
-    t_start, t_end = 1.9, max(3.2, min(dur - 1.2, speech_dur * 0.85))
-    if route:
-        pin_t = [1.2] + [t_start + (t_end - t_start) * (k / max(1.0, total_km)) for k in pin_km[1:]]
+    first_pin = min(1.2, 0.18 * dur)
+    if dur < 6.0:  # the sentence is short: the whole animation must finish inside it
+        t_start, t_end = min(1.9, 0.22 * dur), max(min(1.9, 0.22 * dur) + 0.7, min(dur - 0.5, speech_dur * 0.85))
     else:
-        pin_t = [1.2 + 0.8 * i for i in range(len(pts))]
+        t_start, t_end = 1.9, max(3.2, min(dur - 1.2, speech_dur * 0.85))
+    if route:
+        pin_t = [first_pin] + [t_start + (t_end - t_start) * (k / max(1.0, total_km)) for k in pin_km[1:]]
+    else:
+        pin_t = [first_pin + min(0.8, 0.6 * dur / max(1, len(pts))) * i for i in range(len(pts))]
         wt_m, nw_m = sc.get("wt"), sc["narration_hi"].split()
         if wt_m and len(wt_m) == len(nw_m):  # each pin drops exactly when its place name is spoken
             got, last_k = [], -1
@@ -4477,10 +4619,13 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
                 if hit is None:
                     got = None
                     break
-                got.append(max(0.9, wt_m[hit][0] - 0.05))
+                got.append(max(min(0.9, 0.2 * dur), wt_m[hit][0] - 0.05))
                 last_k = hit
             if got:
                 pin_t = got
+    if pin_t[-1] > dur - 1.0 and dur > 1.5:  # never let a pin drop after the sentence is over
+        f_ = max(0.3, (dur - 1.0) / pin_t[-1])
+        pin_t = [t_ * f_ for t_ in pin_t]
     for t in pin_t:
         events.append((t, "pop", 0.8))
     events.append((0.2, "whoosh_soft", 0.8))
