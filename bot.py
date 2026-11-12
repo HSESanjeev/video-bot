@@ -193,9 +193,12 @@ def gemini_models():
 GROUND_SRC = []
 
 
-def gemini(prompt, json_mode=False, temperature=0.8, search=False):
+def gemini(prompt, json_mode=False, temperature=0.8, search=False, image=None):
     """Returns (text, grounding_titles)."""
-    body = {"contents": [{"parts": [{"text": prompt}]}],
+    parts_ = [{"text": prompt}]
+    if image:
+        parts_.append({"inline_data": {"mime_type": "image/jpeg", "data": image}})
+    body = {"contents": [{"parts": parts_}],
             "generationConfig": {"temperature": temperature}}
     if json_mode:
         body["generationConfig"]["responseMimeType"] = "application/json"
@@ -297,6 +300,7 @@ Read the scene sentence by sentence and clause by clause. Split it into BEATS: e
 "mains": FULL-SCREEN pictures in order (this is the main storytelling tool). Each has "w" = index of the word where it appears (the first has w=0).
  RULE A - NEW PICTURE FOR EVERY SUBJECT: whenever the narrator names a new thing (animal, plant, place, object, planet, phenomenon, material, body part, event) the screen shows a NEW full-screen real picture of exactly that thing, starting on that word. Do NOT use small stickers/overlays for objects. Typical main length 1.5-3.5 s; never keep a picture after the narrator moved to another subject.
  RULE B0 - THE REAL THING: when the narration is about a SPECIFIC named subject (a named forest/park/city/river/mountain, a named species such as "Asiatic lion", a named object, building, institution or event), give "entity_en": its exact real English name exactly as Wikipedia would title it (e.g. "Gir Forest National Park", "Asiatic lion", "Sundarbans", "Hubble Space Telescope"). The engine then fetches the REAL photograph of that exact thing from Wikipedia/Wikimedia. Use "" only for generic moments (fog, a path, hands).
+ RULE B00 - WORLD/EARTH: when the narrator says duniya, prithvi, dharti, vishwa, world, Earth or planet, the picture is a real photo of planet Earth (entity_en "Earth", query_en "earth from space"), NEVER a map. A map is only for a named country, state, city, forest or route.
  RULE B - REAL FIRST: every new main MUST have "query_en": 1-3 plain English words that find a REAL stock photo of that exact thing (e.g. "african lion", "volcano eruption", "milky way", "coral reef"). Use the most common, concrete, photographable name; no adjectives like "powerful", no people, no text, no cut-outs, no green-screen. Also give "prompt_en": a cinematic realistic description of the same single subject (only used if no real photo exists).
  RULE C - MOTION ONLY WHEN SOMETHING MOVES: add "motion": true and "clip_en" (1-3 English words for REAL stock footage) only if that moment describes movement or change of position (running, flying, flowing, erupting, burning, spinning, growing). At most one in four mains. Never ask for green-screen/isolated footage.
  RULE D - PARTS OF A SUBJECT = CAMERA KEYFRAMES ON THE SAME PICTURE: when the narrator talks about a part/detail of the subject already on screen (eyes, claws, wings, crater, tail, skin), do NOT make a new picture: use {"w":..,"same":true} with "kf", or put "kf" on the main itself.
@@ -509,7 +513,7 @@ def director_extras(scenes, topic=""):
 For EACH scene decide ONLY these two things:
 (1) "split": the narrator names or lists 2 or 3 SEPARATE subjects in this scene (two animals, two cities, two universities, before/after...). Return a list of 2-3 {{"w": word index where that subject is first spoken (the first item's w may be its own word), "label_hi": "name as spoken", "query_en": "1-3 English words for a real photo of exactly it", "entity_en": "exact Wikipedia article title or empty", "prompt_en": "realistic photo of it"}}.
 (2) "terrain": the narrator names TWO real places that are less than ~1000 km apart (villages, cities, districts, parks) as a journey, distance or 'from X to Y'. Return {{"pins":[{{"label_hi":"..","lat":..,"lon":..}},{{"label_hi":"..","lon":..,"lat":..}}],"regions":[{{"label_hi":"..","lat":..,"lon":..}}]}} with CORRECT coordinates; never guess unknown places.
-(3) "map": the narrator names 1-3 real places (country, state, forest, city) where the story happens and no split/terrain applies. Return {{"pins":[{{"label_hi":"place as spoken","lat":..,"lon":..}}]}} with correct coordinates (never guess).
+(3) "map": the narrator names 1-3 real places (a named country/state/city/forest only: NOT "the world", "Earth", "planet" or "universe", which show a photo of Earth instead) (country, state, forest, city) where the story happens and no split/terrain applies. Return {{"pins":[{{"label_hi":"place as spoken","lat":..,"lon":..}}]}} with correct coordinates (never guess).
 Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"terrain":null,"map":null}}]}}
 {listing}"""
         try:
@@ -534,7 +538,7 @@ Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[
             elif r.get("map") and isinstance(r["map"], dict) and stat["map"] < max(1, len(ph) // 3):
                 try:
                     pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (r["map"].get("pins") or [])[:3]]
-                    if pins and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins):
+                    if pins and not any(re.search(r"दुनिया|पृथ्वी|धरती|विश्व|संसार|ग्रह|brahm|ब्रह्मांड|world|earth|planet|universe", p_["label_hi"], re.I) for p_ in pins) and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins):
                         far = len(pins) > 1 and max(hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins) > 2500
                         sc["type"], sc["map"], sc["headline_hi"] = "map", {"pins": pins, "route": False, "mode": "globe" if far else "flat"}, ""
                         sc["directed"] = True
@@ -934,7 +938,8 @@ def validate_script(s, verbatim=False, min_scenes=None):
                     la, lo = float(pn.get("lat")), float(pn.get("lon"))
                 except Exception:  # noqa
                     continue
-                if -80 <= la <= 80 and -180 <= lo <= 180 and clean_short(pn.get("label_hi"), 20):
+                if -80 <= la <= 80 and -180 <= lo <= 180 and clean_short(pn.get("label_hi"), 20) \
+                        and not re.search(r"दुनिया|पृथ्वी|धरती|विश्व|संसार|ब्रह्मांड|world|earth|planet|universe", str(pn.get("label_hi")), re.I):
                     pins.append({"label_hi": clean_short(pn.get("label_hi"), 20), "lat": la, "lon": lo})
             if pins:
                 regs = []
@@ -1632,12 +1637,42 @@ def pexels_photo(query, out, size=(1920, 1080)):
     if not PEXELS_KEY or not query:
         return False
     r = requests.get("https://api.pexels.com/v1/search", headers={"Authorization": PEXELS_KEY},
-                     params={"query": query, "per_page": 5, "orientation": "landscape"}, timeout=30)
+                     params={"query": query, "per_page": 15, "orientation": "landscape"}, timeout=30)
     if not r.ok or not r.json().get("photos"):
         return False
-    p = random.choice(r.json()["photos"][:3])
-    fit_image(requests.get(p["src"]["large2x"], timeout=60).content, out, size)
+    qw = norm_words(query)
+    ph = r.json()["photos"]
+    good = [x for x in ph if qw & norm_words(x.get("alt") or "")]  # the photo's own description must mention the thing
+    if not good:
+        return False
+    fit_image(requests.get(good[0]["src"]["large2x"], timeout=60).content, out, size)
     return True
+
+
+VERIFY = {"n": 0, "off": os.environ.get("VERIFY_IMAGES", "1") == "0", "no": 0}
+
+
+def verify_image(path, subject):
+    """Ask Gemini to LOOK at the picture: does it clearly show this subject? (True when unsure or when the check is unavailable.)"""
+    if VERIFY["off"] or not GEMINI_KEY or not subject or VERIFY["n"] >= int(os.environ.get("VERIFY_MAX", "120")):
+        return True
+    try:
+        im = Image.open(path).convert("RGB")
+        im.thumbnail((640, 640))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=80)
+        VERIFY["n"] += 1
+        txt, _t = gemini(f'Look at this picture. Is "{subject}" clearly the main thing shown (not a different animal, object or place that merely looks similar)? '
+                         "Answer with one word: YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
+        ok = not txt.strip().upper().startswith("NO")
+        if not ok:
+            VERIFY["no"] += 1
+            log(f"  picture rejected by vision check (not '{subject}')")
+        return ok
+    except Exception as e:  # noqa
+        log("  vision check unavailable:", str(e)[:80])
+        VERIFY["n"] += 10
+        return True
 
 
 BAD_TAGS = {"man", "woman", "people", "girl", "boy", "child", "children", "person", "portrait", "model", "baby", "couple", "family",
@@ -1774,7 +1809,12 @@ def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
             break
     if not hits:
         return False
-    top = hits[:8]
+    qw = norm_words(query)
+    scored = sorted(hits, key=lambda h: -len(qw & {w for t in tags_of(h) for w in norm_words(t)}))
+    best = len(qw & {w for t in tags_of(scored[0]) for w in norm_words(t)})
+    if best == 0:
+        return False  # no picture is even tagged with the thing: better no picture than a wrong one
+    top = [h for h in scored if len(qw & {w for t in tags_of(h) for w in norm_words(t)}) == best][:8]
     random.shuffle(top)
     for h in top[:4]:
         data = requests.get(h.get("largeImageURL") or h["webformatURL"], timeout=60).content
@@ -1785,6 +1825,8 @@ def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
         except Exception:  # noqa
             continue
         fit_image(data, out, size)
+        if kind == "photo" and not verify_image(out, query):
+            continue
         return True
     return False
 
@@ -1906,7 +1948,29 @@ def wiki_real_photo(query, out, size):
     return False
 
 
+EN_CACHE = {}
+
+
+def english_search(txt):
+    """Every picture search runs in ENGLISH ('शेर' -> 'lion'): Hindi words are translated once (cached); anything non-Latin that cannot be translated is dropped."""
+    txt = (txt or "").strip()
+    if not txt or txt.isascii():
+        return txt
+    if txt in EN_CACHE:
+        return EN_CACHE[txt]
+    en = ""
+    if GEMINI_KEY:
+        try:
+            t, _x = gemini(f'Translate this to the plain English words you would type into an image search to find a photo of exactly that thing (1-3 words, no punctuation): "{txt}"', temperature=0.0)
+            en = re.sub(r"[^A-Za-z ]", " ", t).strip()[:50]
+        except Exception:  # noqa
+            en = ""
+    EN_CACHE[txt] = en
+    return en
+
+
 def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity=""):
+    query, entity, fallback_query = english_search(query), english_search(entity), english_search(fallback_query)
     suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB, "obj": STYLE_OBJ}[kind]
     size = (1080, 1080) if kind in ("card", "obj") else (1920, 1080)
     full = f"{prompt}, {suffix}"
@@ -1932,9 +1996,13 @@ def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity="")
         chain.append(("pixabay-fallback", lambda: pixabay_photo(query or fallback_query or query_from_prompt(prompt), out, size, kind)))
     if kind in ("photo", "thumb"):
         chain.append(("pexels-photo", lambda: pexels_photo(fallback_query or prompt[:60], out, size)))
+    subj = entity or rq
     for name, fn in chain:
         try:
             if fn() and Path(out).exists():
+                if name in ("wikimedia", "pexels-real") and kind == "photo" and not verify_image(out, subj):
+                    Path(out).unlink(missing_ok=True)
+                    continue
                 return True
         except Exception as e:  # noqa
             note_fail(name, type(e).__name__)
