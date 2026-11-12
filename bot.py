@@ -528,17 +528,16 @@ def snap_to_sentences(scenes, topic=""):
             continue
         wds = sc["narration_hi"].split()
         rng = sentence_ranges(wds)
-        starts, w = [], 0
-        for sh in sc["shots"]:
-            starts.append(w)
-            w += len(str(sh.get("text_hi") or "").split())
-        if w != len(wds) or len(rng) < 2:
-            continue
+        cnts = [max(1, len(str(sh.get("text_hi") or "").split())) for sh in sc["shots"]]
+        starts, acc = [], 0
+        for c_ in cnts:  # same proportional rule build_shots uses
+            starts.append(min(len(wds) - 1, int(round(acc * len(wds) / sum(cnts)))))
+            acc += c_
         new = []
         for (a, b) in rng:
             inside = [k for k, st in enumerate(starts) if a <= st < b and (sc["shots"][k].get("prompt_en") or sc["shots"][k].get("clip_en") or sc["shots"][k].get("image"))]
             if inside:
-                src, fresh = sc["shots"][inside[0]], False
+                src, fresh = sc["shots"][next((k for k in inside if sc["shots"][k].get("clip_en")), inside[0])], False
             else:
                 cov = max((k for k, st in enumerate(starts) if st <= a), default=0)
                 src, fresh = sc["shots"][cov], True
@@ -1365,26 +1364,44 @@ VOICE_FX = ("highpass=f=75,equalizer=f=150:t=q:w=1.2:g=2.5,equalizer=f=3200:t=q:
             "acompressor=threshold=0.1:ratio=3:attack=8:release=150:makeup=2,aecho=0.7:0.4:38:0.10")
 
 
+SENT_GAP = 0.14
+
+
 def make_voice(scenes, tdir, synth=None):
+    """Every SENTENCE is spoken (and timed) on its own, so each sentence's picture/clip can start and end exactly with it."""
     synth = synth or tts_one
     tdir.mkdir(parents=True, exist_ok=True)
     wavs = []
+    trim = "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.03"
     for i, sc in enumerate(scenes):
-        src = tdir / f"s{i:03d}.src"
-        wav = tdir / f"s{i:03d}.wav"
-        synth(sc["narration_hi"], src, sc.get("tone"))
+        wds = sc["narration_hi"].split()
+        rng = sentence_ranges(wds) or [[0, len(wds)]]
         pad = HOOK_GAP if i == 0 else SCENE_GAP
-        run(["ffmpeg", "-y", "-i", src, "-ar", "44100", "-ac", "1", "-af",
-             f"silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.05,atempo={VOICE_SPEED:.3f},apad=pad_dur={pad}", wav])
-        total = ffprobe_dur(wav)
-        sc["dur"] = total
-        sc["speech_dur"] = max(0.5, total - pad)
-        try:
-            sc["wt"] = word_spans(sc["narration_hi"], wav, sc["speech_dur"])
-        except Exception as e:  # noqa
-            log("word timing failed:", str(e)[:100])
-            sc["wt"] = None
-        wavs.append(wav)
+        wt, sent, t0 = [], [], 0.0
+        for q, (a, b) in enumerate(rng):
+            txt = " ".join(wds[a:b])
+            src = tdir / f"s{i:03d}_{q}.src"
+            wav = tdir / f"s{i:03d}_{q}.wav"
+            synth(txt, src, sc.get("tone"))
+            last = q == len(rng) - 1
+            run(["ffmpeg", "-y", "-i", src, "-ar", "44100", "-ac", "1", "-af",
+                 f"{trim},areverse,{trim},areverse,atempo={VOICE_SPEED:.3f},apad=pad_dur={pad if last else SENT_GAP}", wav])
+            total = ffprobe_dur(wav)
+            gap = pad if last else SENT_GAP
+            sd = max(0.3, total - gap)
+            try:
+                sp_ = word_spans(txt, wav, sd)
+            except Exception as e:  # noqa
+                log("word timing failed:", str(e)[:100])
+                sp_ = [(sd * k / max(1, b - a), sd * (k + 1) / max(1, b - a)) for k in range(b - a)]
+            wt += [(t0 + x, t0 + y) for x, y in sp_]
+            sent.append((a, b, t0, t0 + sd))
+            t0 += total
+            wavs.append(wav)
+        sc["dur"] = t0
+        sc["speech_dur"] = max(0.5, sent[-1][3])
+        sc["wt"] = wt if len(wt) == len(wds) else None
+        sc["sent"] = sent  # (first word, end word, start s, end s) of every sentence, exact
         if i % 8 == 0:
             log(f"voice {i + 1}/{len(scenes)}")
     lst = tdir / "voice_list.txt"
@@ -1778,7 +1795,7 @@ VERIFY = {"n": 0, "off": os.environ.get("VERIFY_IMAGES", "1") == "0", "no": 0}
 
 def verify_image(path, subject):
     """Ask Gemini to LOOK at the picture: does it clearly show this subject? (True when unsure or when the check is unavailable.)"""
-    if VERIFY["off"] or not GEMINI_KEY or not subject or VERIFY["n"] >= int(os.environ.get("VERIFY_MAX", "120")):
+    if VERIFY["off"] or not GEMINI_KEY or not subject or VERIFY["n"] >= int(os.environ.get("VERIFY_MAX", "300")):
         return True
     try:
         im = Image.open(path).convert("RGB")
@@ -1838,17 +1855,36 @@ def _stems(txt):
     return {w[:4] for w in re.findall(r"[a-z]+", (txt or "").lower()) if len(w) > 2 and w not in stop}
 
 
-def _clip_frame_ok(path, query):
-    """The moving picture must show the thing that is spoken about: look at a frame from the middle of the clip."""
-    if VERIFY["off"] or not GEMINI_KEY:
-        return True
+def _clip_judge(path, query):
+    """2 = the clip shows the subject doing the action, 1 = right subject, action unclear, 0 = wrong subject.
+    Gemini looks at three frames of the clip side by side (a still frame alone cannot show 'running')."""
+    if VERIFY["off"] or not GEMINI_KEY or VERIFY["n"] >= int(os.environ.get("VERIFY_MAX", "300")):
+        return 1
     try:
         d = ffprobe_dur(path)
-        fp = Path(str(path) + ".chk.png")
-        run(["ffmpeg", "-y", "-ss", f"{max(0.3, d / 2):.2f}", "-i", path, "-frames:v", "1", fp])
-        return verify_image(fp, query)
-    except Exception:  # noqa
-        return True
+        frames = []
+        for f_ in (0.2, 0.5, 0.8):
+            raw = subprocess.run(["ffmpeg", "-v", "error", "-ss", f"{max(0.1, d * f_):.2f}", "-i", str(path), "-frames:v", "1", "-vf", "scale=384:216",
+                                  "-f", "rawvideo", "-pix_fmt", "rgb24", "-"], capture_output=True, timeout=60).stdout
+            if len(raw) == 384 * 216 * 3:
+                frames.append(Image.frombytes("RGB", (384, 216), raw))
+        if not frames:
+            return 1
+        strip = Image.new("RGB", (384 * len(frames), 216))
+        for k, fr_ in enumerate(frames):
+            strip.paste(fr_, (384 * k, 0))
+        buf = io.BytesIO()
+        strip.save(buf, "JPEG", quality=80)
+        VERIFY["n"] += 1
+        txt, _t = gemini(f'These {len(frames)} frames (left to right) come from ONE stock video clip. We need a clip of: "{query}". '
+                         "Answer with exactly one word: MATCH (the clip shows that subject doing that action), SUBJECT (right subject but the action is different or unclear), or NO (a different subject).",
+                         temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
+        t_ = txt.strip().upper()
+        return 2 if t_.startswith("MATCH") else 0 if t_.startswith("NO") else 1
+    except Exception as e:  # noqa
+        log("  clip check unavailable:", str(e)[:80])
+        VERIFY["n"] += 10
+        return 1
 
 
 def _download_clip(url, out, max_mb=60):
@@ -1864,68 +1900,90 @@ def _download_clip(url, out, max_mb=60):
     return Path(out).exists() and Path(out).stat().st_size > 20000
 
 
-def pixabay_video(query, out):
-    """Real moving footage (free Pixabay video). The clip's tags must contain the subject AND the action ('lion walking' must not give a running lion)."""
-    if not PIXABAY_KEY or not query:
-        return False
+def _clip_cands_pixabay(query):
     qs_ = _stems(query)
-    hits = []
+    subj = _stems(query.split()[0]) if query.split() else set()
+    res, seen = [], set()
     for q in [query[:90]] + ([query.split()[0]] if len(query.split()) > 1 else []):
         r = requests.get("https://pixabay.com/api/videos/", params={"key": PIXABAY_KEY, "q": q, "per_page": 30, "safesearch": "true"}, timeout=30)
         if not r.ok:
             raise RuntimeError(f"Pixabay video HTTP {r.status_code}")
         for h in r.json().get("hits", []):
-            if h.get("duration", 0) < 3 or ((BAD_TAGS | GREEN_TAGS) & tags_of(h)) or "green" in h.get("tags", "").lower():
+            if h.get("id") in seen or h.get("duration", 0) < 3 or ((BAD_TAGS | GREEN_TAGS) & tags_of(h)) or "green" in h.get("tags", "").lower():
                 continue
-            sc_ = len(qs_ & _stems(h.get("tags", "")))
-            if sc_ >= max(1, min(len(qs_), 2)):  # subject and action both present whenever the query has both
-                hits.append((sc_, h))
-        if hits:
-            break
-    if not hits:
-        return False
-    hits.sort(key=lambda x: -x[0])
-    for _sc, h in hits[:5]:
-        v = h.get("videos", {})
-        pick = next((v[k] for k in ("medium", "large", "small") if v.get(k, {}).get("url")), None)
-        if not pick:
-            continue
-        if _download_clip(pick["url"], out) and first_frame_ok(out) and _clip_frame_ok(out, query):
-            return True
-        log("  clip rejected (green screen / wrong subject), trying next")
-    return False
+            seen.add(h.get("id"))
+            tg = _stems(h.get("tags", ""))
+            if subj and not (subj & tg):
+                continue  # the subject itself must be tagged
+            v = h.get("videos", {})
+            pick = next((v[k] for k in ("medium", "large", "small") if v.get(k, {}).get("url")), None)
+            if pick:
+                res.append((len(qs_ & tg), pick["url"]))
+    return res
 
 
-def pexels_video(query, out):
-    """Second source of real footage: Pexels videos whose page title (url slug) names the subject and the action."""
-    if not PEXELS_KEY or not query:
-        return False
+def _clip_cands_pexels(query):
+    if not PEXELS_KEY:
+        return []
     qs_ = _stems(query)
+    subj = _stems(query.split()[0]) if query.split() else set()
     r = requests.get("https://api.pexels.com/videos/search", headers={"Authorization": PEXELS_KEY},
                      params={"query": query, "per_page": 20, "orientation": "landscape"}, timeout=30)
+    res = []
     if not r.ok:
-        return False
-    cands = []
+        return res
     for v in r.json().get("videos", []):
-        slug = (v.get("url") or "").rstrip("/").split("/")[-1].replace("-", " ")
-        sc_ = len(qs_ & _stems(slug))
+        slug = _stems((v.get("url") or "").rstrip("/").split("/")[-1].replace("-", " "))
         files = [f for f in v.get("video_files", []) if f.get("file_type") == "video/mp4" and (f.get("width") or 0) >= 1280]
-        if v.get("duration", 0) >= 3 and files and sc_ >= max(1, min(len(qs_), 2)):
-            cands.append((sc_, sorted(files, key=lambda x: x["width"])[0]["link"]))
-    cands.sort(key=lambda x: -x[0])
-    for _sc, link in cands[:4]:
-        if _download_clip(link, out) and first_frame_ok(out) and _clip_frame_ok(out, query):
-            return True
-    return False
+        if v.get("duration", 0) >= 3 and files and (not subj or subj & slug):
+            res.append((len(qs_ & slug), sorted(files, key=lambda x: x["width"])[0]["link"]))
+    return res
 
 
 def find_clip(query, out):
-    for fn in (pixabay_video, pexels_video):
+    """Real stock footage of exactly the subject + action that is being narrated ('lion walking' is not 'lion running').
+    Candidates from Pixabay and Pexels are ranked by tags, downloaded, and Gemini checks three frames of each."""
+    query = (query or "").strip()
+    if not query:
+        return False
+    cands = []
+    for fn, ok_ in ((_clip_cands_pixabay, bool(PIXABAY_KEY)), (_clip_cands_pexels, bool(PEXELS_KEY))):
+        if ok_:
+            try:
+                cands += fn(query)
+            except Exception as e:  # noqa
+                log(f"  clip search {fn.__name__} failed:", type(e).__name__, str(e)[:80])
+    cands.sort(key=lambda x: -x[0])
+    best, tested = None, 0
+    for _sc, url in cands[:8]:
+        if tested >= 5:
+            break
+        tmp = Path(str(out) + f".c{tested}.mp4")
         try:
-            if fn(query, out):
-                return True
-        except Exception as e:  # noqa
-            log(f"  {fn.__name__} failed:", type(e).__name__, str(e)[:80])
+            if not (_download_clip(url, tmp) and first_frame_ok(tmp)):
+                tmp.unlink(missing_ok=True)
+                continue
+        except Exception:  # noqa
+            tmp.unlink(missing_ok=True)
+            continue
+        tested += 1
+        lvl = _clip_judge(tmp, query)
+        if lvl == 0:
+            tmp.unlink(missing_ok=True)
+            continue
+        if best is None or lvl > best[0]:
+            if best:
+                best[1].unlink(missing_ok=True)
+            best = (lvl, tmp)
+        else:
+            tmp.unlink(missing_ok=True)
+        if lvl == 2:
+            break
+    if best:
+        best[1].replace(out)
+        log(f"  clip for '{query}': {'exact action' if best[0] == 2 else 'right subject'}")
+        return True
+    log(f"  no suitable clip for '{query}'")
     return False
 
 
@@ -3235,6 +3293,8 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
     for k, s_ in enumerate(raw):
         if k == 0:
             a = 0.0
+        elif wt and sc.get("sent") and any(starts[k] == st_[0] for st_ in sc["sent"]):
+            a = max(0.3, next(st_[2] for st_ in sc["sent"] if st_[0] == starts[k]) - 0.03)  # a new sentence: cut exactly when it starts
         elif wt:
             a = max(0.4, wt[starts[k]][0] - 0.12)  # cut a hair BEFORE the word is spoken
         else:
@@ -5473,6 +5533,9 @@ def make_visuals(scenes, imgdir):
                             continue
                     except Exception as e:  # noqa
                         log("stock clip failed:", type(e).__name__, str(e)[:100])
+                if sh.get("motion") and sh.get("clip_en") and not sh["prompt_en"].strip():
+                    sh["prompt_en"] = "a realistic cinematic photo of " + sh["clip_en"]  # no clip found: a picture of the same subject
+                    sh["query_en"] = sh.get("query_en") or sh["clip_en"].split()[0]
                 if not sh["prompt_en"].strip() and prev_img:
                     sh["image"] = prev_img  # same picture, camera moves to the part being spoken about
                     continue
