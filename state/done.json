@@ -330,6 +330,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-12T07:06:22+00:00",
+   "topic_en": "शेर, खरगोश और गिर जंगल की कहानी गुजरात के गिर जंगल में एक शक्तिशाली शेर रहता था।",
+   "title_hi": "गिर के जंगल का राजा: शेर और चतुर खरगोश की अनसुनी कहानी",
+   "category": "custom",
+   "style": "sawaal",
+   "theme": "sunrise",
+   "mood": "wonder",
+   "seconds": 43,
+   "voice": "edge (Gemini voice f",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
