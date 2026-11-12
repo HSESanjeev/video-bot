@@ -356,6 +356,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-12T17:42:15+00:00",
+   "topic_en": "How do electric eels generate enough electricity to shock their prey?",
+   "title_hi": "इलेक्ट्रिक ईल बिजली कैसे बनाती है?",
+   "category": "animal_senses",
+   "style": "imagine",
+   "theme": "sky",
+   "mood": "wonder",
+   "seconds": 53,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
