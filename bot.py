@@ -51,7 +51,7 @@ W, H, FPS = 1280, 720, 30
 VOICE = os.environ.get("TTS_VOICE", "hi-IN-MadhurNeural")
 TTS_RATE = os.environ.get("TTS_RATE", "+8%")
 # measured: the 10-minute reference narrator speaks ~19% faster (syllables per voiced second) than the bot voice -> speed up whatever voice engine is used, pitch stays the same
-VOICE_SPEED = min(1.35, max(0.9, float(os.environ.get("VOICE_SPEED", "1.25"))))
+VOICE_SPEED = min(1.35, max(0.9, float(os.environ.get("VOICE_SPEED", "1.12"))))
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "auto").strip().lower()  # auto | gemini | edge
 GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 GEMINI_TTS_MODELS = [m for m in os.environ.get(
@@ -302,7 +302,7 @@ Read the scene sentence by sentence and clause by clause. Split it into BEATS: e
  RULE B0 - THE REAL THING: when the narration is about a SPECIFIC named subject (a named forest/park/city/river/mountain, a named species such as "Asiatic lion", a named object, building, institution or event), give "entity_en": its exact real English name exactly as Wikipedia would title it (e.g. "Gir Forest National Park", "Asiatic lion", "Sundarbans", "Hubble Space Telescope"). The engine then fetches the REAL photograph of that exact thing from Wikipedia/Wikimedia. Use "" only for generic moments (fog, a path, hands).
  RULE B00 - WORLD/EARTH: when the narrator says duniya, prithvi, dharti, vishwa, world, Earth or planet, the picture is a real photo of planet Earth (entity_en "Earth", query_en "earth from space"), NEVER a map. A map is only for a named country, state, city, forest or route.
  RULE B - REAL FIRST: every new main MUST have "query_en": 1-3 plain English words that find a REAL stock photo of that exact thing (e.g. "african lion", "volcano eruption", "milky way", "coral reef"). Use the most common, concrete, photographable name; no adjectives like "powerful", no people, no text, no cut-outs, no green-screen. Also give "prompt_en": a cinematic realistic description of the same single subject (only used if no real photo exists).
- RULE C - MOTION ONLY WHEN SOMETHING MOVES: add "motion": true and "clip_en" (1-3 English words for REAL stock footage) only if that moment describes movement or change of position (running, flying, flowing, erupting, burning, spinning, growing). At most one in four mains. Never ask for green-screen/isolated footage.
+ RULE C - VIDEO CLIP FOR EVERY ACTION: whenever the narrator describes something being DONE or MOVING (walking, running, hunting, eating, drinking, flying, swimming, roaring, flowing, erupting, burning, spinning, growing), that main is a real VIDEO CLIP of exactly that action: "motion": true and "clip_en" = subject + the exact action in English, e.g. "lion walking" for chalna, "lion running" for daudna, "elephant drinking water", "eagle flying", "waterfall". The clip must show what is said and nothing else. Use clips on every such moment (up to about half of the mains); still pictures only for things that are still (a place, an object, a fact). Never ask for green-screen/isolated footage.
  RULE D - PARTS OF A SUBJECT = CAMERA KEYFRAMES ON THE SAME PICTURE: when the narrator talks about a part/detail of the subject already on screen (eyes, claws, wings, crater, tail, skin), do NOT make a new picture: use {"w":..,"same":true} with "kf", or put "kf" on the main itself.
  "kf": list of up to 4 camera keyframes [{"w": word index where the camera must ARRIVE, "fx": 0.1-0.9 horizontal position of the detail in the picture, "fy": 0.1-0.9 vertical position, "z": zoom 1.3-2.0}]. You cannot see the picture, so use typical composition: main subject near the centre, head/face upper-centre (fy~0.35), sky/top (fy~0.2), ground/bottom (fy~0.75), left/right side by the narrator's words. The camera glides (ease in/out) from keyframe to keyframe, following the narration. Use keyframes on most mains longer than 2 s and for every "look at this part" sentence; a wide establishing main may have none.
  Optional per main: "cam" (a camera move name from the catalogue, only when kf is not used), "trans" (transition INTO this main), "grade" (only if the mood truly changes), "tech": REQUIRED on every main: the catalogue number(s) you applied, e.g. "61,86". EVERY main must also move: give "kf" (preferred) or "cam"; every main except the first of the scene also needs "trans".
@@ -310,7 +310,7 @@ Read the scene sentence by sentence and clause by clause. Split it into BEATS: e
    - "place": "text_hi" = place name, "sub_hi" = small line (region/country). Only for a real, named place.
    - "year": "text_hi" = date/year/period exactly as spoken.
    - "bubble": "text_hi" (max 6 words) when someone's words are quoted.
-   - "note": SOURCE CAPTION shown on the empty side of the picture while the narrator tells a fact that one of the REAL SOURCES (listed below the rules) supports. Return {"w": word where the fact starts, "kind": "note", "src": "<paragraph id exactly as listed, e.g. 2.1>", "mark_en": "1-4 consecutive English words copied exactly from that paragraph that contain the fact being told"}. The engine prints the real source title and the real paragraph, with your marked words underlined in red. Whether or not the narrator says the source name, show it when that fact is told. Use a note about every second scene (max one per ~12 seconds, never two scenes in a row with the same paragraph), only if a listed paragraph really supports what is said; never invent a source, never write the text yourself. If no real sources are listed, use no notes.
+   - "note": SOURCE CAPTION shown on the empty side of the picture while the narrator tells a fact that one of the REAL SOURCES (listed below the rules) supports. Return {"w": word where the fact starts, "kind": "note", "src": "<paragraph id exactly as listed, e.g. 2.1>", "mark_en": "1-4 consecutive English words copied exactly from that paragraph that contain the fact being told"}. The engine prints the real source title and the real paragraph, with your marked words underlined in red. Whether or not the narrator says the source name, show it when that fact is told. Use a note on EVERY scene that tells an important fact (a number, name, claim, place) that a paragraph supports (at most one note per scene, a different paragraph from the previous scene where possible), only if a listed paragraph really supports what is said; never invent a source, never write the text yourself. If no real sources are listed, use no notes.
    - "title": "text_hi" (1-3 words), only for the single biggest reveal of the whole video.
    - NO "popup" stickers exist any more.
    Never two items on the same word. No item before its word.
@@ -378,11 +378,11 @@ def apply_special(sc, d):
     tr = d.get("terrain")
     if isinstance(tr, dict):
         try:
-            pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (tr.get("pins") or [])[:2]]
+            pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (tr.get("pins") or [])[:5]]
             regs = [{"label_hi": clean_short(r_.get("label_hi"), 20), "lat": float(r_["lat"]), "lon": float(r_["lon"])} for r_ in (tr.get("regions") or [])[:4]
                     if clean_short(r_.get("label_hi"), 20)]
-            ok_ = len(pins) == 2 and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins)
-            if ok_ and hav_km((pins[0]["lat"], pins[0]["lon"]), (pins[1]["lat"], pins[1]["lon"])) < 1500:
+            ok_ = len(pins) >= 2 and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins)
+            if ok_ and max(hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins) < 1500:
                 sc["type"], sc["map"], sc["headline_hi"] = "map", {"pins": pins, "route": True, "mode": "terrain", "regions": regs}, ""
                 return True
         except Exception:  # noqa
@@ -500,11 +500,99 @@ def _numbered(sc):
     return " ".join(f"{k}:{w}" for k, w in enumerate(wds))
 
 
+def sentence_ranges(wds):
+    """[(first word, end word)] per spoken sentence (very short ones are joined to a neighbour)."""
+    rs, a = [], 0
+    for k, w in enumerate(wds):
+        if w.rstrip("\"')”’").endswith(("।", "?", "!", ".")) or k == len(wds) - 1:
+            rs.append([a, k + 1])
+            a = k + 1
+    out = []
+    for r in rs:
+        if out and (out[-1][1] - out[-1][0]) < 4:
+            out[-1][1] = r[1]
+        else:
+            out.append(r)
+    if len(out) > 1 and (out[-1][1] - out[-1][0]) < 4:
+        out[-2][1] = out[-1][1]
+        out.pop()
+    return out
+
+
+def snap_to_sentences(scenes, topic=""):
+    """ONE picture or clip per spoken sentence: it starts with the sentence and stays exactly as long as the sentence lasts;
+    the next sentence gets the next picture/clip."""
+    need = []  # (scene index, new shot) that had no picture of its own
+    for i, sc in enumerate(scenes):
+        if sc.get("type") != "photo" or not sc.get("shots"):
+            continue
+        wds = sc["narration_hi"].split()
+        rng = sentence_ranges(wds)
+        starts, w = [], 0
+        for sh in sc["shots"]:
+            starts.append(w)
+            w += len(str(sh.get("text_hi") or "").split())
+        if w != len(wds) or len(rng) < 2:
+            continue
+        new = []
+        for (a, b) in rng:
+            inside = [k for k, st in enumerate(starts) if a <= st < b and (sc["shots"][k].get("prompt_en") or sc["shots"][k].get("clip_en") or sc["shots"][k].get("image"))]
+            if inside:
+                src, fresh = sc["shots"][inside[0]], False
+            else:
+                cov = max((k for k, st in enumerate(starts) if st <= a), default=0)
+                src, fresh = sc["shots"][cov], True
+            sh = dict(src)
+            sh["text_hi"] = " ".join(wds[a:b])
+            sh["kf"] = parse_kf([k_ for k_ in (src.get("kf") or []) if isinstance(k_, dict)], a, b, src.get("fx"), src.get("fy")) if not fresh else []
+            if fresh:
+                sh["prompt_en"] = ""  # filled below: this sentence needs its own picture
+                sh["motion"], sh["clip_en"] = False, ""
+                if new and new[-1].get("prompt_en") is not None:
+                    sh["trans"] = ""
+                need.append((i, len(new)))
+            new.append(sh)
+        sc["shots"] = new
+    # sentences without their own picture: ask for exactly what that sentence talks about
+    rows = [f'S{i}.{k}: {scenes[i]["shots"][k]["text_hi"]}' for i, k in need]
+    for a in range(0, len(rows), 12):
+        part = rows[a:a + 12]
+        prompt = f"""Hindi documentary sentences (topic: {topic}). For each sentence give the ONE picture that shows what that sentence talks about, in English:
+"query_en" (1-3 plain words for a real stock photo of the main thing named), "entity_en" (exact Wikipedia title if a specific named place/animal/thing, else ""), "prompt_en" (realistic description of that single subject), "clip_en" (subject + exact action like "lion drinking water" ONLY if the sentence describes a visible action, else "").
+Return ONLY JSON: {{"shots":[{{"id":"S0.1","query_en":"","entity_en":"","prompt_en":"","clip_en":""}}]}}
+""" + "\n".join(part)
+        try:
+            out = gemini_json(prompt, 0.2)
+        except Exception as e:  # noqa
+            log("sentence pictures failed:", str(e)[:100])
+            continue
+        for c in (out.get("shots") or []):
+            m_ = re.match(r"S(\d+)\.(\d+)$", str(c.get("id") or ""))
+            if not m_:
+                continue
+            i, k = int(m_.group(1)), int(m_.group(2))
+            if (i, k) not in need:
+                continue
+            sh = scenes[i]["shots"][k]
+            q_, pr_ = clean_short(c.get("query_en"), 50), clean_short(c.get("prompt_en"), 300)
+            if q_ or pr_:
+                sh["prompt_en"] = pr_ or ("a realistic cinematic photo of " + q_)
+                sh["query_en"], sh["entity_en"] = q_, clean_short(c.get("entity_en"), 70)
+                ce = clean_short(c.get("clip_en"), 40)
+                if ce and ce.isascii():
+                    sh["motion"], sh["clip_en"] = True, ce
+    return len(need)
+
+
 def director_extras(scenes, topic=""):
     """Second, narrow passes that GUARANTEE the signature techniques are tried on every scene that can use them
     (the big director prompt alone was skipping them): split-screen lists, 3D distance maps, real-source captions, camera keyframes."""
     ph = [(i, sc) for i, sc in enumerate(scenes) if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
-    stat = {"split": 0, "terrain": 0, "map": 0, "notes": 0, "kf": 0}
+    stat = {"split": 0, "terrain": 0, "map": 0, "notes": 0, "clips": 0, "kf": 0}
+    try:
+        stat["sentence_pics"] = snap_to_sentences(scenes, topic)
+    except Exception as e:  # noqa
+        log("snap_to_sentences failed:", type(e).__name__, str(e)[:100])
     # 1) split-screen / terrain: one short focused question per batch of scenes
     for a in range(0, len(ph), 4):
         batch = ph[a:a + 4]
@@ -512,8 +600,8 @@ def director_extras(scenes, topic=""):
         prompt = f"""Film editor task. Hindi narration, every word numbered (index:word). Video topic: {topic}
 For EACH scene decide ONLY these two things:
 (1) "split": the narrator names or lists 2 or 3 SEPARATE subjects in this scene (two animals, two cities, two universities, before/after...). Return a list of 2-3 {{"w": word index where that subject is first spoken (the first item's w may be its own word), "label_hi": "name as spoken", "query_en": "1-3 English words for a real photo of exactly it", "entity_en": "exact Wikipedia article title or empty", "prompt_en": "realistic photo of it"}}.
-(2) "terrain": the narrator names TWO real places that are less than ~1000 km apart (villages, cities, districts, parks) as a journey, distance or 'from X to Y'. Return {{"pins":[{{"label_hi":"..","lat":..,"lon":..}},{{"label_hi":"..","lon":..,"lat":..}}],"regions":[{{"label_hi":"..","lat":..,"lon":..}}]}} with CORRECT coordinates; never guess unknown places.
-(3) "map": the narrator names 1-3 real places (a named country/state/city/forest only: NOT "the world", "Earth", "planet" or "universe", which show a photo of Earth instead) (country, state, forest, city) where the story happens and no split/terrain applies. Return {{"pins":[{{"label_hi":"place as spoken","lat":..,"lon":..}}]}} with correct coordinates (never guess).
+(2) "terrain": the narrator names EXACTLY TWO real places (a start and an end: villages, cities, districts, parks, less than ~1000 km apart) as a journey, distance or 'from X to Y'. Return {{"pins":[{{"label_hi":"start place as spoken","lat":..,"lon":..}},{{"label_hi":"end place as spoken","lat":..,"lon":..}}],"regions":[{{"label_hi":"district/state around","lat":..,"lon":..}}]}} with CORRECT coordinates; never guess unknown places. (If the scene names THREE or more places use "map" below instead.)
+(3) "map": the narrator names 1-5 real places (a named country/state/city/forest only: NOT "the world", "Earth", "planet" or "universe", which show a photo of Earth instead) (country, state, forest, city) where the story happens and no split/terrain applies. Return {{"pins":[{{"label_hi":"place as spoken","lat":..,"lon":..}}]}} with correct coordinates (never guess).
 Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"terrain":null,"map":null}}]}}
 {listing}"""
         try:
@@ -537,10 +625,16 @@ Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[
                 stat["split" if sc["type"] == "multi" else "terrain"] += 1
             elif r.get("map") and isinstance(r["map"], dict) and stat["map"] < max(1, len(ph) // 3):
                 try:
-                    pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (r["map"].get("pins") or [])[:3]]
+                    pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (r["map"].get("pins") or [])[:5]]
                     if pins and not any(re.search(r"दुनिया|पृथ्वी|धरती|विश्व|संसार|ग्रह|brahm|ब्रह्मांड|world|earth|planet|universe", p_["label_hi"], re.I) for p_ in pins) and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins):
-                        far = len(pins) > 1 and max(hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins) > 2500
-                        sc["type"], sc["map"], sc["headline_hi"] = "map", {"pins": pins, "route": False, "mode": "globe" if far else "flat"}, ""
+                        spread = max([hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins] + [0])
+                        if len(pins) >= 3 and spread < 1500:  # several places close together: terrain background, pins in the order named, an arrow from each to the next
+                            mp_ = {"pins": pins, "route": True, "mode": "terrain", "regions": []}
+                        elif len(pins) >= 2:
+                            mp_ = {"pins": pins, "route": True, "mode": "globe" if spread > 2500 else "flat"}
+                        else:
+                            mp_ = {"pins": pins, "route": False, "mode": "flat"}
+                        sc["type"], sc["map"], sc["headline_hi"] = "map", mp_, ""
                         sc["directed"] = True
                         stat["map"] += 1
                 except Exception:  # noqa
@@ -552,7 +646,7 @@ Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[
         for a in range(0, len(ph), 6):
             batch = ph[a:a + 6]
             listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
-            prompt = f"""Hindi narration scenes (index:word) and REAL source paragraphs. Pick scenes where a paragraph REALLY states the same fact (same place/animal/number/claim). Never force a match: a paragraph about something else must not be used; an invented or fictional part of the story has no source.
+            prompt = f"""Hindi narration scenes (index:word) and REAL source paragraphs. Pick EVERY scene that tells an important fact (a number, a name, a claim, a place) where a paragraph REALLY states the same fact (same place/animal/number/claim). Never force a match: a paragraph about something else must not be used; an invented or fictional part of the story has no source.
 Return ONLY JSON: {{"matches":[{{"i": scene, "w": word index in the scene where the fact is spoken, "src": "paragraph id like 1.2", "mark_en": "the 1-6 words copied EXACTLY from that paragraph that state the fact"}}]}} (empty list if none).
 PARAGRAPHS:
 {paras}
@@ -574,13 +668,43 @@ SCENES:
                     continue
                 if any(isinstance(it, dict) and it.get("kind") == "note" for it in sc.get("items", [])):
                     continue
-                if i > 0 and any(isinstance(it, dict) and it.get("kind") == "note" for it in scenes[i - 1].get("items", [])):
-                    continue
                 mk = clean_short(m.get("mark_en"), 50)
                 if mk and mk.lower() not in sp_["text"].lower():
                     mk = ""
                 sc.setdefault("items", []).append({"w": w, "kind": "note", "text": sp_["text"], "mark": mk, "sub": sp_["title"].replace("|", "-")[:70]})
                 stat["notes"] += 1
+    # 2b) action clips: wherever the narrator describes a visible ACTION, that moment becomes a real video clip of exactly that action
+    if (PIXABAY_KEY or PEXELS_KEY):
+        for a in range(0, len(scenes), 4):
+            rows_ = []
+            for i in range(a, min(len(scenes), a + 4)):
+                sc = scenes[i]
+                if sc["type"] != "photo":
+                    continue
+                for k, sh in enumerate(sc.get("shots", [])):
+                    if str(sh.get("text_hi") or "").strip():
+                        rows_.append(f'S{i}.{k}: {sh["text_hi"]}')
+            if not rows_:
+                continue
+            prompt = f"""Hindi narration phrases of a nature documentary (topic: {topic}). For every phrase in which the narrator describes a visible ACTION or MOVEMENT (walking, running, hunting, eating, drinking, flying, swimming, roaring, resting, flowing water, fire, spinning...), give the English stock-footage search "subject + exact action" (1-4 words) that shows EXACTLY that action by that subject: chalna = "lion walking", daudna = "lion running", pani peena = "lion drinking water". Skip phrases that describe no visible action (facts, numbers, places, ideas).
+Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
+""" + "\n".join(rows_)
+            try:
+                out = gemini_json(prompt, 0.1)
+            except Exception as e:  # noqa
+                log("extras (clips) failed:", str(e)[:100])
+                continue
+            for c in (out.get("clips") or []):
+                m_ = re.match(r"S(\d+)\.(\d+)$", str(c.get("id") or ""))
+                q_ = clean_short(c.get("clip_en"), 40)
+                if not m_ or not q_ or not q_.isascii():
+                    continue
+                i, k = int(m_.group(1)), int(m_.group(2))
+                if 0 <= i < len(scenes) and scenes[i]["type"] == "photo" and 0 <= k < len(scenes[i].get("shots", [])):
+                    sh = scenes[i]["shots"][k]
+                    if not sh.get("clip"):
+                        sh["motion"], sh["clip_en"] = True, q_
+                        stat["clips"] += 1
     # 3) camera keyframes: every main that stays on screen for a while gets a visible camera glide on the part being spoken
     for i, sc in enumerate(scenes):
         if sc["type"] != "photo" or not sc.get("shots"):
@@ -639,7 +763,7 @@ def director_pass(scenes, topic=""):
     techs = sorted({t.strip() for sh in allsh for t in (sh.get("tech") or "").split(",") if t.strip().isdigit()}, key=int)
     nbeats = sum(len(sc.get("beats", [])) for sc in scenes)
     DIRECTOR_REPORT[0] = (f"Director: {ok}/{len(todo)} scenes planned | beats {nbeats} | keyframe moves {sum(1 for sh in allsh if sh.get('kf'))} | "
-                          f"transitions {sum(1 for sh in allsh if sh.get('trans'))} | cams {sum(1 for sh in allsh if sh.get('cam'))} | "
+                          f"video clips planned {sum(1 for sh in allsh if sh.get('motion') and sh.get('clip_en'))} | transitions {sum(1 for sh in allsh if sh.get('trans'))} | cams {sum(1 for sh in allsh if sh.get('cam'))} | "
                           f"split-screens {sum(1 for sc in scenes if sc.get('type') == 'multi' and sc.get('directed'))} | terrain maps {sum(1 for sc in scenes if sc.get('type') == 'map' and sc.get('directed'))} | "
                           f"source cards {sum(1 for sc in scenes if sc.get('type') == 'photo' for it in sc.get('items', []) if isinstance(it, dict) and it.get('kind') == 'note')} | "
                           f"techniques used: {', '.join(techs) or 'none'}")
@@ -805,7 +929,7 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 - "counter": one striking number counting up on screen (age, distance, size, speed, count). "counter": {"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "अरब साल पहले"} plus "headline_hi" (what the number is). The narration says the number in words.
 - "bars": compare 2-4 real sizes as animated bars. "bars": [{"label_hi": "पृथ्वी", "value": 12742, "unit_hi": "किमी"}, ...]. Same unit for all, rounded well-established values only.
 - "map": use whenever the narrator names a country, region, city, route, journey or migration. "map": {"mode": "flat", "route": false, "pins": [{"label_hi": "भारत", "lat": 22.0, "lon": 79.0}, ...]} (1-4 real places with correct latitude/longitude; route true draws an animated line through the pins in order, e.g. a journey or spread; mode "globe" for far-apart places). The narration says the place names.
-- "map" with mode "terrain" (BEST for a distance or "from this place to that place" within about 1000 km, e.g. two villages/cities/districts): a tilted satellite-style terrain map with big region names on the ground, two yellow place tags, an animated arrow between them and the distance written on it; the camera follows each point. Format: "map": {"mode": "terrain", "pins": [{"label_hi": "शरीफपुरा गाँव", "lat": 27.4, "lon": 79.6}, {"label_hi": "बिरपुर गाँव", "lat": 27.3, "lon": 79.5}], "regions": [{"label_hi": "फ़र्रुख़ाबाद", "lat": 27.4, "lon": 79.6}, {"label_hi": "मैनपुरी", "lat": 27.2, "lon": 79.0}]} where regions are the 2-4 districts/states/countries around the two places (centre lat/lon). Exactly 2 pins with correct coordinates; the narration names the first place, then the second, and says the distance. The distance is computed automatically.
+- "map" with mode "terrain" (BEST for a distance or "from this place to that place" within about 1000 km, e.g. two villages/cities/districts): a tilted satellite-style terrain map with big region names on the ground, two yellow place tags, an animated arrow between them and the distance written on it; the camera follows each point. Format: "map": {"mode": "terrain", "pins": [{"label_hi": "शरीफपुरा गाँव", "lat": 27.4, "lon": 79.6}, {"label_hi": "बिरपुर गाँव", "lat": 27.3, "lon": 79.5}], "regions": [{"label_hi": "फ़र्रुख़ाबाद", "lat": 27.4, "lon": 79.6}, {"label_hi": "मैनपुरी", "lat": 27.2, "lon": 79.0}]} where regions are the 2-4 districts/states/countries around the two places (centre lat/lon). Use terrain ONLY when exactly two places are named (a start and an end): the distance is computed automatically. When THREE OR MORE places are named in a row use terrain with 3-5 pins in the order named: no distance, just pins and an arrow from each place to the next on the same ground.
 - "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook and key insights.
 STYLE TARGET = a real documentary: use type "photo" for at least 80% of ALL scenes, because every photo scene is edited word by word with real pictures, camera keyframes, maps, dates and source cards by the director. Cartoon-style explainer cards (merge, split, steps, compare, bars) look cheap, so use them ONLY if a point truly cannot be shown with real pictures, and then at most one in the whole video. Use "counter" only for one really striking number, "map" whenever places/routes are named (this is the preferred explainer), "kinetic" at most once (the re-hook). Photo scenes should have 22-40 words of narration (several different subjects/details per scene give the director more to show).
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
@@ -951,8 +1075,8 @@ def validate_script(s, verbatim=False, min_scenes=None):
                     if -80 <= la <= 80 and -180 <= lo <= 180 and clean_short(rg.get("label_hi"), 20):
                         regs.append({"label_hi": clean_short(rg.get("label_hi"), 20), "lat": la, "lon": lo})
                 md = str(mp.get("mode"))
-                if md == "terrain" and len(pins) >= 2 and hav_km((pins[0]["lat"], pins[0]["lon"]), (pins[1]["lat"], pins[1]["lon"])) < 1500:
-                    sc["map"] = {"pins": pins[:2], "route": True, "mode": "terrain", "regions": regs}
+                if md == "terrain" and len(pins) >= 2 and max(hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins) < 1500:
+                    sc["map"] = {"pins": pins[:5], "route": True, "mode": "terrain", "regions": regs}
                 else:
                     sc["map"] = {"pins": pins, "route": bool(mp.get("route")) and len(pins) >= 2,
                                  "mode": "globe" if md == "globe" else "flat"}
@@ -1142,12 +1266,12 @@ def rescale_script(script, target_words):
 
 
 # --------------------------------------------------------------------------- voice
-TONES = {
-    "suspense": ("+6%", "-1Hz", "hushed but quick and gripping, with short tense pauses, like a true-crime documentary storyteller"),
-    "wonder": ("+10%", "+2Hz", "lively and full of wonder, confident storytelling with warmth and energy"),
-    "serious": ("+8%", "+0Hz", "serious, firm and grounded but brisk, weight on the key words"),
-    "excited": ("+15%", "+3Hz", "gripping, animated and fast, building momentum as the story turns, still controlled"),
-    "calm": ("+10%", "+1Hz", "calm yet energetic, confident and engaging, a quick documentary storyteller with crisp pauses between sentences"),
+TONES = {  # the scene tone still drives grading/camera, but the VOICE stays the same all video long
+    "suspense": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
+    "wonder": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
+    "serious": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
+    "excited": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
+    "calm": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
 }
 
 
@@ -1183,7 +1307,7 @@ def tts_gemini(text, out_path, tone=None):
     if gap < GEMINI_TTS_GAP:
         time.sleep(GEMINI_TTS_GAP - gap)
     style = TONES.get(tone or "", TONES["calm"])[2]
-    prompt = (f"Say in a calm but ENERGETIC, confident, warm male voice, quick and lively like a top Hindi YouTube documentary narrator (clearly fast, crisp, no drawn-out words, rising and falling with the meaning, a smile in the voice), never shouting or over-acting, "
+    prompt = (f"Say in ONE steady, calm, confident, warm male voice, at a brisk but comfortable pace like a good Hindi YouTube documentary narrator (not rushed), the SAME even emotion and energy in every sentence, never shouting, never acting out or changing mood, "
               f"{style}, with natural pauses at commas and full stops: {text}")
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
@@ -1709,40 +1833,99 @@ def first_frame_ok(path):
     return True
 
 
+def _stems(txt):
+    stop = {"the", "and", "with", "from", "into", "over", "for", "its"}
+    return {w[:4] for w in re.findall(r"[a-z]+", (txt or "").lower()) if len(w) > 2 and w not in stop}
+
+
+def _clip_frame_ok(path, query):
+    """The moving picture must show the thing that is spoken about: look at a frame from the middle of the clip."""
+    if VERIFY["off"] or not GEMINI_KEY:
+        return True
+    try:
+        d = ffprobe_dur(path)
+        fp = Path(str(path) + ".chk.png")
+        run(["ffmpeg", "-y", "-ss", f"{max(0.3, d / 2):.2f}", "-i", path, "-frames:v", "1", fp])
+        return verify_image(fp, query)
+    except Exception:  # noqa
+        return True
+
+
+def _download_clip(url, out, max_mb=60):
+    with requests.get(url, stream=True, timeout=90) as rr:
+        rr.raise_for_status()
+        n = 0
+        with open(out, "wb") as f:
+            for chunk in rr.iter_content(1 << 20):
+                n += len(chunk)
+                if n > max_mb << 20:
+                    raise RuntimeError("clip too big")
+                f.write(chunk)
+    return Path(out).exists() and Path(out).stat().st_size > 20000
+
+
 def pixabay_video(query, out):
-    """Real moving footage (free Pixabay video, commercial use allowed). Used only for shots where something moves."""
+    """Real moving footage (free Pixabay video). The clip's tags must contain the subject AND the action ('lion walking' must not give a running lion)."""
     if not PIXABAY_KEY or not query:
         return False
+    qs_ = _stems(query)
     hits = []
-    qs = [query[:90]] + ([query.split()[-1]] if len(query.split()) > 1 else [])
-    for q in qs:
-        r = requests.get("https://pixabay.com/api/videos/", params={"key": PIXABAY_KEY, "q": q, "per_page": 20, "safesearch": "true"}, timeout=30)
+    for q in [query[:90]] + ([query.split()[0]] if len(query.split()) > 1 else []):
+        r = requests.get("https://pixabay.com/api/videos/", params={"key": PIXABAY_KEY, "q": q, "per_page": 30, "safesearch": "true"}, timeout=30)
         if not r.ok:
             raise RuntimeError(f"Pixabay video HTTP {r.status_code}")
-        hits = [h for h in r.json().get("hits", []) if h.get("duration", 0) >= 3
-                and not ((BAD_TAGS | GREEN_TAGS) & tags_of(h)) and "green" not in h.get("tags", "").lower()]
+        for h in r.json().get("hits", []):
+            if h.get("duration", 0) < 3 or ((BAD_TAGS | GREEN_TAGS) & tags_of(h)) or "green" in h.get("tags", "").lower():
+                continue
+            sc_ = len(qs_ & _stems(h.get("tags", "")))
+            if sc_ >= max(1, min(len(qs_), 2)):  # subject and action both present whenever the query has both
+                hits.append((sc_, h))
         if hits:
             break
     if not hits:
         return False
-    random.shuffle(hits)
-    for h in hits[:4]:
+    hits.sort(key=lambda x: -x[0])
+    for _sc, h in hits[:5]:
         v = h.get("videos", {})
         pick = next((v[k] for k in ("medium", "large", "small") if v.get(k, {}).get("url")), None)
         if not pick:
             continue
-        with requests.get(pick["url"], stream=True, timeout=90) as rr:
-            rr.raise_for_status()
-            n = 0
-            with open(out, "wb") as f:
-                for chunk in rr.iter_content(1 << 20):
-                    n += len(chunk)
-                    if n > 60 << 20:
-                        raise RuntimeError("clip too big")
-                    f.write(chunk)
-        if Path(out).exists() and Path(out).stat().st_size > 20000 and first_frame_ok(out):
+        if _download_clip(pick["url"], out) and first_frame_ok(out) and _clip_frame_ok(out, query):
             return True
-        log("  clip rejected (green screen / bad), trying next")
+        log("  clip rejected (green screen / wrong subject), trying next")
+    return False
+
+
+def pexels_video(query, out):
+    """Second source of real footage: Pexels videos whose page title (url slug) names the subject and the action."""
+    if not PEXELS_KEY or not query:
+        return False
+    qs_ = _stems(query)
+    r = requests.get("https://api.pexels.com/videos/search", headers={"Authorization": PEXELS_KEY},
+                     params={"query": query, "per_page": 20, "orientation": "landscape"}, timeout=30)
+    if not r.ok:
+        return False
+    cands = []
+    for v in r.json().get("videos", []):
+        slug = (v.get("url") or "").rstrip("/").split("/")[-1].replace("-", " ")
+        sc_ = len(qs_ & _stems(slug))
+        files = [f for f in v.get("video_files", []) if f.get("file_type") == "video/mp4" and (f.get("width") or 0) >= 1280]
+        if v.get("duration", 0) >= 3 and files and sc_ >= max(1, min(len(qs_), 2)):
+            cands.append((sc_, sorted(files, key=lambda x: x["width"])[0]["link"]))
+    cands.sort(key=lambda x: -x[0])
+    for _sc, link in cands[:4]:
+        if _download_clip(link, out) and first_frame_ok(out) and _clip_frame_ok(out, query):
+            return True
+    return False
+
+
+def find_clip(query, out):
+    for fn in (pixabay_video, pexels_video):
+        try:
+            if fn(query, out):
+                return True
+        except Exception as e:  # noqa
+            log(f"  {fn.__name__} failed:", type(e).__name__, str(e)[:80])
     return False
 
 
@@ -3279,6 +3462,21 @@ def empty_side(img):
     return side
 
 
+def ov_spot(sh, spr, cands):
+    """Pick the screen spot (cx, cy) from cands where the overlay is farthest from the picture's main subject (face / body / object)."""
+    try:
+        if "subj" not in sh:
+            sh["subj"] = subject_center(sh["img"]) if sh.get("img") is not None else (0.5, 0.5)
+        sx, sy = sh["subj"][0] * W, sh["subj"][1] * H
+    except Exception:  # noqa
+        return cands[0]
+    def score(c):
+        dx = max(0.0, abs(c[0] - sx) - spr.width / 2) / W
+        dy = max(0.0, abs(c[1] - sy) - spr.height / 2) / H
+        return dx + dy
+    return max(cands, key=score)
+
+
 def draw_ov(fr, sh, tl, pal):
     ov = sh.get("ov")
     if not ov:
@@ -3303,17 +3501,20 @@ def draw_ov(fr, sh, tl, pal):
     q = e_back((tl - t0) / 0.4)
     a = cl((tl - t0) * 6) * (1 - cl((tl - (t1 - 0.25)) / 0.25))
     if ov["kind"] == "place":
-        cx, cy = 50 + spr.width / 2 - (1 - cl(q)) * 220, H - 70 - spr.height / 2
+        cx, cy = ov_spot(sh, spr, [(50 + spr.width / 2, H - 70 - spr.height / 2), (W - 50 - spr.width / 2, H - 70 - spr.height / 2),
+                                   (50 + spr.width / 2, 60 + spr.height / 2)])
+        cx -= (1 - cl(q)) * 220 * (1 if cx < W / 2 else -1)
     elif ov["kind"] == "title":
-        cx, cy = W / 2, H * 0.34
+        cx, cy = ov_spot(sh, spr, [(W / 2, H * 0.30), (W / 2, H * 0.80)])
         put(fr, spr, cx, cy, 1.18 - 0.18 * cl(q), a)
         return
     elif ov["kind"] == "year":
-        cx, cy = W / 2 - (1 - cl(q)) * 360, H - 40 - spr.height / 2
+        cx, cy = ov_spot(sh, spr, [(W / 2, H - 40 - spr.height / 2), (W / 2, 50 + spr.height / 2), (W * 0.2, H - 40 - spr.height / 2), (W * 0.8, H - 40 - spr.height / 2)])
+        cx -= (1 - cl(q)) * 360
         put(fr, spr, cx, cy, 1.0, a)
         return
     elif ov["kind"] == "bubble":
-        cx, cy = W - 60 - spr.width / 2 - 20, 70 + spr.height / 2
+        cx, cy = ov_spot(sh, spr, [(W - 80 - spr.width / 2, 70 + spr.height / 2), (80 + spr.width / 2, 70 + spr.height / 2)])
     elif ov["kind"] == "note":
         cx, cy = W - 30 - spr.width / 2, 40 + spr.height / 2 - (1 - cl(q)) * 160
     else:
@@ -3709,14 +3910,27 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
     np = _np()
     items = sc["items"][:3]
     n = len(items)
-    imgs = []
+    imgs, subj = [], []
     for it in items:
         try:
             im = Image.open(it["image"]).convert("RGB") if it.get("image") else Image.new("RGB", (W, H), (40, 40, 50))
         except Exception:  # noqa
             im = Image.new("RGB", (W, H), (40, 40, 50))
+        try:
+            subj.append(subject_center(im))
+        except Exception:  # noqa
+            subj.append((0.5, 0.5))
         sc_ = max(W * 1.25 / im.width, H * 1.25 / im.height)
         imgs.append(im.resize((int(im.width * sc_), int(im.height * sc_)), Image.LANCZOS))
+    for k in range(n):  # mirror a picture when that puts its subject nearer to the middle of its own panel (never lets a divider cut the subject)
+        vw0 = imgs[k].width / 1.25
+        want = (W * k / n + W * (k + 1) / n) / 2 / W * vw0
+        def err(fx):
+            ox_ = fx * imgs[k].width - want
+            return abs(ox_ - min(max(0.0, ox_), imgs[k].width - vw0))
+        if err(1 - subj[k][0]) + 1e-3 < err(subj[k][0]):
+            imgs[k] = ImageOps.mirror(imgs[k])
+            subj[k] = (1 - subj[k][0], subj[k][1])
     cards = [brush_card(it["label_hi"], pal) for it in items]
     # when each item is named
     ts = []
@@ -3751,8 +3965,11 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
             cw_, ch_ = W / (z * 1.25) * 1.25 / 1.25, H / z
             # crop window of the zoomed image (cover), slowly drifting
             vw, vh = im.width / (1.25 * z), im.height / (1.25 * z)
-            ox = (im.width - vw) / 2 + (0.06 * im.width) * (cl(tl_ / 6.0) - 0.5) * (1 if k % 2 == 0 else -1)
-            oy = (im.height - vh) / 2
+            # the crop is positioned so the SUBJECT (animal / person / object) sits in the middle of its own panel, never under a divider
+            pcx = (W * k / n + W * (k + 1) / n) / 2
+            ox = subj[k][0] * im.width - pcx / W * vw + (0.02 * im.width) * (cl(tl_ / 6.0) - 0.5) * (1 if k % 2 == 0 else -1)
+            ox = min(max(0.0, ox), im.width - vw)
+            oy = min(max(0.0, subj[k][1] * im.height - 0.46 * vh), im.height - vh)
             crop = im.crop((int(ox), int(oy), int(ox + vw), int(oy + vh))).resize((W, H), Image.BILINEAR)
             m = Image.new("L", (W, H), 0)
             ImageDraw.Draw(m).polygon([(xl + slant, 0), (xr + slant, 0), (xr - slant, H), (xl - slant, H)], fill=255)
@@ -3778,7 +3995,9 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
             cs = min(0.72, (pw - 30) / cards[k].width)
             cx = (max(dv[k], 0) + min(dv[k + 1], W)) / 2
             cx = min(max(cx, cards[k].width / 2 * cs + 8), W - cards[k].width / 2 * cs - 8)
-            put(fr, cards[k], cx, H - 110 + lerp(40, 0, e_out(q / 0.4)), cs * (0.9 + 0.1 * e_back(q / 0.5)), cl(q * 5))
+            top_ = subj[k][1] > 0.56  # subject sits low in its picture -> the label card goes to the top, otherwise to the bottom (never over the face/body)
+            cyk = (95 - lerp(40, 0, e_out(q / 0.4))) if top_ else (H - 95 + lerp(40, 0, e_out(q / 0.4)))
+            put(fr, cards[k], cx, cyk, cs * (0.9 + 0.1 * e_back(q / 0.5)), cl(q * 5))
         return fr.convert("RGB")
     return draw
 
@@ -3923,7 +4142,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
     two tagged places, an animated arc arrow between them and the distance written along it; the camera follows each point."""
     np = _np()
     m = sc["map"]
-    pins = m["pins"][:2]
+    pins = m["pins"][:5]
     pts = [(p["lat"], p["lon"]) for p in pins]
     regs = [dict(r) for r in (m.get("regions") or [])][:5]
     allp = pts + [(r["lat"], r["lon"]) for r in regs]
@@ -3949,7 +4168,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         names.append(None)
     def lon_lat_of(px, py):
         return lon0 + ((px - CW / 2) / sc_ + xc) / kx, lat0 - ((py - CH / 2) / sc_ + yc)
-    real = real_terrain_ground(pts, regs, CW, CH, to_px, lon_lat_of) if os.environ.get("REAL_MAP", "1") != "0" else None
+    real = real_terrain_ground(pts, regs, CW, CH, to_px, lon_lat_of) if os.environ.get("REAL_MAP", "0") == "1" else None
     if real:  # region names come from the real polygons that contain the named points
         img, polys = real
         for r_i, r_ in enumerate(regs):
@@ -3996,7 +4215,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
     for (cx, cy), nm in zip(centres, names):  # big region names lying on the ground
         if not nm:
             continue
-        for (px_, py_) in pp:  # keep the big name clear of the two tags
+        for (px_, py_) in pp:  # keep the big name clear of the tags
             dd = math.hypot(cx - px_, cy - py_)
             if dd < 330:
                 ux_, uy_ = ((cx - px_) / dd, (cy - py_) / dd) if dd > 1 else (0.0, -1.0)
@@ -4025,10 +4244,16 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
     def proj(x, y):
         v = Hm @ np.array([x, y, 1.0])
         return float(v[0] / v[2]), float(v[1] / v[2])
-    A_, B_ = proj(*pp[0]), proj(*pp[1])
-    ctl = ((A_[0] + B_[0]) / 2, (A_[1] + B_[1]) / 2 - (0.42 * math.hypot(B_[0] - A_[0], B_[1] - A_[1]) + 70))
-    arc = [((1 - f) ** 2 * A_[0] + 2 * (1 - f) * f * ctl[0] + f * f * B_[0], (1 - f) ** 2 * A_[1] + 2 * (1 - f) * f * ctl[1] + f * f * B_[1])
-           for f in [k / 70 for k in range(71)]]
+    P_ = [proj(*q) for q in pp]
+    NP = len(P_)
+    A_, B_ = P_[0], P_[1]
+
+    def make_arc(a_pt, b_pt):
+        c_ = ((a_pt[0] + b_pt[0]) / 2, (a_pt[1] + b_pt[1]) / 2 - (0.42 * math.hypot(b_pt[0] - a_pt[0], b_pt[1] - a_pt[1]) + 70))
+        return [((1 - f) ** 2 * a_pt[0] + 2 * (1 - f) * f * c_[0] + f * f * b_pt[0], (1 - f) ** 2 * a_pt[1] + 2 * (1 - f) * f * c_[1] + f * f * b_pt[1])
+                for f in [k / 70 for k in range(71)]]
+    arcs = [make_arc(P_[k], P_[k + 1]) for k in range(NP - 1)]
+    arc = arcs[0]
     km = hav_km(pts[0], pts[1])
     ktxt = (f"{km:.1f}" if km < 10 else f"{km:,.0f}") + " किमी दूर"
     mid_i = 38
@@ -4054,20 +4279,33 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         tg.alpha_composite(bx)
         tg.alpha_composite(lay, ((w_ - lay.width) // 2, (h_ - lay.height) // 2 - 1))
         tags.append(tg)
-    # --- timing: each place appears when it is named; the arrow runs between them
-    t1 = find_word_time(sc, pins[0]["label_hi"]) or 1.2
-    t2 = find_word_time(sc, pins[1]["label_hi"])
-    if t2 is None or t2 < t1 + 1.4:
-        t2 = t1 + 2.4
+    # --- timing: each place appears exactly when it is named; an arrow runs from each place to the next
+    tp_ = []
+    for k_, p_ in enumerate(pins):
+        t_ = find_word_time(sc, p_["label_hi"])
+        floor_ = (tp_[-1] + 1.4) if tp_ else 1.2
+        tp_.append(t_ if (t_ is not None and t_ >= floor_) else floor_ + (1.0 if tp_ else 0.0))
+    t1, t2 = tp_[0], tp_[1]
     t_arr0 = t1 + 0.5
     t_text = t2 + 0.15
-    events += [(0.2, "whoosh_soft", 0.8), (t1, "pop", 0.8), (t2, "pop", 0.8), (t_text, "ding", 0.7)]
+    events += [(0.2, "whoosh_soft", 0.8)] + [(t_, "pop", 0.8) for t_ in tp_] + ([(t_text, "ding", 0.7)] if NP == 2 else [])
     pin_img = pin_sprite(pal)
     ext = max(abs(A_[0] - B_[0]) * 1.6, abs(A_[1] - B_[1]) * 2.2, 160.0)
     z_far, z_near = 1.0, max(1.5, min(3.0, OW * 0.62 / ext))
     z_end = max(1.2, min(2.6, OW * 0.8 / ext))
-    kfs = [(0.0, z_far, OW / 2, OH / 2), (max(0.5, t1 - 0.7), z_near, A_[0], A_[1] - 40), (t_arr0 + 0.3, z_near, A_[0], A_[1] - 40),
-           (t2 - 0.1, z_near * 0.95, B_[0], B_[1] - 60), (max(t2 + 0.5, min(t2 + 2.0, dur - 0.4)), z_end, (A_[0] + B_[0]) / 2 - 40, (A_[1] + B_[1]) / 2 - 120)]
+    if NP == 2:
+        kfs = [(0.0, z_far, OW / 2, OH / 2), (max(0.5, t1 - 0.7), z_near, A_[0], A_[1] - 40), (t_arr0 + 0.3, z_near, A_[0], A_[1] - 40),
+               (t2 - 0.1, z_near * 0.95, B_[0], B_[1] - 60), (max(t2 + 0.5, min(t2 + 2.0, dur - 0.4)), z_end, (A_[0] + B_[0]) / 2 - 40, (A_[1] + B_[1]) / 2 - 120)]
+    else:  # several places: the camera follows every pin in turn, then pulls back to show them all
+        xs2, ys2 = [q[0] for q in P_], [q[1] for q in P_]
+        ext2 = max((max(xs2) - min(xs2)) * 1.5, (max(ys2) - min(ys2)) * 2.1, 200.0)
+        zq = max(1.2, min(2.4, OW * 0.8 / ext2))
+        z_pin = max(1.5, min(2.4, zq * 1.25))
+        kfs = [(0.0, z_far, OW / 2, OH / 2)]
+        for k_, q_ in enumerate(P_):
+            kfs.append((max(kfs[-1][0] + 0.3, tp_[k_] - 0.5), z_pin, q_[0], q_[1] - 50))
+            kfs.append((kfs[-1][0] + 0.9, z_pin, q_[0], q_[1] - 50))
+        kfs.append((max(kfs[-1][0] + 0.6, min(tp_[-1] + 2.0, dur - 0.4)), zq, (min(xs2) + max(xs2)) / 2, (min(ys2) + max(ys2)) / 2 - 100))
 
     def cam(t):
         if t <= kfs[0][0]:
@@ -4092,21 +4330,24 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
             return (x - l) * k, (y - tp) * k
         ov = Image.new("RGBA", (W, H), (0, 0, 0, 0))
         d = ImageDraw.Draw(ov)
-        prog = cl((t - t_arr0) / max(0.4, t2 - t_arr0 - 0.1))
-        n = int(prog * 70)
-        if n >= 1:
-            ptsl = [sp(*q) for q in arc[:n + 1]]
-            d.line(ptsl, fill=(255, 255, 255, 70), width=int(20 * k), joint="curve")
-            d.line(ptsl, fill=(255, 255, 255, 255), width=max(4, int(9 * k)), joint="curve")
-            (x1, y1), (x2, y2) = ptsl[-2] if len(ptsl) > 1 else ptsl[-1], ptsl[-1]
-            a_ = math.atan2(y2 - y1, x2 - x1)
-            hs = 34 * k
-            d.polygon([(x2 + math.cos(a_) * hs * 0.9, y2 + math.sin(a_) * hs * 0.9),
-                       (x2 + math.cos(a_ + 2.5) * hs, y2 + math.sin(a_ + 2.5) * hs),
-                       (x2 + math.cos(a_ - 2.5) * hs, y2 + math.sin(a_ - 2.5) * hs)], fill=(255, 255, 255, 255))
+        for li, arc_l in enumerate(arcs):
+            a0 = tp_[li] + 0.5
+            a1 = tp_[li + 1] - 0.1
+            prog = cl((t - a0) / max(0.4, a1 - a0))
+            n = int(prog * 70)
+            if n >= 1:
+                ptsl = [sp(*q) for q in arc_l[:n + 1]]
+                d.line(ptsl, fill=(255, 255, 255, 70), width=int(20 * k), joint="curve")
+                d.line(ptsl, fill=(255, 255, 255, 255), width=max(4, int(9 * k)), joint="curve")
+                (x1, y1), (x2, y2) = ptsl[-2] if len(ptsl) > 1 else ptsl[-1], ptsl[-1]
+                a_ = math.atan2(y2 - y1, x2 - x1)
+                hs = 34 * k
+                d.polygon([(x2 + math.cos(a_) * hs * 0.9, y2 + math.sin(a_) * hs * 0.9),
+                           (x2 + math.cos(a_ + 2.5) * hs, y2 + math.sin(a_ + 2.5) * hs),
+                           (x2 + math.cos(a_ - 2.5) * hs, y2 + math.sin(a_ - 2.5) * hs)], fill=(255, 255, 255, 255))
         fr = fr.convert("RGBA")
         fr.alpha_composite(ov)
-        for i, (pt_, tt) in enumerate(((A_, t1), (B_, t2))):
+        for i, (pt_, tt) in enumerate(zip(P_, tp_)):
             q = t - tt
             if q < 0:
                 continue
@@ -4116,7 +4357,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
             put(fr, soft_circle(22, (255, 255, 255), 0.5), x, y, ring * sz, 0.6 * (1 - (q % 1.4) / 1.4) * cl(q * 3))
             put(fr, pin_img, x, y - 10 * sz, sz * e_back(q / 0.4), cl(q * 6))
             put(fr, tags[i], x, y - (62 + lerp(-40, 0, e_out(q / 0.35))) * sz, sz, cl((q - 0.1) * 4))
-        if t > t_text:
+        if NP == 2 and t > t_text:  # distance is written only when exactly two places were named
             x, y = sp(*kpos)
             put(fr, ktxt_sp, x, y, max(0.7, min(1.4, k * 1.1)) * (0.9 + 0.1 * e_out(cl((t - t_text) / 0.4))), cl((t - t_text) * 4))
         return fr.convert("RGB")
@@ -4707,17 +4948,25 @@ def shuffle_thumb_font():
 
 
 def subject_center(im):
-    """Where the main subject is (centre of detail + colour), as fractions 0..1."""
+    """Where the main subject (animal / person / object) is, as fractions 0..1: pixels that differ from the typical background colour
+    and carry detail; the centre of the strongest area."""
     np = _np()
     small = im.convert("RGB").resize((128, 72))
-    g = np.asarray(small.convert("L"), dtype=np.float32)
+    a = np.asarray(small, dtype=np.float32)
+    g = a.mean(2)
     en = np.abs(np.diff(g, axis=1))[:-1, :] + np.abs(np.diff(g, axis=0))[:, :-1]
+    a2 = a[:-1, :-1]
+    border = np.concatenate([a2[:6].reshape(-1, 3), a2[-6:].reshape(-1, 3), a2[:, :6].reshape(-1, 3), a2[:, -6:].reshape(-1, 3)])
+    bg = np.median(border, axis=0)
+    dist = np.sqrt(((a2 - bg) ** 2).sum(2))
     sat = np.asarray(small.convert("HSV"), dtype=np.float32)[:-1, :-1, 1] / 255.0
-    wgt = en / (en.max() + 1e-6) + 0.5 * sat
+    wgt = 0.55 * dist / (dist.max() + 1e-6) + 0.30 * en / (en.max() + 1e-6) + 0.15 * sat
     yy, xx = np.mgrid[0:wgt.shape[0], 0:wgt.shape[1]].astype(np.float32)
-    wgt = wgt * np.exp(-(((xx / wgt.shape[1] - 0.5) / 0.6) ** 2 + ((yy / wgt.shape[0] - 0.5) / 0.7) ** 2))
-    tot = float(wgt.sum()) + 1e-6
-    return float((wgt * xx).sum() / tot / wgt.shape[1]), float((wgt * yy).sum() / tot / wgt.shape[0])
+    wgt = wgt * np.exp(-(((xx / wgt.shape[1] - 0.5) / 1.1) ** 2 + ((yy / wgt.shape[0] - 0.5) / 1.3) ** 2))
+    thr = np.percentile(wgt, 75)
+    m = np.where(wgt >= thr, wgt, 0.0)
+    tot = float(m.sum()) + 1e-6
+    return float((m * xx).sum() / tot / wgt.shape[1]), float((m * yy).sum() / tot / wgt.shape[0])
 
 
 def crop_to(path_or_img, size, cx_frac=None):
@@ -5179,7 +5428,7 @@ def cutout_sticker(path, maxside=360):
     return out
 
 
-CLIPS_MAX = [int(os.environ.get("MAX_CLIPS", "4" if TEST_SEC else "14"))]
+CLIPS_MAX = [int(os.environ.get("MAX_CLIPS", "8" if TEST_SEC else "30"))]
 POPUPS_MAX = [int(os.environ.get("MAX_POPUPS", "0"))]  # sticker pop-ups are off: every subject gets its own full-screen picture
 
 
@@ -5209,11 +5458,11 @@ def make_visuals(scenes, imgdir):
                             sh["popup_img"] = cutout_sticker(po)
                     except Exception as e:  # noqa
                         log("popup failed:", type(e).__name__, str(e)[:100])
-                if sh.get("motion") and sh.get("clip_en") and PIXABAY_KEY and CLIPS_MAX[0] > 0:
+                if sh.get("motion") and sh.get("clip_en") and (PIXABAY_KEY or PEXELS_KEY) and CLIPS_MAX[0] > 0:
                     CLIPS_MAX[0] -= 1
                     try:
                         cp = imgdir / f"{i:03d}_s{k}.mp4"
-                        if pixabay_video(sh["clip_en"], cp):
+                        if find_clip(english_search(sh["clip_en"]), cp):
                             fp = imgdir / f"{i:03d}_s{k}_clip.png"
                             run(["ffmpeg", "-y", "-i", cp, "-vf", "select=eq(n\\,10)", "-frames:v", "1", fp])
                             if not fp.exists():
@@ -5299,7 +5548,7 @@ def pipeline():
         if own_story:  # a full story is never cut to the short test length
             globals()["TEST_SEC"] = 0
             globals()["MAX_IMAGES"] = int(os.environ.get("MAX_IMAGES", "48"))
-            CLIPS_MAX[0], POPUPS_MAX[0] = int(os.environ.get("MAX_CLIPS", "14")), int(os.environ.get("MAX_POPUPS", "0"))
+            CLIPS_MAX[0], POPUPS_MAX[0] = int(os.environ.get("MAX_CLIPS", "30")), int(os.environ.get("MAX_POPUPS", "0"))
     else:
         cat, topic_en, topic_hi = pick_topic(done)
     style = random.choice(STYLES)
