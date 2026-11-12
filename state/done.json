@@ -291,6 +291,19 @@
    "voice": "edge (Gemini voice f",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-12T02:53:02+00:00",
+   "topic_en": "Why do stars 'twinkle' while planets do not?",
+   "title_hi": "तारे क्यों टिमटिमाते हैं और ग्रह क्यों नहीं?",
+   "category": "stars_universe",
+   "style": "imagine",
+   "theme": "sunrise",
+   "mood": "space",
+   "seconds": 37,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
