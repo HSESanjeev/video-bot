@@ -51,7 +51,7 @@ jobs:
           # nicer Hindi fonts (free, Google Fonts). If a download fails the bot uses the Noto font instead.
           mkdir -p fonts
           B=https://raw.githubusercontent.com/google/fonts/main/ofl
-          for f in mukta/Mukta-ExtraBold.ttf mukta/Mukta-Bold.ttf yatraone/YatraOne-Regular.ttf khand/Khand-Bold.ttf rozhaone/RozhaOne-Regular.ttf modak/Modak-Regular.ttf; do
+          for f in mukta/Mukta-ExtraBold.ttf mukta/Mukta-Bold.ttf yatraone/YatraOne-Regular.ttf khand/Khand-Bold.ttf rozhaone/RozhaOne-Regular.ttf modak/Modak-Regular.ttf ptserif/PT_Serif-Web-Bold.ttf specialelite/SpecialElite-Regular.ttf bebasneue/BebasNeue-Regular.ttf anton/Anton-Regular.ttf; do
             curl -fsSL --retry 2 -o "fonts/$(basename $f)" "$B/$f" || echo "font $f not downloaded"
           done
           ls -la fonts
