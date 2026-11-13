@@ -264,8 +264,8 @@ def gemini_json(prompt, temperature=0.8):
 
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
-ITEM_KINDS = {"bubble": 3.2, "note": 6.5, "place": 3.8, "year": 3.8, "title": 3.2}
-ITEM_SLOT = {"bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P"}
+ITEM_KINDS = {"bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0}
+ITEM_SLOT = {"bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P"}
 
 DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
 
@@ -301,6 +301,7 @@ Read the scene sentence by sentence and clause by clause. Split it into BEATS: e
  RULE A - NEW PICTURE FOR EVERY SUBJECT: whenever the narrator names a new thing (animal, plant, place, object, planet, phenomenon, material, body part, event) the screen shows a NEW full-screen real picture of exactly that thing, starting on that word. Do NOT use small stickers/overlays for objects. Typical main length 1.5-3.5 s; never keep a picture after the narrator moved to another subject.
  RULE B0 - THE REAL THING: when the narration is about a SPECIFIC named subject (a named forest/park/city/river/mountain, a named species such as "Asiatic lion", a named object, building, institution or event), give "entity_en": its exact real English name exactly as Wikipedia would title it (e.g. "Gir Forest National Park", "Asiatic lion", "Sundarbans", "Hubble Space Telescope"). The engine then fetches the REAL photograph of that exact thing from Wikipedia/Wikimedia. Use "" only for generic moments (fog, a path, hands).
  RULE B00 - WORLD/EARTH: when the narrator says duniya, prithvi, dharti, vishwa, world, Earth or planet, the picture is a real photo of planet Earth (entity_en "Earth", query_en "earth from space"), NEVER a map. A map is only for a named country, state, city, forest or route.
+ RULE B2 - ONLY REAL: never ask for or describe a cartoon, animation, 3D render, illustration, toy, statue, sculpture, mural or drawing. Every picture and clip is a REAL photograph / real camera footage of the real thing (a statue only if the narration is literally about a statue).
  RULE B - REAL FIRST: every new main MUST have "query_en": 1-3 plain English words that find a REAL stock photo of that exact thing (e.g. "african lion", "volcano eruption", "milky way", "coral reef"). Use the most common, concrete, photographable name; no adjectives like "powerful", no people, no text, no cut-outs, no green-screen. Also give "prompt_en": a cinematic realistic description of the same single subject (only used if no real photo exists).
  RULE C - VIDEO CLIP FOR EVERY ACTION: whenever the narrator describes something being DONE or MOVING (walking, running, hunting, eating, drinking, flying, swimming, roaring, flowing, erupting, burning, spinning, growing), that main is a real VIDEO CLIP of exactly that action: "motion": true and "clip_en" = subject + the exact action in English, e.g. "lion walking" for chalna, "lion running" for daudna, "elephant drinking water", "eagle flying", "waterfall". The clip must show what is said and nothing else. Use clips on every such moment (up to about half of the mains); still pictures only for things that are still (a place, an object, a fact). Never ask for green-screen/isolated footage.
  RULE D - PARTS OF A SUBJECT = CAMERA KEYFRAMES ON THE SAME PICTURE: when the narrator talks about a part/detail of the subject already on screen (eyes, claws, wings, crater, tail, skin), do NOT make a new picture: use {"w":..,"same":true} with "kf", or put "kf" on the main itself.
@@ -311,7 +312,12 @@ Read the scene sentence by sentence and clause by clause. Split it into BEATS: e
    - "year": "text_hi" = date/year/period exactly as spoken.
    - "bubble": "text_hi" (max 6 words) when someone's words are quoted.
    - "note": SOURCE CAPTION shown on the empty side of the picture while the narrator tells a fact that one of the REAL SOURCES (listed below the rules) supports. Return {"w": word where the fact starts, "kind": "note", "src": "<paragraph id exactly as listed, e.g. 2.1>", "mark_en": "1-4 consecutive English words copied exactly from that paragraph that contain the fact being told"}. The engine prints the real source title and the real paragraph, with your marked words underlined in red. Whether or not the narrator says the source name, show it when that fact is told. Use a note on EVERY scene that tells an important fact (a number, name, claim, place) that a paragraph supports (at most one note per scene, a different paragraph from the previous scene where possible), only if a listed paragraph really supports what is said; never invent a source, never write the text yourself. If no real sources are listed, use no notes.
-   - "title": "text_hi" (1-3 words), only for the single biggest reveal of the whole video.
+   - "title": "text_hi" (1-3 words): the name of the main character / subject when first introduced, or the biggest reveal (at most 2 per video).
+   - "year": may also carry "year_num" (the calendar year as a number, only when a real year 1000-2100 is spoken) and "month" (1-12 or null): the engine then slides a timeline to it.
+   - "person": a REAL, notable public person (scientist, author, leader) named for the first time: {"w", "kind": "person", "text_hi": "name as spoken", "entity_en": "exact English Wikipedia article title"}. Never for private people, victims, villagers or fictional characters.
+   - "stat": {"w", "kind": "stat", "text_hi": "1-3 words"} a striking short duration / number / count said for emphasis (e.g. "३ महीने", "४५ मिनट"), shown as huge red text.
+   - "verdict": {"w", "kind": "verdict", "text_hi": "", "circles": [{"query_en": "1-3 English words of a REAL photo", "mark": "cross" or "tick", "label_hi": "1-2 words"}]} (2-3 circles) when the narrator says what is false / true, a myth / fact, what did not happen / what did.
+   - "bubble" may carry "side": "left" or "right" = which of the two people on screen speaks (two people talking = two bubbles, first left, second right).
    - NO "popup" stickers exist any more.
    Never two items on the same word. No item before its word.
 Return JSON only: {"scenes":[{"i": <scene number>, "read": "<who is addressed + how it is said, 6 words>", "beats":[...], "mains":[...], "items":[...]}]}"""
@@ -374,6 +380,7 @@ def apply_special(sc, d):
         if len(items) >= 2:
             items[0]["t"] = 0.0
             sc["type"], sc["items"] = "multi", items[:3]
+            sc["vs"] = bool(d.get("vs")) and len(items) == 2  # old/new, before/after, myth/fact: red & black comparison with magnifier circles
             return True
     tr = d.get("terrain")
     if isinstance(tr, dict):
@@ -388,6 +395,32 @@ def apply_special(sc, d):
         except Exception:  # noqa
             pass
     return False
+
+
+def parse_year(it):
+    try:
+        yn = int(float(it.get("year_num")))
+        if not (1000 <= yn <= 2100):
+            return None, None
+        mo = it.get("month")
+        mo = int(mo) if mo not in (None, "", 0, "null") and 1 <= int(mo) <= 12 else None
+        return yn, mo
+    except Exception:  # noqa
+        return None, None
+
+
+def parse_verdict(w, it):
+    cs = []
+    for c in (it.get("circles") or [])[:3]:
+        if not isinstance(c, dict):
+            continue
+        q_ = clean_short(c.get("query_en"), 50)
+        if not q_ or not q_.isascii():
+            continue
+        cs.append({"query_en": q_, "mark": "tick" if str(c.get("mark")) == "tick" else "cross", "label": clean_short(c.get("label_hi"), 24)})
+    if len(cs) < 2:
+        return None
+    return {"w": w, "kind": "verdict", "text": "", "circles": cs}
 
 
 def apply_direction(sc, d):
@@ -448,9 +481,24 @@ def apply_direction(sc, d):
             sp_ = SRC_PARAS.get(str(it.get("src") or "").strip())
             if not sp_:
                 continue
-            rec = {"w": w, "kind": "note", "text": sp_["text"], "mark": clean_short(it.get("mark_en"), 50), "sub": sp_["title"].replace("|", "-")[:70]}
+            mk_ = clean_short(it.get("mark_en"), 50)
+            if mk_ and mk_.lower() not in sp_["text"].lower():
+                mk_ = ""
+            rec = {"w": w, "kind": "note", "text": sp_["text"], "mark": mk_, "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))}
             used.add((w, kind))
             items.append(rec)
+            continue
+        if kind == "verdict":
+            rec = parse_verdict(w, it)
+            if rec:
+                used.add((w, kind))
+                items.append(rec)
+            continue
+        if kind == "person":
+            ent_ = clean_short(it.get("entity_en"), 70)
+            if txt and ent_ and ent_.isascii():
+                used.add((w, kind))
+                items.append({"w": w, "kind": "person", "text": txt, "entity_en": ent_, "sub": ""})
             continue
         if kind == "popup":
             if not str(it.get("popup_en") or "").strip():
@@ -458,6 +506,12 @@ def apply_direction(sc, d):
             rec = {"w": w, "kind": kind, "popup_en": clean_short(it["popup_en"], 120)}
         elif txt:
             rec = {"w": w, "kind": kind, "text": txt, "mark": clean_short(it.get("mark_hi"), 30), "sub": clean_short(it.get("sub_hi"), 40)}
+            if kind == "year":
+                yn, mo = parse_year(it)
+                if yn:
+                    rec["year_num"], rec["month"] = yn, mo
+            if kind == "bubble" and str(it.get("side") or "") in ("left", "right"):
+                rec["side"] = str(it["side"])
         else:
             continue
         used.add((w, kind))
@@ -639,10 +693,10 @@ def director_extras(scenes, topic=""):
         listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
         prompt = f"""Film editor task. Hindi narration, every word numbered (index:word). Video topic: {topic}
 For EACH scene decide ONLY these two things:
-(1) "split": the narrator names or lists 2 or 3 SEPARATE subjects in this scene (two animals, two cities, two universities, before/after...). Return a list of 2-3 {{"w": word index where that subject is first spoken (the first item's w may be its own word), "label_hi": "name as spoken", "query_en": "1-3 English words for a real photo of exactly it", "entity_en": "exact Wikipedia article title or empty", "prompt_en": "realistic photo of it"}}.
+(1) "split": the narrator names or lists 2 or 3 SEPARATE subjects in this scene (two animals, two cities, two universities, before/after...). Add "vs": true next to "split" when it is exactly TWO subjects that are an explicit contrast (old vs new, before vs after, then vs now, myth vs fact, wrong vs right): the screen then becomes a bright-vs-red-black comparison. Return a list of 2-3 {{"w": word index where that subject is first spoken (the first item's w may be its own word), "label_hi": "name as spoken", "query_en": "1-3 English words for a real photo of exactly it", "entity_en": "exact Wikipedia article title or empty", "prompt_en": "realistic photo of it"}}.
 (2) "terrain": the narrator names EXACTLY TWO real places (a start and an end: villages, cities, districts, parks, less than ~1000 km apart) as a journey, distance or 'from X to Y'. Return {{"pins":[{{"label_hi":"start place as spoken","lat":..,"lon":..}},{{"label_hi":"end place as spoken","lat":..,"lon":..}}],"regions":[{{"label_hi":"district/state around","lat":..,"lon":..}}]}} with CORRECT coordinates; never guess unknown places. (If the scene names THREE or more places use "map" below instead.)
 (3) "map": the narrator names 1-5 real places (a named country/state/city/forest only: NOT "the world", "Earth", "planet" or "universe", which show a photo of Earth instead) (country, state, forest, city) where the story happens and no split/terrain applies. Return {{"pins":[{{"label_hi":"place as spoken","lat":..,"lon":..}}]}} with correct coordinates (never guess).
-Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"terrain":null,"map":null}}]}}
+Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"vs":false,"terrain":null,"map":null}}]}}
 {listing}"""
         try:
             out = gemini_json(prompt, 0.2)
@@ -687,7 +741,7 @@ Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[
             part, off = split_scene(scenes, sc, j0, j1), sc["sent"][j0][0]
         if kind == "split":
             lst_ = [dict(x, w=int(x.get("w", 0)) - off) for x in (r["split"] if isinstance(r["split"], list) else (r["split"].get("items") or [])) if isinstance(x, dict)]
-            ok_ = apply_special(part, {"split": lst_})
+            ok_ = apply_special(part, {"split": lst_, "vs": bool(r.get("vs"))})
         elif kind == "terrain":
             ok_ = apply_special(part, {"terrain": r["terrain"]})
         else:
@@ -744,7 +798,7 @@ SCENES:
                 mk = clean_short(m.get("mark_en"), 50)
                 if mk and mk.lower() not in sp_["text"].lower():
                     mk = ""
-                sc.setdefault("items", []).append({"w": w, "kind": "note", "text": sp_["text"], "mark": mk, "sub": sp_["title"].replace("|", "-")[:70]})
+                sc.setdefault("items", []).append({"w": w, "kind": "note", "text": sp_["text"], "mark": mk, "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))})
                 stat["notes"] += 1
     # 2b) action clips: wherever the narrator describes a visible ACTION, that moment becomes a real video clip of exactly that action
     if (PIXABAY_KEY or PEXELS_KEY):
@@ -795,8 +849,104 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
                     sh["tech"] = (sh.get("tech") or "") + ("," if sh.get("tech") else "") + "kf"
                     stat["kf"] += 1
             w0 = w1
+    try:
+        stat["overlays"] = overlay_pass(scenes, topic)
+    except Exception as e:  # noqa
+        log("overlay_pass failed:", type(e).__name__, str(e)[:100])
+    assign_note_styles(scenes)
     log("extras:", stat)
     return stat
+
+
+_NOTE_N = [0]
+
+
+def assign_note_styles(scenes):
+    """Every source card gets a different look in turn (banner / torn paper / dark text page / document page), so all styles appear in one video."""
+    order = SRC_STYLES[:]
+    if not _NOTE_N[0]:
+        random.shuffle(order)
+    rev = {v["text"]: v for v in SRC_PARAS.values()}
+    for sc in scenes:
+        for it in sc.get("items", []) if isinstance(sc.get("items"), list) else []:
+            if isinstance(it, dict) and it.get("kind") == "note":
+                if not it.get("style"):
+                    it["style"] = order[_NOTE_N[0] % len(order)]
+                    _NOTE_N[0] += 1
+                sp_ = rev.get(it.get("text"))
+                if sp_ and not it.get("dom"):
+                    it["dom"] = _dom(sp_.get("url", ""))
+
+
+def overlay_pass(scenes, topic=""):
+    """Narrow pass that GUARANTEES the reference-style helpers are tried: year slider, name card, big stat, round cross/tick pop-ups, speech bubbles."""
+    ph = [(i, sc) for i, sc in enumerate(scenes) if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
+    n_add = {"year": 0, "person": 0, "stat": 0, "verdict": 0, "bubble": 0, "title": 0}
+    for a in range(0, len(ph), 4):
+        batch = ph[a:a + 4]
+        listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
+        prompt = f"""Film editor task. Hindi narration, every word numbered (index:word). Video topic: {topic}
+For EACH scene choose the on-screen helpers the story really calls for (empty list when none; never force; at most 2 per scene; never two on the same word; each exactly on the word where it is spoken):
+- "year": a date / year / period is spoken. {{"w":..,"kind":"year","text_hi":"as spoken","year_num":1984 or null,"month":12 or null}}. year_num ONLY when a real calendar year 1000-2100 is spoken (month only when a month is spoken).
+- "person": a REAL, notable public person (scientist, researcher, author, leader, historical figure) is named for the first time. {{"w":..,"kind":"person","text_hi":"name as spoken","entity_en":"exact English Wikipedia article title"}}. NEVER for private people, victims, villagers, fictional or story characters.
+- "title": the main character / subject of a story is introduced by name for the first time (also private people). {{"w":..,"kind":"title","text_hi":"1-3 words"}} (at most one per video).
+- "stat": a striking short duration / number / count said for emphasis ("३ महीने", "४५ मिनट", "दस हज़ार"). {{"w":..,"kind":"stat","text_hi":"1-3 words"}}
+- "verdict": the narrator says what is false / true, a myth / fact, what did NOT happen / what did. {{"w":..,"kind":"verdict","text_hi":"","circles":[{{"query_en":"1-3 English words for a REAL photo","mark":"cross" or "tick","label_hi":"1-2 words"}}]}} with 2-3 circles.
+- "bubble": the narrator quotes what a person said. {{"w":..,"kind":"bubble","text_hi":"the quoted words, max 6","side":"left" or "right"}} (two speakers: first left, second right).
+Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
+{listing}"""
+        try:
+            out = gemini_json(prompt, 0.2)
+        except Exception as e:  # noqa
+            log("overlay pass failed:", str(e)[:100])
+            continue
+        for r in (out.get("scenes") or []):
+            try:
+                i = int(r.get("i"))
+            except Exception:  # noqa
+                continue
+            if not (0 <= i < len(scenes)) or not any(i == j for j, _ in batch):
+                continue
+            sc = scenes[i]
+            nwd = len(sc["narration_hi"].split())
+            have = sc.setdefault("items", [])
+            for it in (r.get("items") or [])[:2]:
+                if not isinstance(it, dict):
+                    continue
+                kind = str(it.get("kind") or "")
+                try:
+                    w = int(it.get("w"))
+                except Exception:  # noqa
+                    continue
+                if kind not in ("year", "person", "title", "stat", "verdict", "bubble") or not (0 <= w < nwd):
+                    continue
+                if any(isinstance(x, dict) and abs(x.get("w", -9) - w) < 4 and x.get("kind") == kind for x in have) or any(isinstance(x, dict) and x.get("w") == w for x in have):
+                    continue
+                if kind == "title" and (n_add["title"] >= 1 or any(isinstance(x, dict) and x.get("kind") == "title" for sc2 in scenes for x in (sc2.get("items") or []))):
+                    continue
+                txt = clean_short(it.get("text_hi"), 40)
+                rec = None
+                if kind == "verdict":
+                    rec = parse_verdict(w, it)
+                elif kind == "person":
+                    ent_ = clean_short(it.get("entity_en"), 70)
+                    if txt and ent_ and ent_.isascii():
+                        rec = {"w": w, "kind": "person", "text": txt, "entity_en": ent_, "sub": ""}
+                elif txt:
+                    rec = {"w": w, "kind": kind, "text": txt, "mark": "", "sub": ""}
+                    if kind == "year":
+                        yn, mo = parse_year(it)
+                        if yn:
+                            rec["year_num"], rec["month"] = yn, mo
+                    if kind == "bubble" and str(it.get("side") or "") in ("left", "right"):
+                        rec["side"] = str(it["side"])
+                if rec:
+                    have.append(rec)
+                    n_add[kind] += 1
+            have.sort(key=lambda x: x.get("w", 0) if isinstance(x, dict) else 0)
+            del have[12:]
+    log("overlay pass added:", n_add)
+    return n_add
 
 
 def director_pass(scenes, topic=""):
@@ -910,7 +1060,58 @@ def trim_words(t, n=36):
     return cut[:k + 1] if k > len(cut) * 0.5 else cut.rstrip(",;:") + "."
 
 
-def collect_sources(max_src=8):
+def wiki_sources(topic, extra_text="", want=6):
+    """Wikipedia articles that document the topic (plain-text paragraphs, always reachable): a guaranteed supply of REAL source text."""
+    import html as _html
+    titles = []
+    if GEMINI_KEY:
+        try:
+            out = gemini_json(f"Topic / story: {topic}\n{extra_text[:1500]}\nList up to 5 EXACT English Wikipedia article titles that document the real facts, people, places or studies behind this (no guesses: only articles that surely exist). "
+                              'Return ONLY JSON: {"titles": ["..."]}', 0.1)
+            titles = [str(t).strip() for t in (out.get("titles") or []) if str(t).strip().isascii()][:5]
+        except Exception as e:  # noqa
+            log("  wiki title suggestion failed:", str(e)[:80])
+    if topic and topic.isascii():
+        titles.append(topic[:80])
+    got = 0
+    seen = {x["url"] for x in SRC_LIST}
+    for t in titles:
+        if got >= want:
+            break
+        try:
+            r = requests.get("https://en.wikipedia.org/w/api.php", headers=WIKI_UA, timeout=25, params={
+                "action": "query", "format": "json", "redirects": 1, "generator": "search", "gsrsearch": t, "gsrlimit": 1,
+                "prop": "extracts|info", "explaintext": 1, "exsectionformat": "plain", "inprop": "url"})
+            pg = list(((r.json().get("query") or {}).get("pages") or {}).values())
+            if not pg:
+                continue
+            pg = pg[0]
+            url = pg.get("fullurl") or ""
+            if not url or url in seen:
+                continue
+            paras = []
+            for para in (pg.get("extract") or "").split("\n"):
+                para = re.sub(r"\s+", " ", para).strip()
+                nw = len(para.split())
+                if 25 <= nw <= 160 and sum(c.isascii() and c.isalpha() for c in para) > 0.75 * len(para):
+                    paras.append(trim_words(para))
+                if len(paras) >= 6:
+                    break
+            if not paras:
+                continue
+            title = "Wikipedia - " + str(pg.get("title", t))[:70]
+            k = len(SRC_LIST) + 1
+            SRC_LIST.append({"title": title, "url": url})
+            seen.add(url)
+            for j, para in enumerate(paras, 1):
+                SRC_PARAS[f"{k}.{j}"] = {"title": title, "url": url, "text": para}
+            got += 1
+        except Exception as e:  # noqa
+            log("  wikipedia source failed:", type(e).__name__)
+    return got
+
+
+def collect_sources(max_src=12, topic="", story=""):
     """Open the pages the web-search research was grounded on and keep their REAL paragraphs for on-screen source captions."""
     import html as _html
     SRC_PARAS.clear()
@@ -929,9 +1130,9 @@ def collect_sources(max_src=8):
             for m in re.findall(r"<p[^>]*>(.*?)</p>", h, re.S | re.I):
                 t = _html.unescape(_strip_html(m))
                 nw = len(t.split())
-                if 25 <= nw <= 140 and sum(c.isascii() and c.isalpha() for c in t) > 0.7 * len(t) and "cookie" not in t.lower():
+                if 25 <= nw <= 140 and sum(c.isascii() and c.isalpha() for c in t) > 0.7 * len(t) and "cookie" not in t.lower() and "subscribe" not in t.lower() and "javascript" not in t.lower():
                     paras.append(trim_words(t))
-                if len(paras) >= 4:
+                if len(paras) >= 7:
                     break
             if not paras:
                 continue
@@ -941,6 +1142,12 @@ def collect_sources(max_src=8):
                 SRC_PARAS[f"{k}.{j}"] = {"title": title, "url": r.url, "text": t}
         except Exception as e:  # noqa
             log("  source page failed:", type(e).__name__)
+    if len(SRC_LIST) < 4 and (topic or story):
+        try:
+            n_ = wiki_sources(topic, story)
+            log(f"  Wikipedia fallback added {n_} source articles")
+        except Exception as e:  # noqa
+            log("  wiki fallback failed:", type(e).__name__, str(e)[:80])
     log(f"real sources collected: {len(SRC_LIST)} pages, {len(SRC_PARAS)} paragraphs")
 
 
@@ -1597,6 +1804,16 @@ FONT_NAMES = {
     "head": ["YatraOne-Regular.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
     "title": ["Khand-Bold.ttf", "YatraOne-Regular.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
     "thumb": ["Mukta-ExtraBold.ttf", "Hind-Bold.ttf", "Mukta-Bold.ttf"],
+    "serif": ["PT_Serif-Web-Bold.ttf", "PTSerif-Bold.ttf"],
+    "type": ["SpecialElite-Regular.ttf"],
+    "cond": ["BebasNeue-Regular.ttf", "Anton-Regular.ttf", "Khand-Bold.ttf"],
+    "comic": ["Bangers-Regular.ttf"],
+}
+SYS_ROLE = {  # Latin-only fallbacks when the nicer font could not be downloaded
+    "serif": ["/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", "/usr/share/fonts/**/NotoSerif-Bold.ttf", "/usr/share/fonts/**/LiberationSerif-Bold.ttf"],
+    "type": ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", "/usr/share/fonts/**/LiberationMono-Bold.ttf"],
+    "cond": ["/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"],
+    "comic": ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"],
 }
 SYS_FONTS = [
     "/usr/share/fonts/truetype/noto/NotoSansDevanagari-Bold.ttf",
@@ -1617,6 +1834,10 @@ def font_path(role):
         for d in (ROOT / "fonts", Path("fonts")):
             if (d / name).exists():
                 return str(d / name)
+    for pat in SYS_ROLE.get(role, []):
+        hits = sorted(glob.glob(pat, recursive=True))
+        if hits:
+            return hits[0]
     for pat in SYS_FONTS:
         hits = sorted(glob.glob(pat, recursive=True))
         if hits:
@@ -1913,7 +2134,7 @@ def pexels_photo(query, out, size=(1920, 1080)):
         return False
     qw = norm_words(query)
     ph = r.json()["photos"]
-    good = [x for x in ph if qw & norm_words(x.get("alt") or "")]  # the photo's own description must mention the thing
+    good = [x for x in ph if qw & norm_words(x.get("alt") or "") and not unreal(x.get("alt") or "", query)]  # the photo's own description must mention the thing
     if not good:
         return False
     fit_image(requests.get(good[0]["src"]["large2x"], timeout=60).content, out, size)
@@ -1933,7 +2154,8 @@ def verify_image(path, subject):
         buf = io.BytesIO()
         im.save(buf, "JPEG", quality=80)
         VERIFY["n"] += 1
-        txt, _t = gemini(f'Look at this picture. Is "{subject}" clearly the main thing shown (not a different animal, object or place that merely looks similar)? '
+        txt, _t = gemini(f'Look at this picture. Is "{subject}" clearly the main thing shown, as a REAL photograph (not a different animal, object or place that merely looks similar)? '
+                         "Answer NO if the picture is a cartoon, animation, 3D render, drawing, painting, toy, statue, sculpture, carving or mural, unless the subject itself is such a thing. "
                          "Answer with one word: YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
         ok = not txt.strip().upper().startswith("NO")
         if not ok:
@@ -1948,6 +2170,21 @@ def verify_image(path, subject):
 
 BAD_TAGS = {"man", "woman", "people", "girl", "boy", "child", "children", "person", "portrait", "model", "baby", "couple", "family",
             "face", "lady", "men", "women", "kid", "kids", "student", "crowd", "wedding", "bride", "text", "logo"}
+
+
+UNREAL_RE = re.compile(r"\b(cartoon\w*|animat\w*|3d|render\w*|cgi|illustrat\w*|vector|clipart|clip art|drawing|sketch|painting|statue\w*|sculpt\w*|figurine\w*|toy|toys|"
+                       r"mascot\w*|emoji|comic\w*|anime|pixar|disney|lego|puppet\w*|doll|dolls|miniature\w*|plush|monument\w*|carving\w*|idol|idols|mural\w*|graffiti|motion graphic\w*|"
+                       r"stock footage animation|loop|looping|abstract)\b", re.I)
+
+
+def unreal(text, query=""):
+    """True when a stock result's tags / title / slug say it is a cartoon, animation, 3D render, statue, toy... (unless the thing we search for IS such a thing)."""
+    t = (text or "").replace("-", " ").replace("_", " ")
+    hits = {m.group(0).lower() for m in UNREAL_RE.finditer(t)}
+    if not hits:
+        return False
+    q = (query or "").lower()
+    return not all(h in q for h in hits)
 
 
 GREEN_TAGS = {"green screen", "greenscreen", "chroma", "chroma key", "chromakey", "green background", "alpha", "transparent", "overlay"}
@@ -2007,7 +2244,8 @@ def _clip_judge(path, query):
         strip.save(buf, "JPEG", quality=80)
         VERIFY["n"] += 1
         txt, _t = gemini(f'These {len(frames)} frames (left to right) come from ONE stock video clip. We need a clip of: "{query}". '
-                         "Answer with exactly one word: MATCH (the clip shows that subject doing that action), SUBJECT (right subject but the action is different or unclear), or NO (a different subject).",
+                         "The clip must be REAL live-action camera footage. Answer NO if it is a cartoon, animation, 3D render, toy, puppet, statue, sculpture, drawing or any other non-real imitation (unless the query itself asks for that). "
+                         "Answer with exactly one word: MATCH (the clip shows that subject doing that action), SUBJECT (right subject but the action is different or unclear), or NO (a different subject or not real footage).",
                          temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
         t_ = txt.strip().upper()
         return 2 if t_.startswith("MATCH") else 0 if t_.startswith("NO") else 1
@@ -2039,7 +2277,7 @@ def _clip_cands_pixabay(query):
         if not r.ok:
             raise RuntimeError(f"Pixabay video HTTP {r.status_code}")
         for h in r.json().get("hits", []):
-            if h.get("id") in seen or h.get("duration", 0) < 3 or ((BAD_TAGS | GREEN_TAGS) & tags_of(h)) or "green" in h.get("tags", "").lower():
+            if h.get("id") in seen or h.get("duration", 0) < 3 or ((BAD_TAGS | GREEN_TAGS) & tags_of(h)) or "green" in h.get("tags", "").lower() or unreal(h.get("tags", ""), query):
                 continue
             seen.add(h.get("id"))
             tg = _stems(h.get("tags", ""))
@@ -2063,7 +2301,10 @@ def _clip_cands_pexels(query):
     if not r.ok:
         return res
     for v in r.json().get("videos", []):
-        slug = _stems((v.get("url") or "").rstrip("/").split("/")[-1].replace("-", " "))
+        slug_txt = (v.get("url") or "").rstrip("/").split("/")[-1].replace("-", " ")
+        if unreal(slug_txt, query):
+            continue
+        slug = _stems(slug_txt)
         files = [f for f in v.get("video_files", []) if f.get("file_type") == "video/mp4" and (f.get("width") or 0) >= 1280]
         if v.get("duration", 0) >= 3 and files and (not subj or subj & slug):
             res.append((len(qs_ & slug), sorted(files, key=lambda x: x["width"])[0]["link"]))
@@ -2173,7 +2414,7 @@ def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
             if not r.ok:
                 raise RuntimeError(f"Pixabay HTTP {r.status_code}")
             hits = [h for h in r.json().get("hits", []) if not ((BAD_TAGS | GREEN_TAGS) & tags_of(h))
-                    and "green" not in h.get("tags", "").lower()]
+                    and "green" not in h.get("tags", "").lower() and not unreal(h.get("tags", ""), query)]
             if hits:
                 break
         if hits:
@@ -2283,7 +2524,7 @@ def wiki_real_photo(query, out, size):
             if tw_ and qw_ and not (tw_ <= qw_ or qw_ <= tw_ or len(tw_ & qw_) >= max(1, min(len(tw_), len(qw_)) - 0)):
                 continue  # article is about something else (e.g. "lion and rabbit" must not give the Miniature Lion Lop rabbit breed)
             if o.get("source") and (o.get("width") or 0) >= 1000 and (o.get("width") or 1) / (o.get("height") or 1) >= 1.15 \
-                    and o["source"].lower().split("?")[0].endswith((".jpg", ".jpeg", ".png")) and not any(b in o["source"].lower() for b in BAD_TITLE):
+                    and o["source"].lower().split("?")[0].endswith((".jpg", ".jpeg", ".png")) and not any(b in o["source"].lower() for b in BAD_TITLE) and not unreal(o["source"].rsplit("/", 1)[-1], q) and not unreal(pg.get("title", ""), q):
                 cands.append((o["source"], pg.get("title", q), "", "see Wikipedia", pg.get("fullurl", "")))
     except Exception as e:  # noqa
         log("  wikipedia lookup failed:", type(e).__name__)
@@ -2298,7 +2539,7 @@ def wiki_real_photo(query, out, size):
             meta = ii.get("extmetadata", {})
             if ii.get("mime") not in ("image/jpeg", "image/png") or (ii.get("width") or 0) < 1400 or (ii.get("width") or 1) / (ii.get("height") or 1) < 1.3:
                 continue
-            if any(b in title.lower() for b in BAD_TITLE) or not _lic_ok(meta):
+            if any(b in title.lower() for b in BAD_TITLE) or not _lic_ok(meta) or unreal(title, q):
                 continue
             cands.append((ii.get("thumburl") or ii.get("url"), title, _strip_html(meta.get("Artist", {}).get("value")),
                           meta.get("LicenseShortName", {}).get("value", ""), ii.get("descriptionurl", "")))
@@ -3512,8 +3753,12 @@ def ov_sprite(kind, text, mark, pal):
         d.polygon([(46, h), (28, h + 54), (96, h)], fill=(0, 0, 0, 255))
         d.rounded_rectangle([10, 10, w - 2, h - 2], radius=30, fill=(255, 252, 240, 255))
         d.polygon([(54, h - 4), (36, h + 44), (88, h - 4)], fill=(255, 252, 240, 255))
-        big.alpha_composite(lay, (4 + (w - lay.width) // 2, 4 + (h - lay.height) // 2))
-        sp = big.rotate(random.choice([-3, 3]), expand=True, resample=Image.BICUBIC)
+        if mark == "R":  # tail on the right: the speaker stands to the right of the bubble (only the SHAPE is mirrored, never the letters)
+            big = ImageOps.mirror(big)
+            big.alpha_composite(lay, (26 + (w - lay.width) // 2, 4 + (h - lay.height) // 2))
+        else:
+            big.alpha_composite(lay, (4 + (w - lay.width) // 2, 4 + (h - lay.height) // 2))
+        sp = big.rotate(-2 if mark == "R" else 2, expand=True, resample=Image.BICUBIC)
     elif kind in ("note", "note0", "note_u"):  # SOURCE caption: plain text straight on the picture (no paper), discussed phrase underlined in red
         body, _, src = text.rpartition("|")
         if not body:
@@ -3618,6 +3863,688 @@ def ov_sprite(kind, text, mark, pal):
     return sp
 
 
+# =========================================================================== V2 OVERLAYS
+# Source cards in 4 styles (banner / torn paper / dark text page / document page), sliding year timeline, person name card with real photo,
+# round pop-ups with cross / tick, big red stat text.  Every card is drawn from REAL page text only (never written by the bot).
+SRC_STYLES = ["banner", "paper", "dark", "doc"]
+V2_KINDS = ("note", "year", "person", "stat", "verdict")
+OV_MAXT = {"place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0}
+_BLACK = {}
+
+
+def _ascii(s):
+    import unicodedata
+    s = (s or "").replace("\u2014", "-").replace("\u2013", "-").replace("\u2018", "'").replace("\u2019", "'").replace("\u201c", '"').replace("\u201d", '"')
+    return re.sub(r"\s+", " ", unicodedata.normalize("NFKD", s).encode("ascii", "ignore").decode()).strip()
+
+
+def _dom(url):
+    try:
+        from urllib.parse import urlparse
+        d = urlparse(url).netloc.lower()
+        return d[4:] if d.startswith("www.") else d
+    except Exception:  # noqa
+        return ""
+
+
+def font_for(text, size, role):
+    """English text may use the fancy Latin fonts; Hindi text always uses a Devanagari font."""
+    if role in ("serif", "type", "cond", "comic") and not all(ord(c) < 0x250 for c in (text or "")):
+        role = "title"
+    return load_font(size, role)
+
+
+def _norm_tok(w):
+    return re.sub(r"[^\w]+", "", (w or "").lower())
+
+
+def _mark_idx(words, mark):
+    mt = [_norm_tok(x) for x in (mark or "").split() if _norm_tok(x)]
+    if not mt:
+        return set()
+    nw = [_norm_tok(w) for w in words]
+    n = len(mt)
+    for i in range(len(nw) - n + 1):
+        if nw[i:i + n] == mt:
+            return set(range(i, i + n))
+    s = set(mt)
+    return {i for i, w in enumerate(nw) if w in s and len(w) > 2}
+
+
+def _flow(probe, body, font, maxw, max_lines=99):
+    words = body.split()
+    sp = probe.textlength(" ", font=font)
+    lines, cur, x = [], [], 0.0
+    for i, w in enumerate(words):
+        ww = probe.textlength(w, font=font)
+        if cur and x + ww > maxw:
+            lines.append(cur)
+            cur, x = [], 0.0
+        cur.append((i, w, x, ww))
+        x += ww + sp
+    if cur:
+        lines.append(cur)
+    return lines[:max_lines], sp
+
+
+def _paper(w, h, base=(243, 235, 213), seed=0, grain=9):
+    np = _np()
+    rng = np.random.RandomState(seed)
+    n = rng.normal(0, grain, (h, w, 1)).astype("float32")
+    low = np.asarray(Image.fromarray((rng.rand(h // 24 + 2, w // 24 + 2) * 255).astype("uint8")).resize((w, h), Image.BICUBIC), "float32")[..., None] / 255.0
+    arr = np.array(base, "float32")[None, None, :] + n + (low - 0.5) * 24
+    yy, xx = np.mgrid[0:h, 0:w]
+    edge = np.minimum(np.minimum(xx, w - 1 - xx), np.minimum(yy, h - 1 - yy)).astype("float32")
+    arr *= (0.88 + 0.12 * np.clip(edge / 46, 0, 1))[..., None]
+    return Image.fromarray(np.clip(arr, 0, 255).astype("uint8")).convert("RGBA")
+
+
+def _torn_mask(w, h, amp=7, step=9, seed=0):
+    rng = random.Random(seed)
+    m = amp + 2
+
+    def edge(p0, p1, nrm):
+        n = max(2, int(math.hypot(p1[0] - p0[0], p1[1] - p0[1]) // step))
+        out = []
+        for k in range(n):
+            t = k / n
+            j = rng.uniform(-amp, amp)
+            out.append((p0[0] + (p1[0] - p0[0]) * t + nrm[0] * j, p0[1] + (p1[1] - p0[1]) * t + nrm[1] * j))
+        return out
+    pts = edge((m, m), (w - m, m), (0, 1)) + edge((w - m, m), (w - m, h - m), (1, 0)) + edge((w - m, h - m), (m, h - m), (0, 1)) + edge((m, h - m), (m, m), (1, 0))
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).polygon(pts, fill=255)
+    return mask.filter(ImageFilter.GaussianBlur(0.7))
+
+
+def _with_shadow(img, off=(7, 11), blur=10, alpha=0.55, pad=26):
+    out = Image.new("RGBA", (img.width + 2 * pad, img.height + 2 * pad), (0, 0, 0, 0))
+    sh = Image.new("RGBA", out.size, (0, 0, 0, 255))
+    sh.putalpha(Image.new("L", out.size, 0))
+    a = Image.new("L", out.size, 0)
+    a.paste(img.getchannel("A"), (pad + off[0], pad + off[1]))
+    sh.putalpha(a.filter(ImageFilter.GaussianBlur(blur)).point(lambda v: int(v * alpha)))
+    out.alpha_composite(sh)
+    out.alpha_composite(img, (pad, pad))
+    return out
+
+
+def _tape(w=110, h=34, ang=-6):
+    t = Image.new("RGBA", (w, h), (236, 226, 170, 200))
+    d = ImageDraw.Draw(t)
+    for x in range(0, w, 6):
+        d.line([(x, 0), (x, h)], fill=(255, 255, 255, 40), width=1)
+    return t.rotate(ang, expand=True, resample=Image.BICUBIC)
+
+
+class SrcCard:
+    """A source card: bg art + text layer + highlight runs that are 'drawn' (wiped) left to right while the narrator speaks."""
+
+    def __init__(self, bg, text, runs, hl_fn, extra=None, rot=0.0, behind=None):
+        self.bg, self.text, self.runs, self.hl_fn, self.extra, self.rot, self.behind = bg, text, runs, hl_fn, extra, rot, behind
+        self.w, self.h = bg.size
+        self._c = {}
+
+    def frame(self, p, extra_q=0.0):
+        key = (int(round(cl(p) * 14)), int(round(cl(extra_q) * 5)))
+        if key in self._c:
+            return self._c[key]
+        im = self.bg.copy()
+        if p > 0.001 and self.runs:
+            lay = Image.new("RGBA", im.size, (0, 0, 0, 0))
+            d = ImageDraw.Draw(lay)
+            total = sum(r[2] - r[0] for r in self.runs) or 1.0
+            done, cum = p * total, 0.0
+            for r in self.runs:
+                w_ = r[2] - r[0]
+                part = cl((done - cum) / max(1.0, w_))
+                cum += w_
+                if part <= 0:
+                    break
+                self.hl_fn(d, (r[0], r[1], r[0] + w_ * part, r[3]), part)
+            im.alpha_composite(lay)
+        im.alpha_composite(self.text)
+        if self.extra is not None and extra_q > 0.01:
+            ex = self.extra
+            if extra_q < 0.99:
+                ex = ex.copy()
+                ex.putalpha(ex.getchannel("A").point(lambda v: int(v * extra_q)))
+            im.alpha_composite(ex)
+        if abs(self.rot) > 0.01:
+            im = im.rotate(self.rot, expand=True, resample=Image.BICUBIC)
+        if len(self._c) > 24:
+            self._c.clear()
+        self._c[key] = im
+        return im
+
+
+def _draw_words(dt, lines, f, x0, y0, lh, fill, stroke=0, stroke_fill=(0, 0, 0, 255)):
+    """Draw laid-out words; returns the baseline y of every line."""
+    bases = []
+    y = y0
+    for ln in lines:
+        base = y + int(f.size * 1.05)
+        for (_i, w, x, _ww) in ln:
+            dt.text((x0 + x, base), w, font=f, fill=fill, anchor="ls", stroke_width=stroke, stroke_fill=stroke_fill)
+        bases.append(base)
+        y += lh
+    return bases
+
+
+def _fit_text(probe, body, mark, font, maxw, max_lines):
+    """Shorten the paragraph (never the marked phrase) so it fits max_lines; the cut is shown with an ellipsis."""
+    words = body.split()
+    lines, _ = _flow(probe, body, font, maxw)
+    if len(lines) <= max_lines:
+        return body
+    idx = _mark_idx(words, mark)
+    a, b = 0, len(words)
+    need_hi = (max(idx) + 1) if idx else 0
+    while b > max(need_hi, 6):
+        b -= 1
+        txt = " ".join(words[a:b]) + ("\u2026" if b < len(words) else "")
+        if len(_flow(probe, txt, font, maxw)[0]) <= max_lines:
+            return ("\u2026 " if a else "") + txt
+    while a < (min(idx) if idx else 0) and a < len(words) - 6:  # the marked phrase is far in: drop words from the front instead
+        a += 1
+        txt = "\u2026 " + " ".join(words[a:b])
+        if len(_flow(probe, txt, font, maxw)[0]) <= max_lines:
+            return txt
+    return " ".join(words[a:b])
+
+
+def _runs_of(lines, idx, x0, y0, lh, size, pad=4):
+    runs = []
+    for li, ln in enumerate(lines):
+        a = b = None
+        for (i, _w, x, ww) in ln:
+            if i in idx:
+                a = x if a is None else a
+                b = x + ww
+            elif a is not None:
+                runs.append((x0 + a - pad, y0 + li * lh + 2, x0 + b + pad, y0 + li * lh + lh - 2))
+                a = b = None
+        if a is not None:
+            runs.append((x0 + a - pad, y0 + li * lh + 2, x0 + b + pad, y0 + li * lh + lh - 2))
+    return runs
+
+
+def _wavy(d, x0, x1, y, col, wd=5):
+    pts = [(xx, y + 2.0 * math.sin(xx / 9.0)) for xx in range(int(x0), int(x1) + 1, 4)]
+    if len(pts) > 1:
+        d.line(pts, fill=col, width=wd, joint="curve")
+
+
+def _hl_underline(d, r, part):
+    _wavy(d, r[0], r[2], r[3] - 4, (232, 28, 40, 255), 5)
+
+
+def _hl_marker(d, r, part):
+    d.rounded_rectangle([r[0], r[1] + 3, r[2], r[3] - 3], radius=5, fill=(255, 224, 40, 175))
+    _wavy(d, r[0], r[2], r[3] - 2, (225, 30, 40, 255), 4)
+
+
+def _hl_band(d, r, part):
+    d.rounded_rectangle([r[0] - 2, r[1] + 2, r[2] + 2, r[3] - 2], radius=3, fill=(206, 24, 46, 235))
+
+
+def build_card(style, body, title, dom, mark):
+    key = (style, body, title, dom, mark)
+    if key in _CARDS:
+        return _CARDS[key]
+    if len(_CARDS) > 8:
+        _CARDS.clear()
+    body, title = _ascii(body), _ascii(title)[:110]
+    mark = _ascii(mark)
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    if style == "banner":
+        fT, fB, fG = font_for("A", 33, "cond"), font_for("A", 28, "serif"), font_for("A", 24, "cond")
+        maxw = W - 150
+        body = _fit_text(probe, body, mark, fB, maxw, 3)
+        words = body.split()
+        idx = _mark_idx(words, mark)
+        lines, _sp = _flow(probe, body, fB, maxw, 3)
+        lh = int(fB.size * 1.5)
+        tag = ("SOURCE: " + dom.upper()) if dom else "SOURCE"
+        tw_ = probe.textlength(tag, font=fG)
+        head_h = 40
+        t_lines = wrap_text(probe, title.upper(), fT, maxw)[:2] if title else []
+        h = 70 + head_h + len(t_lines) * 40 + len(lines) * lh + 36
+        bg = Image.new("RGBA", (W, h), (0, 0, 0, 0))
+        g = Image.linear_gradient("L").resize((W, h)).point(lambda v: int(min(1.0, v / 150.0) ** 1.3 * 215))
+        scr = Image.new("RGBA", (W, h), (0, 0, 0, 255))
+        scr.putalpha(g)
+        bg.alpha_composite(scr)
+        text = Image.new("RGBA", (W, h), (0, 0, 0, 0))
+        dt = ImageDraw.Draw(text)
+        y = 70
+        dt.rounded_rectangle([60, y, 60 + tw_ + 30, y + head_h - 6], radius=6, fill=(214, 28, 40, 255))
+        dt.text((75, y + head_h - 13), tag, font=fG, fill=(255, 255, 255, 255), anchor="ls")
+        y += head_h
+        for tl_ in t_lines:
+            dt.text((62, y + 28), tl_, font=fT, fill=(255, 255, 255, 255), anchor="ls", stroke_width=2, stroke_fill=(0, 0, 0, 255))
+            y += 40
+        y += 6
+        _draw_words(dt, lines, fB, 62, y, lh, (255, 255, 255, 255), 2)
+        runs = _runs_of(lines, idx, 62, y, lh, fB.size)
+        card = SrcCard(bg, text, runs, _hl_underline)
+    elif style == "dark":
+        fT, fB, fG = font_for("A", 44, "serif"), font_for("A", 30, "serif"), font_for("A", 26, "cond")
+        maxw = 760
+        body = _fit_text(probe, body, mark, fB, maxw, 7)
+        words = body.split()
+        idx = _mark_idx(words, mark)
+        lines, _sp = _flow(probe, body, fB, maxw, 8)
+        lh = int(fB.size * 1.55)
+        t_lines = wrap_text(probe, "Source: " + title, fT, maxw)[:3] if title else ["Source"]
+        h = 40 + len(t_lines) * 56 + (36 if dom else 0) + 18 + len(lines) * lh + 40
+        bg = Image.new("RGBA", (maxw + 80, h), (0, 0, 0, 0))
+        text = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+        dt = ImageDraw.Draw(text)
+        y = 30
+        for tl_ in t_lines:
+            dt.text((40, y + 44), tl_, font=fT, fill=(255, 255, 255, 255), anchor="ls")
+            y += 56
+        if dom:
+            dt.text((42, y + 26), dom.upper(), font=fG, fill=(255, 196, 60, 255), anchor="ls")
+            y += 36
+        dt.line([(42, y + 6), (maxw, y + 6)], fill=(255, 255, 255, 90), width=2)
+        y += 24
+        _draw_words(dt, lines, fB, 40, y, lh, (236, 228, 214, 255))
+        runs = _runs_of(lines, idx, 40, y, lh, fB.size)
+        card = SrcCard(bg, text, runs, _hl_band)
+    elif style == "paper":
+        fT, fB = font_for("A", 27, "serif"), font_for("A", 25, "serif")
+        maxw = 580
+        body = _fit_text(probe, body, mark, fB, maxw, 7)
+        words = body.split()
+        idx = _mark_idx(words, mark)
+        lines, _sp = _flow(probe, body, fB, maxw, 8)
+        lh = int(fB.size * 1.62)
+        t_lines = wrap_text(probe, "Source: " + title, fT, maxw)[:3] if title else ["Source"]
+        ph = 56 + len(t_lines) * 36 + 34 + len(lines) * lh + 52
+        pw = maxw + 100 + 200  # the right margin is kept free for the clipped photo
+        paper = _paper(pw, ph, seed=len(body))
+        paper.putalpha(_torn_mask(pw, ph, 7, 9, seed=len(title) + 3))
+        bg = _with_shadow(paper)
+        text = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+        dt = ImageDraw.Draw(text)
+        ox, oy = 26 + 50, 26 + 40
+        y = oy
+        for tl_ in t_lines:
+            dt.text((ox, y + 28), tl_, font=fT, fill=(60, 42, 26, 255), anchor="ls")
+            y += 36
+        dt.line([(ox, y + 6), (ox + maxw, y + 6)], fill=(196, 30, 40, 255), width=3)
+        y += 30
+        _draw_words(dt, lines, fB, ox, y, lh, (48, 36, 28, 255))
+        runs = _runs_of(lines, idx, ox, y, lh, fB.size, 5)
+        ex = None
+        if runs:
+            r0 = max(runs, key=lambda r: r[2] - r[0]) if len(runs) > 1 else runs[0]
+            if (r0[2] - r0[0]) < 300:
+                ex = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+                ImageDraw.Draw(ex).ellipse([r0[0] - 12, r0[1] - 5, r0[2] + 12, r0[3] + 5], outline=(210, 28, 38, 255), width=4)
+                ex = ex.rotate(-2, resample=Image.BICUBIC, center=((r0[0] + r0[2]) / 2, (r0[1] + r0[3]) / 2))
+        card = SrcCard(bg, text, runs, _hl_marker, extra=ex, rot=-2.4)
+    else:  # "doc": a document page with typewriter text and a yellow highlighter, a second page behind it
+        fT, fB, fH = font_for("A", 36, "serif"), font_for("A", 27, "type"), font_for("A", 20, "type")
+        maxw = 780
+        body = _fit_text(probe, body, mark, fB, maxw, 8)
+        words = body.split()
+        idx = _mark_idx(words, mark)
+        lines, _sp = _flow(probe, body, fB, maxw, 9)
+        lh = int(fB.size * 1.6)
+        t_lines = wrap_text(probe, title, fT, maxw)[:2] if title else []
+        ph = 54 + (30 if dom else 0) + len(t_lines) * 46 + 26 + len(lines) * lh + 50
+        pw = maxw + 120
+        page = _paper(pw, ph, base=(240, 238, 230), seed=len(body) + 5, grain=6)
+        page.putalpha(Image.new("L", (pw, ph), 255))
+        back = _paper(pw, ph, base=(226, 224, 214), seed=7, grain=6)
+        bd = ImageDraw.Draw(back)
+        for yy in range(50, ph - 30, 26):
+            bd.rectangle([60, yy, 60 + int((pw - 120) * (0.55 + 0.4 * ((yy * 37) % 10) / 10)), yy + 9], fill=(150, 150, 146, 255))
+        back = _with_shadow(back.rotate(4.2, expand=True, resample=Image.BICUBIC, fillcolor=(0, 0, 0, 0)), pad=10)
+        pg = _with_shadow(page, pad=20)
+        sz = (pg.width + 90, pg.height + 60)
+        bg = Image.new("RGBA", sz, (0, 0, 0, 0))
+        bg.alpha_composite(back, (sz[0] - back.width, sz[1] - back.height - 6))
+        bg.alpha_composite(pg, (10, 22))
+        text = Image.new("RGBA", sz, (0, 0, 0, 0))
+        dt = ImageDraw.Draw(text)
+        ox, oy = 10 + 20 + 60, 22 + 20 + 34
+        y = oy
+        if dom:
+            dt.text((ox, y + 16), dom.upper() + "  |  SOURCE DOCUMENT", font=fH, fill=(110, 108, 100, 255), anchor="ls")
+            y += 30
+        for tl_ in t_lines:
+            dt.text((ox, y + 34), tl_, font=fT, fill=(20, 20, 20, 255), anchor="ls")
+            y += 46
+        dt.line([(ox, y + 8), (ox + maxw, y + 8)], fill=(30, 30, 30, 200), width=2)
+        y += 26
+        _draw_words(dt, lines, fB, ox, y, lh, (34, 34, 34, 255))
+        runs = _runs_of(lines, idx, ox, y, lh, fB.size, 4)
+        card = SrcCard(bg, text, runs, _hl_marker, rot=-1.6)
+    _CARDS[key] = card
+    return card
+
+
+_CARDS = {}
+
+
+def _dim(fr, k):
+    if k <= 0.01:
+        return
+    b = _BLACK.get(fr.size)
+    if b is None:
+        b = _BLACK[fr.size] = Image.new("RGB", fr.size, (0, 0, 0))
+    fr.paste(Image.blend(fr, b, min(0.9, k)))
+
+
+def _vignette_dim(fr, k):
+    _dim(fr, k)
+
+
+def draw_note(fr, ps, tl, ov, t0, t1, a):
+    it = ov.get("it") or {}
+    style = it.get("style") or "banner"
+    body = it.get("text") or ov.get("text", "").rpartition("|")[0] or ov.get("text", "")
+    title, dom = it.get("sub") or "", it.get("dom") or ""
+    card = build_card(style, body, title, dom, it.get("mark") or ov.get("mark", ""))
+    p = e_out(cl((tl - t0 - 0.55) / 1.15))
+    q = e_out(cl((tl - t0) / 0.55))
+    if style == "banner":
+        spr = card.frame(p)
+        put(fr, spr, W / 2, H - spr.height / 2 + (1 - q) * spr.height * 0.3, 1.0, a)
+    elif style == "paper":
+        _dim(fr, 0.52 * a)
+        spr = card.frame(p, cl((p - 0.8) / 0.2))
+        x = W / 2 + (-1 + e_back((tl - t0) / 0.6)) * 420
+        put(fr, spr, x, H * 0.5, 0.97 + 0.03 * q, a)
+        ph_ = ps.get("img")
+        if ph_ is not None:  # polaroid of the current picture drops into the free margin of the card, like a clipped photo
+            pol = _polaroid(ph_)
+            qq = e_back((tl - t0 - 0.35) / 0.55)
+            put(fr, pol, x + spr.width * 0.5 - 128, H * 0.5 - spr.height * 0.10 - (1 - cl(qq)) * 360, 0.62 + 0.38 * cl(qq), a)
+    elif style == "dark":
+        _dim(fr, 0.66 * a)
+        spr = card.frame(p)
+        side = ov.get("side") or "right"
+        cx = W * (0.30 if side == "left" else 0.70)
+        put(fr, spr, min(max(cx, spr.width / 2 + 24), W - spr.width / 2 - 24), H * 0.5 + (1 - q) * 30, 1.0, a)
+    else:
+        _dim(fr, 0.6 * a)
+        spr = card.frame(p)
+        push = 1.0 + 0.05 * cl((tl - t0) / max(1.0, t1 - t0))
+        put(fr, spr, W / 2, H * 0.5 + (1 - q) * 40, (0.93 + 0.07 * q) * push * min(1.0, (W - 60) / spr.width, (H - 30) / spr.height) if spr.width > W - 60 or spr.height > H - 30 else (0.93 + 0.07 * q) * push, a)
+
+
+def _polaroid(img, w=250, h=300):
+    key = ("pol", id(img))
+    if key in _CARDS:
+        return _CARDS[key]
+    ph = ImageOps.fit(img.convert("RGB"), (w, h), centering=(0.5, 0.38))
+    fr = Image.new("RGBA", (w + 24, h + 52), (250, 248, 242, 255))
+    fr.paste(ph, (12, 12))
+    fr = _with_shadow(fr, (5, 8), 8, 0.5, 16)
+    tp = _tape()
+    fr.alpha_composite(tp, (fr.width // 2 - tp.width // 2, 2))
+    out = fr.rotate(5, expand=True, resample=Image.BICUBIC)
+    _CARDS[key] = out
+    return out
+
+
+# ---- year slider (ticks slide in, label sits above the pointer dot)
+def _tick_step(y):
+    return 1 if y >= 2000 else 2 if y >= 1900 else 5 if y >= 1800 else 10 if y >= 1500 else 50 if y >= 1000 else 100
+
+
+def draw_timeline(fr, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    y = it.get("year_num")
+    label = ov.get("text") or ""
+    sc_ = it.get("year_num")
+    step = _tick_step(int(y))
+    frac = 0.0
+    if it.get("month"):
+        try:
+            frac = (int(it["month"]) - 0.5) / 12.0
+        except Exception:  # noqa
+            frac = 0.0
+    target = float(y) + frac
+    spacing = 215.0
+    s = e_out(cl((tl - t0) / 1.2))
+    cur = target - (1 - s) * 3.3 * step
+    base_y = H - 62
+    g = _TL_SCRIM.get("g")
+    if g is None:
+        gh = 230
+        gr = Image.new("RGBA", (W, gh), (0, 0, 0, 255))
+        gr.putalpha(Image.linear_gradient("L").resize((W, gh)).point(lambda v: int(v * 0.72)))
+        g = _TL_SCRIM["g"] = gr
+    put(fr, g, W / 2, H - g.height / 2, 1.0, a)
+    ov_im = Image.new("RGBA", (W, 150), (0, 0, 0, 0))
+    d = ImageDraw.Draw(ov_im)
+    cy = 100
+    d.line([(0, cy), (W, cy)], fill=(255, 255, 255, int(200 * a)), width=3)
+    first = int(math.floor((cur - 3.6 * step) / step) * step)
+    f_t = font_for("A", 30, "cond")
+    k = first
+    while k <= cur + 3.6 * step:
+        x = W / 2 + (k - cur) / step * spacing
+        edge = 1 - cl((abs(x - W / 2) - 330) / 300)
+        if 0 <= x <= W and edge > 0.02:
+            al = int(235 * a * edge)
+            d.line([(x, cy - 16), (x, cy + 16)], fill=(255, 255, 255, al), width=3)
+            txt = str(k)
+            tw_ = d.textlength(txt, font=f_t)
+            d.text((x - tw_ / 2, cy + 22), txt, font=f_t, fill=(255, 255, 255, int(220 * a * edge)))
+        k += step
+    # pointer dot + label
+    d.ellipse([W / 2 - 9, cy - 9, W / 2 + 9, cy + 9], fill=(255, 255, 255, int(255 * a)))
+    ov_im2 = ov_im
+    lab = _TL_LAB.get(label)
+    if lab is None:
+        lab = _TL_LAB[label] = text_layer(label, font_for(label, 60, "title"), fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(0, 3, 5, 0.7))
+    fr.paste(ov_im2, (0, H - 150 - 0), ov_im2)
+    la = a * cl((tl - t0 - 0.35) / 0.4)
+    put(fr, lab, W / 2, H - 150 + cy - 52 - lab.height / 2 + (1 - e_out(cl((tl - t0 - 0.35) / 0.4))) * 18, 1.0, la)
+
+
+_TL_SCRIM, _TL_LAB = {}, {}
+
+
+# ---- person name card (real photo from Wikipedia + name plate)
+def person_sprite(name, photo, sub=""):
+    key = ("person", name, sub, id(photo))
+    if key in _CARDS:
+        return _CARDS[key]
+    f = font_for(name, 56, "title")
+    lay = text_layer(name, f, fill=(255, 214, 0), shadow=(0, 3, 4, 0.7))
+    pw_ = max(lay.width + 80, 300)
+    ph_ = lay.height + 26
+    plate = Image.new("RGBA", (pw_, ph_), (0, 0, 0, 0))
+    gr = Image.composite(Image.new("RGB", (pw_, ph_), (10, 40, 150)), Image.new("RGB", (pw_, ph_), (38, 120, 255)), Image.linear_gradient("L").resize((pw_, ph_)))
+    pm = Image.new("L", (pw_, ph_), 0)
+    ImageDraw.Draw(pm).polygon([(22, 0), (pw_, 0), (pw_ - 22, ph_), (0, ph_)], fill=255)
+    plate.paste(gr, (0, 0), pm)
+    plate.alpha_composite(lay, ((pw_ - lay.width) // 2, (ph_ - lay.height) // 2))
+    if photo is not None:
+        phw, phh = 300, 360
+        im = ImageOps.fit(photo.convert("RGB"), (phw, phh), centering=(0.5, 0.25))
+        card = Image.new("RGBA", (phw + 12, phh + 12), (255, 255, 255, 255))
+        card.paste(im, (6, 6))
+        out = Image.new("RGBA", (max(card.width, pw_), card.height + ph_ // 2), (0, 0, 0, 0))
+        out.alpha_composite(card, (0, 0))
+        out.alpha_composite(plate, (out.width - pw_, card.height - ph_ // 2))
+    else:
+        out = plate
+    out = _with_shadow(out, (5, 8), 9, 0.55, 18)
+    _CARDS[key] = out
+    return out
+
+
+def draw_person(fr, ps, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    photo = it.get("photo_img")
+    spr = person_sprite(ov.get("text") or "", photo, "")
+    cx, cy = ov_spot(ps, spr, [(W - 50 - spr.width / 2, H - 60 - spr.height / 2), (50 + spr.width / 2, H - 60 - spr.height / 2),
+                                (W - 50 - spr.width / 2, 60 + spr.height / 2)])
+    q = e_back((tl - t0) / 0.5)
+    cx += (1 - cl(q)) * (400 if cx > W / 2 else -400)
+    put(fr, spr, cx, cy, 1.0, a)
+
+
+# ---- big red stat text ("3 MONTHS")
+def stat_sprite(text, sub=""):
+    key = ("stat", text, sub)
+    if key in _CARDS:
+        return _CARDS[key]
+    f = font_for(text, 200, "title")
+    lay = text_layer(text, f, fill=(255, 84, 70), fill2=(190, 12, 28), max_w=int(W * 0.62), stroke=3, stroke_fill=(40, 0, 6), shadow=(0, 8, 10, 0.8))
+    pad = 60
+    big = Image.new("RGBA", (lay.width + 2 * pad, lay.height + 2 * pad), (0, 0, 0, 0))
+    big.alpha_composite(lay, (pad, pad))
+    gl = big.getchannel("A").filter(ImageFilter.GaussianBlur(22)).point(lambda v: min(255, int(v * 1.2)))
+    glow = Image.new("RGBA", big.size, (230, 20, 40, 255))
+    glow.putalpha(gl.point(lambda v: int(v * 0.55)))
+    out = Image.new("RGBA", big.size, (0, 0, 0, 0))
+    out.alpha_composite(glow)
+    out.alpha_composite(big)
+    _CARDS[key] = out
+    return out
+
+
+def draw_stat(fr, ps, tl, t0, t1, a, ov):
+    spr = stat_sprite(ov.get("text") or "")
+    cx, cy = ov_spot(ps, spr, [(W * 0.74, H * 0.46), (W * 0.26, H * 0.46), (W * 0.5, H * 0.3)])
+    q = e_out(cl((tl - t0) / 0.45))
+    cx += (1 - q) * (260 if cx > W / 2 else -260)
+    put(fr, spr, cx, cy, 1.12 - 0.12 * q + 0.015 * math.sin(tl * 5), a)
+
+
+# ---- round pop-ups with a red cross / green tick
+def _circle_sprite(img, d_=230):
+    c = ImageOps.fit(img.convert("RGB"), (d_, d_), centering=(0.5, 0.4))
+    m = rounded_mask((d_, d_), d_ // 2)
+    out = Image.new("RGBA", (d_ + 28, d_ + 28), (0, 0, 0, 0))
+    sh = Image.new("RGBA", out.size, (0, 0, 0, 255))
+    sh.putalpha(Image.new("L", out.size, 0))
+    a_ = Image.new("L", out.size, 0)
+    a_.paste(m, (14 + 4, 14 + 8))
+    sh.putalpha(a_.filter(ImageFilter.GaussianBlur(8)).point(lambda v: int(v * 0.6)))
+    out.alpha_composite(sh)
+    ring = Image.new("RGBA", (d_ + 10, d_ + 10), (0, 0, 0, 0))
+    ImageDraw.Draw(ring).ellipse([0, 0, d_ + 9, d_ + 9], fill=(255, 255, 255, 255))
+    out.alpha_composite(ring, (9, 9))
+    cc = c.convert("RGBA")
+    cc.putalpha(m)
+    out.alpha_composite(cc, (14, 14))
+    return out
+
+
+def _mark_overlay(kind, size, prog):
+    """Red cross (two strokes drawn one after another) or green tick, with a white outline, on a transparent square."""
+    im = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(im)
+    lw = max(8, size // 16)
+    if kind == "cross":
+        a1, b1, a2, b2 = (size * 0.2, size * 0.2), (size * 0.8, size * 0.8), (size * 0.8, size * 0.2), (size * 0.2, size * 0.8)
+        p1, p2 = cl(prog * 2), cl(prog * 2 - 1)
+        for (pa, pb, pp) in ((a1, b1, p1), (a2, b2, p2)):
+            if pp > 0:
+                e = (pa[0] + (pb[0] - pa[0]) * pp, pa[1] + (pb[1] - pa[1]) * pp)
+                d.line([pa, e], fill=(255, 255, 255, 255), width=lw + 6)
+        for (pa, pb, pp) in ((a1, b1, p1), (a2, b2, p2)):
+            if pp > 0:
+                e = (pa[0] + (pb[0] - pa[0]) * pp, pa[1] + (pb[1] - pa[1]) * pp)
+                d.line([pa, e], fill=(228, 28, 38, 255), width=lw)
+    else:
+        pts = [(size * 0.2, size * 0.54), (size * 0.42, size * 0.76), (size * 0.82, size * 0.26)]
+        p1, p2 = cl(prog * 2), cl(prog * 2 - 1)
+        segs = []
+        if p1 > 0:
+            segs.append((pts[0], (pts[0][0] + (pts[1][0] - pts[0][0]) * p1, pts[0][1] + (pts[1][1] - pts[0][1]) * p1)))
+        if p2 > 0:
+            segs.append((pts[1], (pts[1][0] + (pts[2][0] - pts[1][0]) * p2, pts[1][1] + (pts[2][1] - pts[1][1]) * p2)))
+        for s_ in segs:
+            d.line(list(s_), fill=(255, 255, 255, 255), width=lw + 6)
+        for s_ in segs:
+            d.line(list(s_), fill=(36, 190, 84, 255), width=lw)
+    return im
+
+
+def draw_verdict(fr, ps, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    circles = it.get("circles") or []
+    n = len(circles)
+    if not n:
+        return
+    side = ov.get("side") or "right"
+    cx0 = W * (0.27 if side == "left" else 0.73)
+    d_ = 250 if n == 1 else 220
+    if n == 3:
+        pos = [(-0.58, -0.56), (0.58, -0.56), (0.0, 0.58)]
+    elif n == 2:
+        pos = [(-0.58, 0.0), (0.58, 0.0)]
+    else:
+        pos = [(0.0, 0.0)]
+    for k, cdef in enumerate(circles[:3]):
+        img = cdef.get("img")
+        if img is None:
+            img = ps.get("img")
+            if img is None:
+                continue
+            fx = (0.25, 0.75, 0.5)[k % 3]
+            img = img.crop((int(img.width * max(0, fx - 0.25)), int(img.height * 0.15), int(img.width * min(1, fx + 0.25)), int(img.height * 0.85)))
+        key = ("circ", id(img), d_)
+        spr = _CARDS.get(key)
+        if spr is None:
+            spr = _CARDS[key] = _circle_sprite(img, d_)
+        tk = t0 + 0.12 + k * 0.22
+        q = e_back((tl - tk) / 0.42)
+        if tl < tk:
+            continue
+        cx = cx0 + pos[k][0] * (d_ + 30) * 1.0
+        cy = H * 0.5 + pos[k][1] * (d_ + 30) * 0.95
+        sw = (-1 if side == "left" else 1)
+        put(fr, spr, cx, cy, 0.2 + 0.8 * cl(q), a)
+        pm = cl((tl - tk - 0.45) / 0.5)
+        if pm > 0:
+            mk = _mark_overlay(cdef.get("mark", "cross"), int(d_ * 1.02), pm)
+            put(fr, mk, cx, cy, 1.0, a)
+        lab = cdef.get("label")
+        if lab and tl > tk + 0.2:
+            ll = _TL_LAB.get(("v", lab))
+            if ll is None:
+                ll = _TL_LAB[("v", lab)] = text_layer(lab, font_for(lab, 36, "title"), fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(0, 2, 4, 0.8))
+            put(fr, ll, cx, cy + d_ / 2 + 26, 1.0, a * cl((tl - tk - 0.2) / 0.3))
+
+
+def draw_v2(fr, sh, tl, ov, pal, t0, t1):
+    """Draws the v2 item kinds. Returns True when it handled the item."""
+    k = ov["kind"]
+    a = cl((tl - t0) * 5) * (1 - cl((tl - (t1 - 0.35)) / 0.35))
+    if a <= 0.01:
+        return True
+    it = ov.get("it") or {}
+    if k == "note":
+        draw_note(fr, sh, tl, ov, t0, t1, a)
+        return True
+    if k == "year" and it.get("year_num"):
+        draw_timeline(fr, tl, t0, t1, a, ov)
+        return True
+    if k == "person":
+        draw_person(fr, sh, tl, t0, t1, a, ov)
+        return True
+    if k == "stat":
+        draw_stat(fr, sh, tl, t0, t1, a, ov)
+        return True
+    if k == "verdict":
+        draw_verdict(fr, sh, tl, t0, t1, a, ov)
+        return True
+    return False
+
+
 def draw_popup(fr, sh, tl):
     sp = sh.get("popup")
     if sp is None:
@@ -3671,8 +4598,10 @@ def draw_ov(fr, sh, tl, pal):
     ov = sh.get("ov")
     if not ov:
         return
-    t0, t1 = 0.22, min(sh["dur"] - 0.08, 5.0 if ov["kind"] in ("place", "year") else (6.5 if ov["kind"] == "note" else 4.2))
+    t0, t1 = 0.22, min(sh["dur"] - 0.08, OV_MAXT.get(ov["kind"], 4.2))
     if not (t0 < tl < t1):
+        return
+    if ov["kind"] in V2_KINDS and draw_v2(fr, sh, tl, ov, pal, t0, t1):
         return
     if ov["kind"] == "note":  # source caption on the empty side of the picture, discussed phrase gets underlined
         a = cl((tl - t0) * 4) * (1 - cl((tl - (t1 - 0.35)) / 0.35))
@@ -3704,7 +4633,19 @@ def draw_ov(fr, sh, tl, pal):
         put(fr, spr, cx, cy, 1.0, a)
         return
     elif ov["kind"] == "bubble":
-        cx, cy = ov_spot(sh, spr, [(W - 80 - spr.width / 2, 70 + spr.height / 2), (80 + spr.width / 2, 70 + spr.height / 2)])
+        try:
+            if "subj" not in sh:
+                sh["subj"] = subject_center(sh["img"]) if sh.get("img") is not None else (0.5, 0.5)
+            sx_, sy_ = sh["subj"]
+        except Exception:  # noqa
+            sx_, sy_ = 0.5, 0.5
+        spk = (ov.get("it") or {}).get("side") or ""
+        ax = {"left": 0.30, "right": 0.70}.get(spk, sx_) * W  # the bubble's tail points at the speaker
+        tail = "R" if (ax > W * 0.62) else "L"
+        spr = ov_sprite("bubble", ov["text"], tail, pal)
+        cx = ax + (spr.width / 2 - 34) if tail == "L" else ax - (spr.width / 2 - 34)
+        cy = max(spr.height / 2 + 20, (sy_ - 0.17) * H - spr.height / 2 - 24)
+        cx = min(max(cx, spr.width / 2 + 14), W - spr.width / 2 - 14)
     elif ov["kind"] == "note":
         cx, cy = W - 30 - spr.width / 2, 40 + spr.height / 2 - (1 - cl(q)) * 160
     else:
@@ -3736,7 +4677,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             t0_ = max(0.1, wt_[w_][0] - 0.08)
             items.append({"t0": t0_, "t1": min(dur - 0.1, t0_ + ITEM_KINDS[it["kind"]]), "slot": ITEM_SLOT[it["kind"]], "it": it,
                           "ps": {"phase": rr.uniform(0, 6), "pop_side": -1 if k_ % 2 == 0 else 1, "popup": it.get("popup_img"),
-                                 "ov": None if it["kind"] == "popup" else {"kind": it["kind"], "text": (it["text"] + "|" + it.get("sub", "")) if it["kind"] in ("place", "note") else it["text"], "mark": it.get("mark", "")}}})
+                                 "ov": None if it["kind"] == "popup" else {"kind": it["kind"], "text": (it["text"] + "|" + it.get("sub", "")) if it["kind"] in ("place", "note") else it.get("text", ""), "mark": it.get("mark", ""), "it": it}}})
         for a_ in range(len(items)):  # one thing per screen area at a time
             for b_ in range(a_ + 1, len(items)):
                 if items[b_]["slot"] == items[a_]["slot"] and items[b_]["t0"] > items[a_]["t0"] and items[a_]["t1"] > items[b_]["t0"]:
@@ -3745,7 +4686,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
         for x_ in items:
             x_["ps"]["dur"] = max(0.4, x_["t1"] - x_["t0"])
             if x_["slot"] == "P":
-                events.append((x_["t0"], "pop", 0.0))
+                events.append((x_["t0"], "pop", 0.0 if x_["it"]["kind"] == "popup" else 0.7))
 
     def draw(t):
         idx = 0
@@ -3774,7 +4715,11 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
         for x_ in items:
             if x_["t0"] <= t < x_["t1"]:
                 ov_ = x_["ps"].get("ov")
-                if ov_ and ov_["kind"] == "note" and "side" not in ov_:
+                if x_["ps"].get("_idx") != idx:  # the picture under this item changed: re-measure the subject
+                    x_["ps"]["_idx"] = idx
+                    x_["ps"]["img"] = sh.get("img")
+                    x_["ps"].pop("subj", None)
+                if ov_ and ov_["kind"] in ("note", "verdict") and "side" not in ov_:
                     ov_["side"] = empty_side(fr)  # keep the text off the person / subject
                 draw_popup(fr, x_["ps"], t - x_["t0"])
                 draw_ov(fr, x_["ps"], t - x_["t0"], pal)
@@ -4121,7 +5066,13 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
         if err(1 - subj[k][0]) + 1e-3 < err(subj[k][0]):
             imgs[k] = ImageOps.mirror(imgs[k])
             subj[k] = (1 - subj[k][0], subj[k][1])
-    cards = [brush_card(it["label_hi"], pal) for it in items]
+    vs = bool(sc.get("vs")) and n == 2  # old vs new: left bright, right black&white with red wash, big labels, magnifier circles
+    cards = [brush_card(it["label_hi"], pal) for it in items] if not vs else []
+    vs_labs = []
+    if vs:
+        for k, it in enumerate(items):
+            lab_ = text_layer(it["label_hi"], font_for(it["label_hi"], 96, "title"), fill=(255, 255, 255), stroke=3, stroke_fill=(10, 10, 10), shadow=(0, 5, 6, 0.8), max_w=int(W * 0.42))
+            vs_labs.append(lab_)
     # when each item is named
     ts = []
     for k, it in enumerate(items):
@@ -4134,7 +5085,7 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
         ts = [t_ * f_ for t_ in ts]
     for k in range(1, n):
         events += [(ts[k], "whoosh_soft", 0.8)]
-    slant = 70  # divider leans like the reference
+    slant = 14 if vs else 70  # divider leans like the reference
 
     def dividers(t):
         """x of each divider at the middle of the screen: panel k occupies [div[k], div[k+1]]."""
@@ -4148,6 +5099,7 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
     def draw(t):
         dv = dividers(t)
         fr = Image.new("RGB", (W, H), (10, 10, 12))
+        pcrops = {}
         for k in range(n):
             xl, xr = dv[k], dv[k + 1]
             if xr - xl < 4:
@@ -4164,6 +5116,9 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
             ox = min(max(0.0, ox), im.width - vw)
             oy = min(max(0.0, subj[k][1] * im.height - 0.46 * vh), im.height - vh)
             crop = im.crop((int(ox), int(oy), int(ox + vw), int(oy + vh))).resize((W, H), Image.BILINEAR)
+            if vs:
+                crop = vs_grade(crop, k)
+            pcrops[k] = crop
             m = Image.new("L", (W, H), 0)
             ImageDraw.Draw(m).polygon([(xl + slant, 0), (xr + slant, 0), (xr - slant, H), (xl - slant, H)], fill=255)
             if k == 0:
@@ -4180,7 +5135,7 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
         vg = 1.0 - 0.45 * (((xx - W / 2) / (W / 2)) ** 2 + ((yy - H / 2) / (H / 2)) ** 2) / 2
         fr = Image.fromarray(np.clip(a * (0.9 * vg)[..., None], 0, 255).astype(np.uint8)).convert("RGBA")
         dv = dividers(t)
-        for k in range(n):
+        for k in range(0 if vs else n):
             q = t - (ts[k] + 0.2)
             if q < 0:
                 continue
@@ -4191,8 +5146,46 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
             top_ = subj[k][1] > 0.56  # subject sits low in its picture -> the label card goes to the top, otherwise to the bottom (never over the face/body)
             cyk = (95 - lerp(40, 0, e_out(q / 0.4))) if top_ else (H - 95 + lerp(40, 0, e_out(q / 0.4)))
             put(fr, cards[k], cx, cyk, cs * (0.9 + 0.1 * e_back(q / 0.5)), cl(q * 5))
+        if vs:
+            for k in range(n):
+                q = t - (ts[k] + 0.2)
+                if q < 0:
+                    continue
+                lab_ = vs_labs[k]
+                lx = (lab_.width / 2 + 56) if k == 0 else (W - lab_.width / 2 - 56)
+                put(fr, lab_, lx + (1 - e_out(q / 0.45)) * (-160 if k == 0 else 160), H - 78 - lab_.height / 2, 1.0, cl(q * 5))
+                qz = t - (ts[k] + 0.95)
+                if qz > 0 and k in pcrops:  # magnifier circle: the same picture, zoomed on a detail
+                    d_ = 250
+                    pcx = (W * k / n + W * (k + 1) / n) / 2
+                    pcy = H * 0.50
+                    r_ = 70
+                    zc = pcrops[k].crop((int(pcx - r_), int(pcy - r_), int(pcx + r_), int(pcy + r_))).resize((d_, d_), Image.BICUBIC)
+                    circ = Image.new("RGBA", (d_ + 24, d_ + 24), (0, 0, 0, 0))
+                    glow = Image.new("RGBA", circ.size, (230, 30, 40, 0))
+                    ga = Image.new("L", circ.size, 0)
+                    ImageDraw.Draw(ga).ellipse([2, 2, d_ + 21, d_ + 21], fill=210)
+                    glow.putalpha(ga.filter(ImageFilter.GaussianBlur(7)))
+                    circ.alpha_composite(glow)
+                    ring = Image.new("RGBA", (d_ + 10, d_ + 10), (0, 0, 0, 0))
+                    ImageDraw.Draw(ring).ellipse([0, 0, d_ + 9, d_ + 9], fill=(255, 236, 225, 255))
+                    circ.alpha_composite(ring, (7, 7))
+                    zc = zc.convert("RGBA")
+                    zc.putalpha(rounded_mask((d_, d_), d_ // 2))
+                    circ.alpha_composite(zc, (12, 12))
+                    put(fr, circ, pcx, pcy, 0.3 + 0.7 * e_back(qz / 0.5), cl(qz * 4))
         return fr.convert("RGB")
     return draw
+
+
+def vs_grade(crop, k):
+    """Right panel = the OLD thing: black & white, dark red wash; left panel = the NEW thing: slightly vivid."""
+    if k == 0:
+        return ImageEnhance.Color(crop).enhance(1.12)
+    g = ImageOps.colorize(ImageOps.grayscale(crop), black=(6, 0, 2), mid=(104, 60, 62), white=(236, 226, 226))
+    wash = Image.new("RGB", g.size, (205, 8, 22))
+    mask = Image.linear_gradient("L").resize(g.size).point(lambda v: int(35 + v * 0.35))  # red grows towards the bottom
+    return Image.composite(wash, g, mask)
 
 
 # --------------------------------------------------------------------------- 3D terrain map (distance / "from one place to another")
@@ -5633,6 +6626,34 @@ def cutout_sticker(path, maxside=360):
     return out
 
 
+VERDICT_MAX = [int(os.environ.get("MAX_VERDICT_PICS", "4" if TEST_SEC else "10"))]
+
+
+def person_photo(title, out):
+    """Openly licensed photo of a REAL notable person from Wikipedia/Commons (licence checked on Commons; credit is listed in the caption)."""
+    title = (title or "").strip()
+    if not title:
+        return False
+    r = requests.get("https://en.wikipedia.org/w/api.php", headers=WIKI_UA, timeout=25, params={
+        "action": "query", "format": "json", "redirects": 1, "titles": title, "prop": "pageimages|pageprops", "piprop": "name|original", "ppprop": "disambiguation"})
+    pg = list(((r.json().get("query") or {}).get("pages") or {}).values())
+    if not pg or "pageprops" in pg[0] or not pg[0].get("pageimage"):
+        return False
+    fname = pg[0]["pageimage"]
+    ci = requests.get("https://commons.wikimedia.org/w/api.php", headers=WIKI_UA, timeout=25, params={
+        "action": "query", "format": "json", "titles": "File:" + fname, "prop": "imageinfo", "iiprop": "url|extmetadata|mime|size", "iiurlwidth": 900})
+    cp = list(((ci.json().get("query") or {}).get("pages") or {}).values())
+    ii = ((cp[0].get("imageinfo") or [{}])[0]) if cp else {}
+    meta = ii.get("extmetadata", {})
+    if not ii or ii.get("mime") not in ("image/jpeg", "image/png") or not _lic_ok(meta) or (ii.get("width") or 0) < 300:
+        return False
+    data = requests.get(ii.get("thumburl") or ii.get("url"), headers=WIKI_UA, timeout=60).content
+    im = Image.open(io.BytesIO(data)).convert("RGB")
+    im.save(out)
+    IMG_CREDITS.append(f"{fname[:60]} - {_strip_html(meta.get('Artist', {}).get('value'))[:40] or 'Wikimedia'} ({meta.get('LicenseShortName', {}).get('value', 'open licence')}) {ii.get('descriptionurl', '')}".strip())
+    return True
+
+
 CLIPS_MAX = [int(os.environ.get("MAX_CLIPS", "8" if TEST_SEC else "30"))]
 POPUPS_MAX = [int(os.environ.get("MAX_POPUPS", "0"))]  # sticker pop-ups are off: every subject gets its own full-screen picture
 
@@ -5644,6 +6665,24 @@ def make_visuals(scenes, imgdir):
     for i, sc in enumerate(scenes):
         if sc["type"] == "photo":
             for n_, it in enumerate(sc.get("items") or []):
+                if it["kind"] == "person" and it.get("photo_img") is None:
+                    try:
+                        pp_ = imgdir / f"{i:03d}_i{n_}_person.png"
+                        if person_photo(it.get("entity_en", ""), pp_):
+                            it["photo_img"] = Image.open(pp_).convert("RGB")
+                    except Exception as e:  # noqa
+                        log("person photo failed:", type(e).__name__, str(e)[:100])
+                if it["kind"] == "verdict":
+                    for c_, cdef in enumerate(it.get("circles") or []):
+                        if cdef.get("img") is not None or VERDICT_MAX[0] <= 0:
+                            continue
+                        VERDICT_MAX[0] -= 1
+                        try:
+                            cp_ = imgdir / f"{i:03d}_i{n_}_v{c_}.png"
+                            if gen_image("a realistic photo of " + cdef["query_en"], cp_, "photo", query=cdef["query_en"]):
+                                cdef["img"] = Image.open(cp_).convert("RGB")
+                        except Exception as e:  # noqa
+                            log("verdict picture failed:", type(e).__name__, str(e)[:100])
                 if it["kind"] == "popup" and POPUPS_MAX[0] > 0:
                     POPUPS_MAX[0] -= 1
                     try:
@@ -5776,7 +6815,7 @@ def pipeline():
     else:
         facts, sources = research(topic_en)
     try:
-        collect_sources()
+        collect_sources(topic=topic_en, story=own_story)
     except Exception as e:  # noqa
         log("collect_sources failed:", str(e)[:100])
     script = own_story_script(own_story, topic_en) if own_story else write_script(topic_en, cat, style, target, facts, wpm)
@@ -6068,6 +7107,31 @@ def selftest():
                          ("और यह कहानी आज भी आसमान में चमक रही है", "planet", (20, 30, 90), (60, 90, 160))])},
     ]
     sc[2]["shots"][0]["kf"] = [{"w": 3, "fx": 0.3, "fy": 0.4, "z": 1.7}, {"w": 7, "fx": 0.7, "fy": 0.35, "z": 1.5}]
+    body_en = ("Sumitra was confused briefly after her revival, and did not recognize people around. She did not say anything for about a day "
+               "and then began to say that she was Shiva and that she lived in Dibiyapur where she was murdered by her in-laws.")
+    ttl_en = "Claims of Reincarnation: An Empirical Study of Cases in India"
+    ov_scenes = [
+        {"type": "photo", "tone": "serious", "headline_hi": "", "narration_hi": "वैज्ञानिक इयान स्टीवेन्सन ने दिसंबर उन्नीस सौ चौरासी की इस घटना का अध्ययन किया और तीन महीने बाद रिपोर्ट छापी",
+         "items": [{"w": 1, "kind": "person", "text": "इयान स्टीवेन्सन", "entity_en": "Ian Stevenson", "sub": ""},
+                   {"w": 4, "kind": "year", "text": "दिसंबर १९८४", "year_num": 1984, "month": 12},
+                   {"w": 12, "kind": "stat", "text": "३ महीने"}],
+         "shots": shots([("वैज्ञानिक इयान स्टीवेन्सन ने दिसंबर उन्नीस सौ चौरासी की इस घटना का अध्ययन किया", "rock", (150, 110, 70), (40, 20, 10)),
+                         ("और तीन महीने बाद रिपोर्ट छापी", "planet", (90, 120, 150), (20, 30, 50))])},
+        {"type": "photo", "tone": "suspense", "headline_hi": "", "narration_hi": "गाँव वालों ने कहा कि वह घर के काम नहीं कर रही थी, न खाना, न पानी, न सफ़ाई, यह बिल्कुल गलत था",
+         "items": [{"w": 1, "kind": "bubble", "text": "मुझे कुछ याद नहीं", "side": "left"},
+                   {"w": 8, "kind": "verdict", "text": "", "circles": [{"query_en": "cooking", "mark": "cross", "label": "खाना"}, {"query_en": "water", "mark": "cross", "label": "पानी"},
+                                                                       {"query_en": "cleaning", "mark": "tick", "label": "सफ़ाई"}]}],
+         "shots": shots([("गाँव वालों ने कहा कि वह घर के काम नहीं कर रही थी, न खाना, न पानी, न सफ़ाई", "moon", (120, 60, 40), (30, 10, 10)),
+                         ("यह बिल्कुल गलत था", "planet", (60, 60, 140), (10, 10, 40))])},
+    ]
+    for k_, st_ in enumerate(SRC_STYLES):
+        ov_scenes.append({"type": "photo", "tone": "calm", "headline_hi": "", "narration_hi": "इस बात का स्रोत यह रिपोर्ट है, जो बताती है कि वह लगभग एक दिन तक कुछ नहीं बोली और फिर बोलने लगी",
+                          "items": [{"w": 3, "kind": "note", "text": body_en, "sub": ttl_en, "dom": "peoplesreview.com", "mark": "did not say anything for about a day", "style": st_}],
+                          "shots": shots([("इस बात का स्रोत यह रिपोर्ट है, जो बताती है कि वह लगभग एक दिन तक कुछ नहीं बोली और फिर बोलने लगी", ("rock", "planet", "moon", "rock")[k_], (90 + 20 * k_, 100, 120), (20, 30, 40))])})
+    ov_scenes.append({"type": "multi", "vs": True, "tone": "serious", "headline_hi": "", "narration_hi": "नया तरीका बिल्कुल अलग है और पुराना तरीका बिल्कुल अलग था",
+                      "items": [{"label_hi": "नया तरीका", "prompt_en": "x", "image": art(t0 / "vs_a.png", "rock", (150, 110, 70), (60, 30, 20), 1920), "t": 0.0},
+                                {"label_hi": "पुराना तरीका", "prompt_en": "x", "image": art(t0 / "vs_b.png", "planet", (90, 120, 150), (20, 30, 50), 1920), "t": 1.6}]})
+    sc[-1:-1] = ov_scenes
 
     for k, sc_ in enumerate(sc):
         sc_["grade"] = GRADES[k % 6]
