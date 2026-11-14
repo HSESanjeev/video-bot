@@ -264,8 +264,8 @@ def gemini_json(prompt, temperature=0.8):
 
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
-ITEM_KINDS = {"bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6}
-ITEM_SLOT = {"bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N"}
+ITEM_KINDS = {"bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6}
+ITEM_SLOT = {"bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P"}
 
 DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
 
@@ -302,6 +302,7 @@ Read the scene sentence by sentence and clause by clause. Split it into BEATS: e
  RULE B0 - THE REAL THING: when the narration is about a SPECIFIC named subject (a named forest/park/city/river/mountain, a named species such as "Asiatic lion", a named object, building, institution or event), give "entity_en": its exact real English name exactly as Wikipedia would title it (e.g. "Gir Forest National Park", "Asiatic lion", "Sundarbans", "Hubble Space Telescope"). The engine then fetches the REAL photograph of that exact thing from Wikipedia/Wikimedia. Use "" only for generic moments (fog, a path, hands).
  RULE B00 - WORLD/EARTH: when the narrator says duniya, prithvi, dharti, vishwa, world, Earth or planet, the picture is a real photo of planet Earth (entity_en "Earth", query_en "earth from space"), NEVER a map. A map is only for a named country, state, city, forest or route.
  RULE B2 - ONLY REAL: never ask for or describe a cartoon, animation, 3D render, illustration, toy, statue, sculpture, mural or drawing. Every picture and clip is a REAL photograph / real camera footage of the real thing (a statue only if the narration is literally about a statue).
+ RULE B3 - MEANING: show what the sentence MEANS. Emotions / states (happy, sad, angry, afraid, lonely, proud, in pain) = a REAL person whose face or body clearly shows that emotion ("sad man crying alone"); professions / personalities (doctor, engineer, scientist, farmer, teacher, soldier, police officer, priest, king, athlete) = a REAL person in that role at work ("doctor in white coat with stethoscope"); abstract words (good, bad, success, failure, danger, peace, time, money) = one concrete symbolic real scene. Never an unrelated animal or object.
  RULE B - REAL FIRST: every new main MUST have "query_en": 1-3 plain English words that find a REAL stock photo of that exact thing (e.g. "african lion", "volcano eruption", "milky way", "coral reef"). Use the most common, concrete, photographable name; no adjectives like "powerful", no people, no text, no cut-outs, no green-screen. Also give "prompt_en": a cinematic realistic description of the same single subject (only used if no real photo exists).
  RULE C - VIDEO CLIP FOR EVERY ACTION: whenever the narrator describes something being DONE or MOVING (walking, running, hunting, eating, drinking, flying, swimming, roaring, flowing, erupting, burning, spinning, growing), that main is a real VIDEO CLIP of exactly that action: "motion": true and "clip_en" = subject + the exact action in English, e.g. "lion walking" for chalna, "lion running" for daudna, "elephant drinking water", "eagle flying", "waterfall". The clip must show what is said and nothing else. Use clips on every such moment (up to about half of the mains); still pictures only for things that are still (a place, an object, a fact). Never ask for green-screen/isolated footage.
  RULE D - PARTS OF A SUBJECT = CAMERA KEYFRAMES ON THE SAME PICTURE: when the narrator talks about a part/detail of the subject already on screen (eyes, claws, wings, crater, tail, skin), do NOT make a new picture: use {"w":..,"same":true} with "kf", or put "kf" on the main itself.
@@ -374,6 +375,9 @@ def apply_special(sc, d):
             q_ = clean_short(x.get("query_en"), 50)
             if w <= lastw or w >= len(wds) or not q_ or not clean_short(x.get("label_hi"), 40):
                 continue
+            hits_ = [h for h in _label_hits(wds, clean_short(x.get("label_hi"), 40)) if h > lastw]
+            if hits_:  # trust the spoken word itself over the model's word number
+                w = min(hits_, key=lambda h: abs(h - w))
             items.append({"label_hi": clean_short(x.get("label_hi"), 40), "query_en": q_, "entity_en": clean_short(x.get("entity_en"), 70),
                           "prompt_en": clean_short(x.get("prompt_en"), 300) or ("a realistic photo of " + q_), "t": max(0.0, wt[w][0] - 0.05)})
             lastw = w
@@ -856,7 +860,7 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 def finalize_overlays(scenes, topic=""):
     """Always runs after the director (even when it failed): rule-based detector, Gemini detector, guaranteed source cards, source list, card styles."""
     st = {}
-    for name, fn in (("auto", lambda: auto_overlays(scenes)), ("overlays", lambda: overlay_pass(scenes, topic)),
+    for name, fn in (("semantic", lambda: semantic_review(scenes, topic)), ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)), ("overlays", lambda: overlay_pass(scenes, topic)),
                      ("forced_sources", lambda: force_source_cards(scenes, topic)), ("source_list", lambda: add_source_outro(scenes))):
         try:
             st[name] = fn()
@@ -893,7 +897,7 @@ def assign_note_styles(scenes):
 def overlay_pass(scenes, topic=""):
     """Narrow pass that GUARANTEES the reference-style helpers are tried: year slider, name card, big stat, round cross/tick pop-ups, speech bubbles."""
     ph = [(i, sc) for i, sc in enumerate(scenes) if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
-    n_add = {"year": 0, "person": 0, "stat": 0, "verdict": 0, "bubble": 0, "title": 0, "explain": 0}
+    n_add = {"year": 0, "person": 0, "stat": 0, "verdict": 0, "bubble": 0, "title": 0, "explain": 0, "action": 0}
     for a in range(0, len(ph), 3):
         batch = ph[a:a + 3]
         listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
@@ -905,6 +909,7 @@ Go through EVERY word of EACH scene and detect everything below that is really s
 - "stat": a striking short duration / number / count said for emphasis ("३ महीने", "४५ मिनट", "दस हज़ार"). {{"w":..,"kind":"stat","text_hi":"1-3 words"}}
 - "verdict": the narrator says what is false / true, a myth / fact, what did NOT happen / what did. {{"w":..,"kind":"verdict","text_hi":"","circles":[{{"query_en":"1-3 English words for a REAL photo","mark":"cross" or "tick","label_hi":"1-2 words"}}]}} with 2-3 circles.
 - "explain": the narrator explains / describes a concrete thing (an object, organ, machine, animal part, instrument, structure) that is clearer with a clean picture of just that thing. {{"w":..,"kind":"explain","text_hi":"label, 1-3 words","query_en":"1-3 English words naming the REAL object","anim":"pop" or "slide" or "drop" or "zoom" or "spin"}}. At most one per scene, never for people, animals' faces or places.
+- "action": the narrator describes something MOVING or doing a visible action ("the lion ran towards the lake", "the bird flew away", "the rock fell", "the ship came closer"). {{"w":..,"kind":"action","text_hi":"","query_en":"1-3 English words: the real moving thing (an animal, person, vehicle)","pose_en":"what it looks like while moving, e.g. 'lion running'","verb":"run" or "walk" or "swim" or "fly" or "jump" or "fall" or "rise" or "approach" or "retreat" or "spin" or "shake" or "grow","dir":"right" or "left" or "toward" or "away" or "up" or "down"}}. The engine cuts the thing out and slides / bounces it across the picture. At most one per scene; never for plain standing subjects.
 - "bubble": the narrator quotes what a person said. {{"w":..,"kind":"bubble","text_hi":"the quoted words, max 6","side":"left" or "right"}} (two speakers: first left, second right).
 Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
 {listing}"""
@@ -931,7 +936,7 @@ Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
                     w = int(it.get("w"))
                 except Exception:  # noqa
                     continue
-                if kind not in ("year", "person", "title", "stat", "verdict", "bubble", "explain") or not (0 <= w < nwd):
+                if kind not in ("year", "person", "title", "stat", "verdict", "bubble", "explain", "action") or not (0 <= w < nwd):
                     continue
                 if any(isinstance(x, dict) and abs(x.get("w", -9) - w) < 4 and x.get("kind") == kind for x in have) or any(isinstance(x, dict) and x.get("w") == w for x in have):
                     continue
@@ -945,6 +950,12 @@ Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
                     ent_ = clean_short(it.get("entity_en"), 70)
                     if txt and ent_ and ent_.isascii():
                         rec = {"w": w, "kind": "person", "text": txt, "entity_en": ent_, "sub": ""}
+                elif kind == "action":
+                    q_, vb_ = clean_short(it.get("query_en"), 50), str(it.get("verb") or "").lower()
+                    if q_ and q_.isascii() and vb_ in ACTION_SPAN:
+                        dr_ = str(it.get("dir") or "").lower()
+                        dr_ = dr_ if dr_ in ("right", "left", "toward", "away", "up", "down") else "right"
+                        rec = {"w": w, "kind": "action", "text": "", "query_en": q_, "pose": clean_short(it.get("pose_en"), 60), "verb": vb_, "dir": dr_, "span": ACTION_SPAN[vb_]}
                 elif kind == "explain":
                     q_ = clean_short(it.get("query_en"), 50)
                     if q_ and q_.isascii():
@@ -2599,9 +2610,11 @@ def english_search(txt):
     return en
 
 
-def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity=""):
+def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity="", bg=""):
     query, entity, fallback_query = english_search(query), english_search(entity), english_search(fallback_query)
     suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB, "obj": STYLE_OBJ}[kind]
+    if kind == "obj" and bg == "green":
+        suffix = suffix.replace("plain pure white background", "plain flat bright green background")
     size = (1080, 1080) if kind in ("card", "obj") else (1920, 1080)
     full = f"{prompt}, {suffix}"
     dims = {"photo": (1024, 576), "thumb": (1024, 576), "card": (512, 512), "obj": (512, 512)}[kind]
@@ -2889,12 +2902,175 @@ def _drum_hit(kind):
     return _filt(np.random.randn(n).astype(np.float32), "highpass", 6000) * _decay(n, 45) * 0.22
 
 
-def make_music(duration, out, mood="wonder"):
-    """Original music: chord pads + bass + mood-specific pluck / drums. Different mood, key and progression every video."""
+# --------------------------------------------------------------------------- music v2: many different styles, a new one every video
+MUSIC_STYLES = {
+    "bhairav_flute": dict(tags=["mystery", "calm", "epic"], scale=[0, 1, 4, 5, 7, 8, 11], bpm=64, prog=[0, 3, 0, 4], pad="warm", arp=None, lead="flute", drum=None, drone=True),
+    "yaman_dawn": dict(tags=["wonder", "calm", "life"], scale=[0, 2, 4, 6, 7, 9, 11], bpm=70, prog=[0, 4, 5, 3], pad="glass", arp="pluck", lead="flute", drum=None, drone=True),
+    "dark_strings": dict(tags=["tense", "mystery"], scale=[0, 1, 3, 5, 7, 8, 10], bpm=84, prog=[0, 5, 0, 6], pad="strings", arp=None, lead=None, drum="heart", drone=False),
+    "cinematic_epic": dict(tags=["epic", "tense"], scale=[0, 2, 3, 5, 7, 8, 10], bpm=78, prog=[0, 5, 3, 4], pad="strings", arp="bell", lead=None, drum="boom", drone=False),
+    "space_glass": dict(tags=["space", "wonder"], scale=[0, 2, 3, 5, 7, 9, 10], bpm=54, prog=[0, 3, 5, 2], pad="glass", arp="shimmer", lead=None, drum=None, drone=True),
+    "marimba_nature": dict(tags=["life", "wonder", "calm"], scale=[0, 2, 4, 5, 7, 9, 11], bpm=96, prog=[0, 5, 3, 4], pad="warm", arp="marimba", lead=None, drum="shaker", drone=False),
+    "piano_calm": dict(tags=["calm", "wonder", "mystery"], scale=[0, 2, 4, 5, 7, 9, 11], bpm=62, prog=[0, 3, 4, 0], pad="warm", arp="piano", lead=None, drum=None, drone=False),
+    "choir_mystery": dict(tags=["mystery", "epic", "space"], scale=[0, 2, 3, 5, 7, 8, 10], bpm=58, prog=[0, 5, 3, 6], pad="choir", arp="bell", lead=None, drum=None, drone=False),
+    "tabla_journey": dict(tags=["life", "epic", "wonder"], scale=[0, 2, 4, 5, 7, 9, 10], bpm=100, prog=[0, 3, 0, 4], pad="warm", arp=None, lead="flute", drum="tabla", drone=True),
+    "ambient_drone": dict(tags=["space", "calm", "mystery"], scale=[0, 2, 4, 7, 9, 11, 12], bpm=50, prog=[0, 2, 4, 2], pad="drone", arp="shimmer", lead=None, drum=None, drone=True),
+    "pulse_tension": dict(tags=["tense", "epic"], scale=[0, 1, 3, 5, 6, 8, 10], bpm=104, prog=[0, 1, 0, 5], pad="strings", arp="pluck", lead=None, drum="heart", drone=False),
+    "folk_pluck": dict(tags=["mystery", "life", "tense"], scale=[0, 2, 3, 5, 7, 8, 10], bpm=88, prog=[0, 6, 5, 6], pad="warm", arp="pluck", lead=None, drum="shaker", drone=True),
+    "sitar_dusk": dict(tags=["mystery", "calm", "life"], scale=[0, 1, 3, 5, 7, 8, 10], bpm=72, prog=[0, 5, 0, 3], pad="glass", arp="sitar", lead="flute", drum=None, drone=True),
+}
+MUSIC_USED = ["-"]
+
+
+def _tone_env(n, dur, a, r):
     np = _np()
-    cfg = MOODS.get(mood) or MOODS["wonder"]
+    t = np.arange(n, dtype=np.float32) / SR
+    return np.minimum(1, t / max(0.01, a)) * np.minimum(1, np.maximum(0, (dur - t)) / max(0.01, r)), t
+
+
+def _strings_note(freq, dur):
+    np = _np()
+    n = int(dur * SR)
+    env, t = _tone_env(n, dur, min(1.2, dur * 0.4), min(1.6, dur * 0.4))
+    y = np.zeros(n, dtype=np.float32)
+    tv = t + 0.0007 * np.sin(2 * np.pi * 5.2 * t)
+    for det in (0.994, 1.0, 1.006):
+        for h in range(1, 10):
+            y += np.sin(2 * np.pi * freq * det * h * tv) / (h ** 1.05)
+    return y * env * 0.042
+
+
+def _choir_note(freq, dur):
+    np = _np()
+    n = int(dur * SR)
+    env, t = _tone_env(n, dur, min(1.0, dur * 0.4), min(1.5, dur * 0.4))
+    y = np.zeros(n, dtype=np.float32)
+    tv = t + 0.0009 * np.sin(2 * np.pi * 4.6 * t)
+    for h in range(1, 15):
+        fh = freq * h
+        wgt = math.exp(-((fh - 700) / 260) ** 2) + 0.7 * math.exp(-((fh - 1150) / 300) ** 2) + 0.3 * math.exp(-((fh - 2600) / 500) ** 2)
+        if wgt > 0.02:
+            y += np.sin(2 * np.pi * fh * tv) * wgt / (h ** 0.5)
+    return y * env * 0.05
+
+
+def _glass_note(freq, dur):
+    np = _np()
+    n = int(dur * SR)
+    env, t = _tone_env(n, dur, min(1.4, dur * 0.4), min(1.8, dur * 0.4))
+    y = np.zeros(n, dtype=np.float32)
+    for det in (0.997, 1.003):
+        y += np.sin(2 * np.pi * freq * det * t) + 0.4 * np.sin(2 * np.pi * freq * 2.0 * det * t) + 0.2 * np.sin(2 * np.pi * freq * 3.01 * det * t)
+    return y * env * 0.07
+
+
+def _drone_note(freq, dur):
+    np = _np()
+    n = int(dur * SR)
+    env, t = _tone_env(n, dur, min(2.2, dur * 0.45), min(2.4, dur * 0.45))
+    trem = 0.8 + 0.2 * np.sin(2 * np.pi * 0.17 * t)
+    y = np.sin(2 * np.pi * freq * t) + 0.55 * np.sin(2 * np.pi * freq * 1.5 * t) + 0.3 * np.sin(2 * np.pi * freq * 2 * t)
+    return y * env * trem * 0.08
+
+
+def _flute_note(freq, dur):
+    np = _np()
+    n = int(dur * SR)
+    t = np.arange(n, dtype=np.float32) / SR
+    vib = 0.006 * np.sin(2 * np.pi * 5.0 * t) * np.minimum(1, t / 0.45)
+    ph = 2 * np.pi * np.cumsum(freq * (1 + vib)) / SR
+    y = np.sin(ph) + 0.22 * np.sin(2 * ph) + 0.07 * np.sin(3 * ph)
+    breath = _filt(np.random.randn(n).astype(np.float32), "bp", (900, 3600)) * 0.10
+    env = np.minimum(1, t / 0.09) * np.minimum(1, np.maximum(0, dur - t) / 0.28)
+    return ((y + breath) * env * 0.2).astype(np.float32)
+
+
+def _tanpura_note(freq, dur=2.6):
+    np = _np()
+    n = int(dur * SR)
+    t = np.arange(n, dtype=np.float32) / SR
+    y = np.zeros(n, dtype=np.float32)
+    for det in (1.0, 1.0025):
+        for h in range(1, 15):
+            y += np.sin(2 * np.pi * freq * det * h * t) / (h ** 0.62)
+    return (y * np.exp(-t * 1.05) * np.minimum(1, t / 0.01) * 0.045).astype(np.float32)
+
+
+def _marimba_note(freq):
+    np = _np()
+    n = int(1.1 * SR)
+    t = np.arange(n, dtype=np.float32) / SR
+    y = np.sin(2 * np.pi * freq * t) * np.exp(-t * 6) + 0.3 * np.sin(2 * np.pi * freq * 4 * t) * np.exp(-t * 15) + 0.1 * np.sin(2 * np.pi * freq * 10 * t) * np.exp(-t * 28)
+    return (y * 0.2).astype(np.float32)
+
+
+def _piano_note(freq):
+    np = _np()
+    n = int(2.6 * SR)
+    t = np.arange(n, dtype=np.float32) / SR
+    y = np.zeros(n, dtype=np.float32)
+    for h in range(1, 8):
+        fh = freq * h * math.sqrt(1 + 0.0004 * h * h)
+        y += np.sin(2 * np.pi * fh * t) / (h ** 1.1) * np.exp(-t * (1.6 + 0.8 * h))
+    y[:int(0.006 * SR)] += np.random.randn(int(0.006 * SR)).astype(np.float32) * 0.15
+    return (y * 0.2).astype(np.float32)
+
+
+def _sitar_note(freq):
+    np = _np()
+    n = int(1.6 * SR)
+    t = np.arange(n, dtype=np.float32) / SR
+    y = np.zeros(n, dtype=np.float32)
+    for h in range(1, 13):
+        y += np.sin(2 * np.pi * freq * h * t * (1 + 0.0006 * math.sin(h))) / (h ** 0.75) * np.exp(-t * (2.2 + 0.25 * h))
+    return (y * 0.13).astype(np.float32)
+
+
+def _tabla_hit(kind):
+    np = _np()
+    if kind == "ge":
+        n = int(0.5 * SR)
+        t = np.arange(n, dtype=np.float32) / SR
+        f = 68 + 95 * np.exp(-t * 16)
+        return (np.sin(2 * np.pi * np.cumsum(f) / SR) * np.exp(-t * 6.5) * 0.5).astype(np.float32)
+    if kind == "tin":
+        n = int(0.28 * SR)
+        t = np.arange(n, dtype=np.float32) / SR
+        return ((np.sin(2 * np.pi * 560 * t) + 0.4 * np.sin(2 * np.pi * 1120 * t)) * np.exp(-t * 22) * 0.2).astype(np.float32)
+    n = int(0.16 * SR)  # "na"
+    t = np.arange(n, dtype=np.float32) / SR
+    return ((np.sin(2 * np.pi * 410 * t) * np.exp(-t * 26) + _filt(np.random.randn(n).astype(np.float32), "highpass", 2500) * np.exp(-t * 60) * 0.3) * 0.22).astype(np.float32)
+
+
+PAD_FN = {"warm": lambda f, d: _pad_note(f, d, 4), "glass": _glass_note, "strings": _strings_note, "choir": _choir_note, "drone": _drone_note}
+
+
+def pick_music_style(mood):
+    """A different style almost every video: styles that fit the mood, never one of the last three used (remembered in state/)."""
+    f = STATE / "music_recent.json"
+    try:
+        recent = json.loads(f.read_text()) if f.exists() else []
+    except Exception:  # noqa
+        recent = []
+    cands = [k for k, v in MUSIC_STYLES.items() if mood in v["tags"]] or list(MUSIC_STYLES)
+    fresh = [k for k in cands if k not in recent[-3:]] or [k for k in MUSIC_STYLES if k not in recent[-3:]] or cands
+    k = random.choice(fresh)
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        f.write_text(json.dumps((recent + [k])[-8:]))
+    except Exception:  # noqa
+        pass
+    return k
+
+
+def make_music(duration, out, mood="wonder"):
+    """Original music: one of 13 styles (Indian flute / sitar / tabla, strings, choir, glass, piano, marimba, drone...), different every video."""
+    np = _np()
+    style = pick_music_style(mood)
+    cfg = MUSIC_STYLES[style]
+    MUSIC_USED[0] = style
+    log(f"music style: {style} (mood {mood})")
     rnd = random.Random()
-    root = rnd.choice([40, 41, 43, 45, 46, 48])
+    root = rnd.choice([38, 40, 41, 43, 45, 46, 48])
     bpm = cfg["bpm"] + rnd.choice([-4, 0, 4])
     beat = 60.0 / bpm
     chord_len = beat * 8
@@ -2906,61 +3082,97 @@ def make_music(duration, out, mood="wonder"):
     if rnd.random() < 0.5:
         prog = prog[2:] + prog[:2]
 
+    def semi(k):
+        return sc_[k % 7] + 12 * (k // 7)
+
     def chord_notes(d):
-        def semi(k):
-            return sc_[k % 7] + 12 * (k // 7)
         return [root + semi(d), root + semi(d + 2), root + semi(d + 4), root + 12 + semi(d)]
 
+    def add(sig, t0, gain=1.0):
+        a = int(t0 * SR)
+        m = min(len(sig), n - a)
+        if m > 0 and a >= 0:
+            buf[a:a + m] += sig[:m] * gain
+    padf = PAD_FN[cfg["pad"]]
     pads = {}
     for d in set(prog):
         notes = chord_notes(d)
-        seg = sum(_pad_note(midi_hz(m), chord_len + 1.8, cfg["bright"]) for m in notes)
-        bass = _pad_note(midi_hz(notes[0] - 12), chord_len + 1.8, 2) * 1.7
+        seg = sum(padf(midi_hz(m), chord_len + 1.8) for m in notes)
+        bass = _pad_note(midi_hz(notes[0] - 12), chord_len + 1.8, 2) * 1.5
         pads[d] = seg + bass
     t0, k = 0.0, 0
     while t0 < total:
-        d = prog[k % len(prog)]
-        a = int(t0 * SR)
-        p = pads[d]
-        m = min(len(p), n - a)
-        buf[a:a + m] += p[:m]
+        add(pads[prog[k % len(prog)]], t0)
         t0 += chord_len
         k += 1
-    if cfg["arp"]:
-        step = beat / 2 if cfg["arp"] in ("pluck",) else beat
+    if cfg["drone"]:  # tanpura: Pa - Sa - Sa - low Sa, over and over
+        pat = [root + 7 - 12, root, root, root - 12]
         cache = {}
-        t0, k = 0.0, 0
+        t0, j = 0.0, 0
+        while t0 < total:
+            m_ = pat[j % 4]
+            if m_ not in cache:
+                cache[m_] = _tanpura_note(midi_hz(m_ + 12))
+            add(cache[m_], t0, 0.9)
+            t0 += beat * 1.6
+            j += 1
+    if cfg["arp"]:
+        a_kind = cfg["arp"]
+        step = beat / 2 if a_kind in ("pluck", "marimba", "sitar") else beat
+        cache = {}
+        t0 = 0.0
         while t0 < total:
             d = prog[int(t0 // chord_len) % len(prog)]
             tones = [x + 12 * rnd.choice([1, 2]) for x in chord_notes(d)[:3]]
-            if rnd.random() < (0.62 if cfg["arp"] == "pluck" else 0.4):
+            if rnd.random() < (0.6 if a_kind in ("pluck", "marimba", "sitar") else 0.42):
                 f = midi_hz(rnd.choice(tones))
                 key = round(f, 1)
                 if key not in cache:
-                    cache[key] = _pluck(f, cfg["arp"])
-                s = cache[key]
-                a = int(t0 * SR)
-                m = min(len(s), n - a)
-                if m > 0:
-                    buf[a:a + m] += s[:m]
+                    cache[key] = (_marimba_note(f) if a_kind == "marimba" else _piano_note(f) if a_kind == "piano" else _sitar_note(f) if a_kind == "sitar" else _pluck(f, a_kind))
+                add(cache[key], t0)
             t0 += step
+    if cfg["lead"] == "flute":  # a slow bansuri-like phrase in every second chord
+        t0, j = chord_len * 0.5, 0
+        while t0 < total - 2:
+            seg_end = min(total - 1.5, t0 + chord_len * 0.9)
+            d = prog[int(t0 // chord_len) % len(prog)]
+            if j % 2 == 0:
+                deg = d + rnd.choice([0, 2, 4])
+                tt = t0
+                while tt < seg_end - beat:
+                    dur = beat * rnd.choice([1, 1.5, 2, 3])
+                    if rnd.random() < 0.18:
+                        tt += beat
+                        continue
+                    deg = max(0, deg + rnd.choice([-2, -1, 1, 1, 2]))
+                    add(_flute_note(midi_hz(root + 12 + semi(deg)), dur + 0.3), tt, 0.85)
+                    tt += dur
+            t0 += chord_len
+            j += 1
     if cfg["drum"]:
-        hit = _drum_hit(cfg["drum"])
-        step = {"boom": beat * 2, "heart": beat * 2, "shaker": beat / 2}[cfg["drum"]]
-        t0 = chord_len
-        while t0 < total:
-            a = int(t0 * SR)
-            m = min(len(hit), n - a)
-            swell = 0.55 + 0.45 * (0.5 + 0.5 * math.sin(t0 / (chord_len * 2)))
-            if m > 0:
-                buf[a:a + m] += hit[:m] * swell
-            t0 += step
+        if cfg["drum"] == "tabla":
+            pat = ["ge", "na", "tin", "na", "ge", "na", "tin", "na"]
+            cache = {k_: _tabla_hit(k_) for k_ in ("ge", "na", "tin")}
+            t0, j = chord_len, 0
+            while t0 < total:
+                if rnd.random() < 0.9:
+                    add(cache[pat[j % 8]], t0, 0.7)
+                t0 += beat / 2
+                j += 1
+        else:
+            hit = _drum_hit(cfg["drum"])
+            step = {"boom": beat * 2, "heart": beat * 2, "shaker": beat / 2}[cfg["drum"]]
+            t0 = chord_len
+            while t0 < total:
+                swell = 0.55 + 0.45 * (0.5 + 0.5 * math.sin(t0 / (chord_len * 2)))
+                add(hit, t0, swell)
+                t0 += step
     peak = float(np.max(np.abs(buf))) or 1.0
     buf = buf / peak * 0.9
     raw = Path(str(out) + ".raw.wav")
     write_wav(raw, buf)
     run(["ffmpeg", "-y", "-i", raw, "-af",
-         "lowpass=f=5200,aecho=0.8:0.85:600|1100:0.28|0.18,"
+         "lowpass=f=6200,aecho=0.8:0.85:600|1100:0.26|0.16,"
          f"afade=t=in:d=3,afade=t=out:st={max(1, total - 4):.1f}:d=4,aformat=channel_layouts=stereo", "-t", f"{total:.1f}", out])
     raw.unlink(missing_ok=True)
 
@@ -3885,8 +4097,8 @@ def ov_sprite(kind, text, mark, pal):
 # Source cards in 4 styles (banner / torn paper / dark text page / document page), sliding year timeline, person name card with real photo,
 # round pop-ups with cross / tick, big red stat text.  Every card is drawn from REAL page text only (never written by the bot).
 SRC_STYLES = ["banner", "paper", "dark", "doc"]
-V2_KINDS = ("note", "year", "person", "stat", "verdict", "explain", "srclist")
-OV_MAXT = {"place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8}
+V2_KINDS = ("note", "year", "person", "stat", "verdict", "explain", "srclist", "action")
+OV_MAXT = {"place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0}
 _BLACK = {}
 
 
@@ -4112,7 +4324,8 @@ def build_card(style, body, title, dom, mark):
         return _CARDS[key]
     if len(_CARDS) > 8:
         _CARDS.clear()
-    body, title = _ascii(body), _ascii(title)[:110]
+    body, title = _ascii(body), pretty_source(title)[:110]
+    dom = ""  # a web address is never written on the video: only the plain name of the source
     mark = _ascii(mark)
     probe = ImageDraw.Draw(Image.new("L", (4, 4)))
     if style == "banner":
@@ -4565,6 +4778,9 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
     if k == "explain":
         draw_explain(fr, sh, tl, t0, t1, a, ov)
         return True
+    if k == "action":
+        draw_action(fr, sh, tl, t0, t1, a, ov)
+        return True
     if k == "srclist":
         draw_srclist(fr, sh, tl, t0, t1, a, ov)
         return True
@@ -4587,8 +4803,8 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
 
 
 # =========================================================================== V3: guaranteed sources, auto word-detector, roll-out paper, keyframe-animated PNG
-ITEM_PRI = {"note": 6, "srclist": 6, "verdict": 5, "explain": 5, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2}
-ITEM_MIN = {"year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "verdict": 3.4, "explain": 3.4, "srclist": 3.6}
+ITEM_PRI = {"note": 6, "srclist": 6, "verdict": 5, "explain": 5, "action": 5, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2}
+ITEM_MIN = {"year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "verdict": 3.4, "explain": 3.4, "srclist": 3.6, "action": 2.6}
 
 
 def item_zones(it):
@@ -4652,12 +4868,12 @@ SRC_REFS = []  # reference-only entries {"title","dom","url"} when no page text 
 def _src_refs():
     refs = []
     for x in SRC_LIST:
-        refs.append({"title": _ascii(x["title"])[:90], "dom": _dom(x["url"]), "url": x["url"]})
+        refs.append({"title": pretty_source(x["title"])[:90], "dom": "", "url": x["url"]})
     if not refs:
         for g in GROUND_SRC[:6]:
-            t = _ascii(g.get("title") or "")
-            if t:
-                refs.append({"title": t[:90], "dom": t.lower() if re.fullmatch(r"[a-z0-9.\-]+\.[a-z]{2,}", t.lower()) else "", "url": g.get("uri", "")})
+            t = pretty_source(g.get("title") or "")
+            if t and t != "Web source":
+                refs.append({"title": t[:90], "dom": "", "url": g.get("uri", "")})
     return refs
 
 
@@ -4718,67 +4934,63 @@ def _ph_scenes(scenes):
 
 
 def force_source_cards(scenes, topic=""):
-    """Whatever the director chose: about every 2nd picture scene shows a source card (real page text, or at least the real source name). The narrator does not have to mention it."""
+    """Source cards that match what the narrator says AT THAT MOMENT: Gemini reads every scene against the real source paragraphs and returns
+    only real matches (the claim, the word where it is spoken, the paragraph, the exact words to highlight). Nothing is forced when nothing fits."""
     ph = _ph_scenes(scenes)
-    if not ph:
+    if not ph or not SRC_PARAS or not GEMINI_KEY:
         return 0
     has = lambda sc: any(isinstance(i, dict) and i.get("kind") == "note" for i in (sc.get("items") or []))
     have = sum(1 for sc in ph if has(sc))
     target = max(2, (len(ph) + 1) // 2)
     need = target - have
-    if need <= 0:
-        return 0
     free = [sc for sc in ph if not has(sc)]
-    if not free:
+    if need <= 0 or not free:
         return 0
-    step = max(1, len(free) / float(need))
-    pick = [free[min(len(free) - 1, int(k * step))] for k in range(min(need, len(free)))]
-    paras = list(SRC_PARAS.items())
-    added = 0
-    # 1) let Gemini choose the paragraph that fits each scene best (validated: the highlighted words must really be in the paragraph)
-    chosen = {}
-    if paras and GEMINI_KEY:
+    paras = list(SRC_PARAS.items())[:45]
+    plist = "\n".join(f'[{k}] {v["title"][:45]}: "{v["text"][:240]}"' for k, v in paras)
+    cands = []
+    for a in range(0, len(free), 5):
+        batch = free[a:a + 5]
+        listing = "\n".join(f"SCENE {ph.index(sc)}: {_numbered(sc)}" for sc in batch)
+        prompt = f"""Hindi documentary scenes (every word numbered) and real source paragraphs (English). Topic: {topic}
+For each scene: if one source paragraph supports, confirms or documents a SPECIFIC claim the narrator makes IN THAT SCENE, return it:
+{{"i": scene number, "w": number of the word where the narrator says that claim, "src": "paragraph id", "mark_en": "3-8 words copied EXACTLY from that paragraph that back the claim", "fit": "direct" or "related"}}.
+"direct" = the paragraph states the same fact; "related" = same subject, supporting context. Leave a scene out when no paragraph matches what it says. Never force a match, never invent.
+Return ONLY JSON: {{"matches":[...]}}
+{listing}
+{plist}"""
         try:
-            lst = "\n".join(f'[{k}] {v["title"][:50]}: "{v["text"][:230]}"' for k, v in paras[:40])
-            sl = "\n".join(f"SCENE {ph.index(sc)}: {sc['narration_hi'][:260]}" for sc in pick)
-            out = gemini_json(f"""Hindi documentary scenes and real source paragraphs (English). For EACH scene choose the paragraph id that best supports or illustrates what the scene says (the closest topic is fine, never invent).
-Give "mark_en": 3-8 words copied EXACTLY from that paragraph worth highlighting. Return ONLY JSON: {{"scenes":[{{"i":0,"src":"1.2","mark_en":"..."}}]}}
-{sl}
-{lst}""", 0.1)
-            for r in (out.get("scenes") or []):
-                try:
-                    chosen[int(r.get("i"))] = (str(r.get("src") or "").strip(), clean_short(r.get("mark_en"), 60))
-                except Exception:  # noqa
-                    pass
+            out = gemini_json(prompt, 0.1)
         except Exception as e:  # noqa
             log("source matching failed:", str(e)[:100])
-    order = []  # distinct pages first
-    seen_t = set()
-    for k, v in paras:
-        if v["title"] not in seen_t:
-            seen_t.add(v["title"])
-            order.append(k)
-    order += [k for k, _ in paras if k not in order]
-    refs = _src_refs()
-    for n, sc in enumerate(pick):
-        nwd = len(sc["narration_hi"].split())
-        w = max(1, min(nwd - 1, nwd // 4))
-        key, mk = chosen.get(ph.index(sc), ("", ""))
-        sp_ = SRC_PARAS.get(key)
-        if not sp_ and order:
-            sp_ = SRC_PARAS[order[n % len(order)]]
-        if sp_:
+            continue
+        for r in (out.get("matches") or []):
+            try:
+                i, w = int(r.get("i")), int(r.get("w"))
+            except Exception:  # noqa
+                continue
+            sc = next((x for x in batch if ph.index(x) == i), None)
+            sp_ = SRC_PARAS.get(str(r.get("src") or "").strip())
+            fit = str(r.get("fit") or "").lower()
+            if sc is None or sp_ is None or fit not in ("direct", "related") or not (0 <= w < len(sc["narration_hi"].split())):
+                continue
+            mk = clean_short(r.get("mark_en"), 70)
             if not mk or mk.lower() not in sp_["text"].lower():
-                mk = auto_mark(sp_["text"])
-            rec = {"w": w, "kind": "note", "text": sp_["text"], "mark": mk, "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))}
-        elif refs:
-            r_ = refs[n % len(refs)]
-            rec = {"w": w, "kind": "note", "text": "", "mark": "", "sub": r_["title"], "dom": r_["dom"], "ref": True}
-        else:
+                mk = auto_mark(sp_["text"]) if fit == "direct" else ""
+            cands.append((0 if fit == "direct" else 1, sc, str(r.get("src")).strip(), {"w": w, "kind": "note", "text": sp_["text"], "mark": mk,
+                                                                                    "sub": sp_["title"].replace("|", "-")[:70], "dom": ""}))
+    cands.sort(key=lambda c: c[0])
+    added, used_src, used_sc = 0, set(), set()
+    for _fit, sc, src, rec in cands:
+        if added >= need:
+            break
+        if src in used_src or id(sc) in used_sc:
             continue
         sc.setdefault("items", []).append(rec)
+        used_src.add(src)
+        used_sc.add(id(sc))
         added += 1
-    log(f"forced source cards: {added} (had {have}, target {target})")
+    log(f"source cards matched to the narration: {added} (had {have}, target {target})")
     return added
 
 
@@ -4789,7 +5001,7 @@ def add_source_outro(scenes):
     if not refs or not ph:
         return False
     sc = ph[-1]
-    sc.setdefault("items", []).append({"w": 0, "kind": "srclist", "text": "\n".join(f"{r['title']}|{r['dom']}" for r in refs), "at_end": True})
+    sc.setdefault("items", []).append({"w": 0, "kind": "srclist", "text": "\n".join(r["title"] for r in refs), "at_end": True})
     return True
 
 
@@ -4924,7 +5136,7 @@ def put_roll(fr, spr, cx, cy, q, scale=1.0, base=(232, 222, 196)):
 
 
 # ---------------------------------------------------------------- keyframe engine + explain PNG
-EXPLAIN_MAX = [int(os.environ.get("MAX_EXPLAIN_PNG", "3" if TEST_SEC else "8"))]
+EXPLAIN_MAX = [int(os.environ.get("MAX_EXPLAIN_PNG", "4" if TEST_SEC else "12"))]
 KF_PRESETS = {  # (t, x, y, scale, rotation, alpha); x / y are fractions of the free area, mirrored when it is on the left
     "pop":   [(0.0, 0.0, 0.08, 0.2, -14, 0.0), (0.35, 0.0, 0.0, 1.14, 5, 1.0), (0.6, 0.0, 0.0, 1.0, 0, 1.0), (4.4, 0.0, -0.02, 1.05, 0, 1.0)],
     "slide": [(0.0, 0.9, 0.0, 0.9, 8, 0.0), (0.55, 0.0, 0.0, 1.0, -2, 1.0), (4.4, -0.05, 0.02, 1.04, 0, 1.0)],
@@ -5011,13 +5223,24 @@ def explain_png(query, out):
     except Exception as e:  # noqa
         log("  png search failed:", type(e).__name__, str(e)[:80])
     try:
-        if gen_image(f"a single {query}, isolated on a plain white background, studio product photo, centered, nothing else", p, "obj", query=query):
-            st = cutout_sticker(p, 520)
-            if st is not None:
-                return st
+        rgba = cutout_object(f"a single {query}, studio product photo", p, query)
+        if rgba is not None:
+            return png_sticker(rgba)
     except Exception as e:  # noqa
         log("  object png failed:", type(e).__name__, str(e)[:80])
     return None
+
+
+def action_png(query, pose, verb, out):
+    """The moving thing for an action scene ("lion running"): a pose picture generated on a flat backdrop, then ONLY the background is cut away."""
+    side = ", side view, facing right" if verb in HORIZONTAL else ", facing the camera" if verb in ("approach", "retreat") else ""
+    try:
+        rgba = cutout_object(f"{pose or query}{side}, full body, studio photo", Path(out), query)
+        if rgba is not None:
+            return png_sticker(rgba, 560)
+    except Exception as e:  # noqa
+        log("  action png failed:", type(e).__name__, str(e)[:80])
+    return explain_png(query, out)
 
 
 def draw_explain(fr, ps, tl, t0, t1, a, ov):
@@ -5051,8 +5274,8 @@ def srclist_sprite(text):
     rows = [r.split("|") for r in text.split("\n") if r.strip()]
     probe = ImageDraw.Draw(Image.new("L", (4, 4)))
     fh, fr_ = font_for("A", 30, "cond"), font_for("A", 27, "serif")
-    rows = [[_ascii(r[0])[:70]] + [x for x in r[1:]] for r in rows]
-    need = max(int(probe.textlength(r[0], font=fr_) + 70 + (probe.textlength(r[1], font=fh) + 40 if len(r) > 1 and r[1] else 0)) for r in rows) + 50
+    rows = [[pretty_source(r[0])[:70]] for r in rows]
+    need = max(int(probe.textlength(r[0], font=fr_) + 70) for r in rows) + 50
     w_ = min(W - 80, max(620, need))
     h_ = 30 + 46 + len(rows) * 40 + 16
     im = Image.new("RGBA", (w_, h_), (0, 0, 0, 0))
@@ -5062,12 +5285,9 @@ def srclist_sprite(text):
     d.text((36, 20 + 28), "SOURCES", font=fh, fill=(255, 255, 255, 255), anchor="ls")
     y = 20 + 46
     for k, r in enumerate(rows, 1):
-        t = _ascii(r[0])[:78]
+        t = r[0][:78]
         d.text((26, y + 28), f"{k}.", font=fr_, fill=(255, 196, 60, 255), anchor="ls")
         d.text((70, y + 28), t, font=fr_, fill=(240, 236, 226, 255), anchor="ls")
-        if len(r) > 1 and r[1]:
-            tw_ = d.textlength(t, font=fr_)
-            d.text((70 + tw_ + 14, y + 28), r[1], font=fh, fill=(150, 200, 255, 255), anchor="ls")
         y += 40
     _CARDS[key] = im
     return im
@@ -5077,6 +5297,286 @@ def draw_srclist(fr, ps, tl, t0, t1, a, ov):
     spr = srclist_sprite(ov.get("it", {}).get("text") or "")
     q = e_out(cl((tl - t0) / 0.5))
     put(fr, spr, 40 + spr.width / 2, H - 36 - spr.height / 2 + (1 - q) * 60, 1.0, a)
+
+
+# =========================================================================== V5: clean cut-outs, action animations, meaning-aware pictures, mention-timed pictures
+def pretty_source(title, dom=""):
+    """Never show a link: a title that is a web address becomes a plain name ("en.wikipedia.org" -> "Wikipedia")."""
+    t = _ascii(title or "")
+    if re.search(r"https?://|www\.|\.(com|org|net|in|co|edu|gov|io)\b", t, re.I) and len(t.split()) <= 3:
+        host = re.sub(r"^https?://", "", t.lower()).split("/")[0]
+        parts = [p for p in host.split(".") if p and p not in ("www", "en", "m")]
+        name = parts[-2] if len(parts) >= 2 else (parts[0] if parts else "")
+        return name.capitalize() if name else "Web source"
+    return re.sub(r"https?://\S+", "", t).strip(" -|") or "Web source"
+
+
+def clean_cutout(path):
+    """Removes ONLY the plain background around the object (flat colour touching the picture border). Every pixel of the object is kept;
+    the edge gets a soft anti-aliased fade with the background colour taken out of it. Returns an RGBA image or None."""
+    np = _np()
+    from scipy import ndimage
+    im = Image.open(path).convert("RGB")
+    arr = np.asarray(im, dtype=np.float32)
+    h, w, _ = arr.shape
+    ring = np.concatenate([arr[:6].reshape(-1, 3), arr[-6:].reshape(-1, 3), arr[:, :6].reshape(-1, 3), arr[:, -6:].reshape(-1, 3)])
+    bgc = np.median(ring, axis=0)
+    if float(ring.std(axis=0).max()) > 42:
+        return None  # the background is not a flat colour
+    d = np.sqrt(((arr - bgc) ** 2).sum(2))
+    lab, _n = ndimage.label(d < 26.0)
+    border = set(np.unique(np.concatenate([lab[0], lab[-1], lab[:, 0], lab[:, -1]]))) - {0}
+    bg = np.isin(lab, list(border)) if border else np.zeros(d.shape, bool)
+    fg = ~bg
+    holes = ndimage.binary_fill_holes(fg) & ~fg  # small enclosed bits inside the object stay opaque; big enclosed openings (a handle) stay transparent
+    hl, hn = ndimage.label(holes)
+    if hn:
+        sizes = ndimage.sum(holes, hl, range(1, hn + 1))
+        fg = fg | np.isin(hl, [i + 1 for i, s in enumerate(sizes) if s < 0.004 * h * w])
+    fl, fn = ndimage.label(fg)
+    if fn > 1:
+        sizes = ndimage.sum(fg, fl, range(1, fn + 1))
+        keep = [i + 1 for i, s in enumerate(sizes) if s >= max(0.0015 * h * w, 0.02 * float(max(sizes)))]
+        fg = np.isin(fl, keep)
+    if fg.mean() < 0.04 or fg.mean() > 0.85:
+        return None
+    edge_touch = int(fg[0].sum() + fg[-1].sum() + fg[:, 0].sum() + fg[:, -1].sum())
+    if edge_touch > 0.12 * 2 * (h + w):
+        return None  # the object is cut by the picture frame
+    near = ndimage.binary_dilation(~fg, iterations=2) & fg
+    alpha = fg.astype(np.float32)
+    alpha[near] = np.clip((d[near] - 10.0) / 36.0, 0, 1)
+    a3 = np.maximum(alpha, 0.25)[..., None]
+    out = np.where(near[..., None], np.clip((arr - (1 - alpha[..., None]) * bgc) / a3, 0, 255), arr)
+    if float(bgc.max() - bgc.min()) > 110:  # coloured backdrop (green): remove the colour spill from the edge pixels
+        c = int(np.argmax(bgc))
+        o1, o2 = [k for k in range(3) if k != c]
+        rim = ndimage.binary_dilation(near, iterations=1) & fg
+        cap = (out[..., o1] + out[..., o2]) / 2.0 + 8.0
+        out[..., c] = np.where(rim, np.minimum(out[..., c], cap), out[..., c])
+    rgba = np.dstack([out, alpha * 255]).astype(np.uint8)
+    return Image.fromarray(rgba, "RGBA")
+
+
+def cutout_complete(rgba, query):
+    """Gemini looks at the cut-out on a magenta card: is the whole object there (nothing cut off, erased or missing)?"""
+    if not GEMINI_KEY or VERIFY["off"]:
+        return True
+    try:
+        card = Image.new("RGB", rgba.size, (255, 0, 255))
+        card.paste(rgba, mask=rgba.getchannel("A"))
+        card.thumbnail((512, 512))
+        buf = io.BytesIO()
+        card.save(buf, "JPEG", quality=82)
+        ans, _t = gemini(f'This is a cut-out of "{query}" on a magenta background. Is the WHOLE object present - no part cut off, erased, transparent, or missing (legs, tail, ears, handles, wheels)? '
+                         "Answer YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
+        return str(ans).strip().upper().startswith("YES")
+    except Exception:  # noqa
+        return True
+
+
+LIGHT_WORDS = re.compile(r"\b(white|snow\w*|polar|swan|egret|cloud\w*|ice|iceberg|salt|cotton|milk|pearl|silver|ghost|albino|marble|bone|skull|skeleton|paper)\b", re.I)
+
+
+def cutout_object(subject, out, query, tries=None):
+    """Generate the object on a flat background and cut ONLY the background away; a second try uses a green backdrop when a white
+    object (or white fur) would have been eaten by the first. Returns an RGBA cut-out or None."""
+    if tries is None:  # a light subject starts on green so its white parts survive
+        tries = ("green", "white") if LIGHT_WORDS.search(subject + " " + query) else ("white", "green")
+    for bgname in tries:
+        p = Path(out)
+        p.unlink(missing_ok=True)
+        try:
+            if not gen_image(f"{subject}, whole subject fully visible and centered with free space all around, nothing cropped", p, "obj", query=query, bg=bgname):
+                continue
+            rgba = clean_cutout(p)
+        except Exception as e:  # noqa
+            log("  cutout try failed:", type(e).__name__, str(e)[:80])
+            continue
+        if rgba is not None and cutout_complete(rgba, query):
+            return rgba
+        log(f"  cut-out of '{query}' rejected on {bgname} background")
+    return None
+
+
+# ---------------------------------------------------------------- action animation: the PNG itself moves ("the lion ran towards the lake")
+ACTION_SPAN = {"run": 3.6, "walk": 4.8, "swim": 4.6, "fly": 4.0, "jump": 3.0, "fall": 2.6, "rise": 3.0, "approach": 3.8, "retreat": 3.4, "spin": 2.6, "shake": 2.2, "grow": 2.8}
+HORIZONTAL = ("run", "walk", "swim", "fly", "jump")
+
+
+def action_state(verb, direction, tl, span):
+    """(x, y, scale, rotation, squash_y, shadow) of the moving cut-out at time tl; x, y are screen fractions of W and H."""
+    sgn = -1 if direction == "left" else 1
+    T = max(1.2, span - 0.5)
+    u = cl((tl - 0.2) / T)
+    if verb in ("run", "walk"):
+        f = 2.7 if verb == "run" else 1.7
+        amp = 0.05 if verb == "run" else 0.016
+        x = 0.5 + sgn * (-0.68 + 1.36 * u)
+        y = 0.74 - abs(math.sin(math.pi * f * tl)) * amp
+        return x, y, 1.0, sgn * 3.0 * math.sin(2 * math.pi * f * tl + 1.0), 1 + 0.045 * math.sin(2 * math.pi * f * 2 * tl), True
+    if verb == "swim":
+        x = 0.5 + sgn * (-0.64 + 1.28 * u)
+        return x, 0.64 + 0.02 * math.sin(2 * math.pi * 0.9 * tl), 0.85, sgn * 4.0 * math.sin(2 * math.pi * 0.9 * tl), 1.0, False
+    if verb == "fly":
+        x = 0.5 + sgn * (-0.66 + 1.32 * u)
+        return x, 0.30 + 0.045 * math.sin(2 * math.pi * 0.7 * tl) + (1 - u) * 0.05, 0.9, sgn * 5.0 * math.sin(2 * math.pi * 0.7 * tl + 0.5), 1 + 0.1 * math.sin(2 * math.pi * 7 * tl), False
+    if verb == "jump":
+        x = 0.5 + sgn * (-0.38 + 0.76 * u)
+        return x, 0.74 - 0.38 * 4 * u * (1 - u), 1.0, -sgn * 14.0 * math.sin(math.pi * u), 1 + 0.08 * math.sin(math.pi * u), u < 0.02 or u > 0.98
+    if verb == "fall":
+        v = cl((tl - 0.15) / 1.3)
+        y = -0.25 + (0.74 + 0.25) * v * v
+        if v >= 1:  # small bounce when it lands
+            b = cl((tl - 1.45) / 0.5)
+            y = 0.74 - 0.05 * 4 * b * (1 - b)
+        return 0.5 + sgn * 0.12, y, 1.0, sgn * 360.0 * min(1.0, v), 1.0, v >= 1
+    if verb == "rise":
+        v = e_out(cl((tl - 0.15) / (T * 0.8)))
+        return 0.5, 0.86 - 0.58 * v, 0.9 + 0.2 * v, 0.0, 1.0, False
+    if verb == "approach":
+        v = cl((tl - 0.1) / T)
+        v = v * v * (3 - 2 * v)
+        return 0.5, 0.66 + 0.02 * math.sin(tl * 4), 0.28 + 1.3 * v, 0.0, 1.0, v > 0.2
+    if verb == "retreat":
+        v = cl((tl - 0.1) / T)
+        v = v * v * (3 - 2 * v)
+        return 0.5, 0.66, 1.4 - 1.15 * v, 0.0, 1.0, True
+    if verb == "spin":
+        v = e_out(cl((tl - 0.1) / (T * 0.7)))
+        return 0.5, 0.5, 0.3 + 0.8 * v, 720.0 * v, 1.0, False
+    if verb == "shake":
+        k = max(0.0, 1 - tl / span)
+        return 0.5 + 0.012 * math.sin(tl * 60) * k, 0.55, 1.0, 5.0 * math.sin(tl * 48) * k, 1.0, False
+    v = e_back(cl((tl - 0.1) / (T * 0.55)))  # grow
+    return 0.5, 0.58, 0.3 + 0.95 * v, 0.0, 1.0, False
+
+
+_GROUND_SH = {}
+
+
+def draw_action(fr, ps, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    spr = it.get("png_img")
+    if spr is None:
+        return
+    verb, direction = it.get("verb") or "run", it.get("dir") or "right"
+    x, y, s, rot, sq, shadow = action_state(verb, direction, tl, max(1.5, t1 - t0))
+    base = spr if (direction != "left" or verb not in HORIZONTAL) else ImageOps.mirror(spr)
+    scl = (0.44 * H / max(1, base.height)) * s
+    if shadow:  # small soft ground shadow under the feet
+        sw_ = max(40, int(base.width * scl * 0.75) // 8 * 8)
+        sh_img = _GROUND_SH.get(sw_)
+        if sh_img is None:
+            sh_img = Image.new("RGBA", (sw_ + 40, 56), (0, 0, 0, 0))
+            ImageDraw.Draw(sh_img).ellipse([20, 14, sw_ + 20, 42], fill=(0, 0, 0, 150))
+            _GROUND_SH[sw_] = sh_img = sh_img.filter(ImageFilter.GaussianBlur(7))
+        put(fr, sh_img, x * W, 0.74 * H - 2, 1.0, a * 0.6)
+    im = base
+    if abs(sq - 1) > 0.01:
+        im = im.resize((im.width, max(8, int(im.height * sq))), Image.BILINEAR)
+    if abs(rot) > 0.4:
+        im = im.rotate(rot, expand=True, resample=Image.BICUBIC)
+    put(fr, im, x * W, y * H - base.height * scl * 0.5 + 30 * scl, scl, a)  # feet (not the sprite's padding) stand on the ground line
+
+
+# ---------------------------------------------------------------- pictures that follow the MEANING, shown only when mentioned
+def semantic_review(scenes, topic=""):
+    """Text-only pass over every picture query: emotions, professions and abstract words must show what they mean (a real person who looks sad,
+    a real doctor at work, a concrete symbol for 'danger'), never an unrelated animal or object."""
+    if not GEMINI_KEY:
+        return 0
+    rows = []
+    for i, sc in enumerate(scenes):
+        if sc.get("type") != "photo":
+            continue
+        for k, sh in enumerate(sc.get("shots") or []):
+            if str(sh.get("text_hi") or "").strip() and (sh.get("query_en") or sh.get("prompt_en")):
+                rows.append((i, k, sh))
+    fixed = 0
+    for a in range(0, len(rows), 12):
+        part = rows[a:a + 12]
+        listing = "\n".join(f'S{i}.{k}: "{sh["text_hi"][:160]}" -> picture: {sh.get("clip_en") or sh.get("query_en") or sh.get("prompt_en", "")[:60]}' for i, k, sh in part)
+        prompt = f"""Documentary picture editor (topic: {topic}). For each Hindi sentence the picture query is shown. Check that the picture shows what the sentence MEANS:
+- EMOTIONS / STATES (happy, sad, angry, afraid, lonely, proud, tired, in pain, shocked...) need a REAL PERSON whose face / body clearly shows that emotion (e.g. "sad man crying alone", "happy family laughing").
+- PROFESSIONS / PERSONALITIES (doctor, engineer, scientist, farmer, teacher, soldier, police officer, student, priest, king, athlete...) need a REAL PERSON in that role at work (e.g. "doctor in white coat with stethoscope", "engineer with helmet and blueprint", "scientist in laboratory").
+- ABSTRACT WORDS (good, bad, success, failure, danger, peace, justice, time, money, fear) need ONE concrete symbolic real scene, never a random animal or object.
+- A named thing / place / animal keeps its own picture.
+Return ONLY the rows that must be FIXED: {{"fix":[{{"id":"S0.1","query_en":"2-4 plain English words for a real stock photo","prompt_en":"realistic description of that single subject","clip_en":"subject + visible action, or empty"}}]}}. Return {{"fix":[]}} when all are fine.
+{listing}"""
+        try:
+            out = gemini_json(prompt, 0.15)
+        except Exception as e:  # noqa
+            log("semantic review failed:", str(e)[:100])
+            continue
+        for c in (out.get("fix") or []):
+            m_ = re.match(r"S(\d+)\.(\d+)$", str(c.get("id") or ""))
+            if not m_:
+                continue
+            i, k = int(m_.group(1)), int(m_.group(2))
+            if not any(r[0] == i and r[1] == k for r in part):
+                continue
+            sh = scenes[i]["shots"][k]
+            q_, pr_ = clean_short(c.get("query_en"), 50), clean_short(c.get("prompt_en"), 300)
+            if q_ and q_.isascii():
+                sh["query_en"], sh["entity_en"] = q_, ""
+                sh["prompt_en"] = pr_ or ("a realistic photo of " + q_)
+                ce = clean_short(c.get("clip_en"), 40)
+                sh["clip_en"], sh["motion"] = (ce, True) if ce and ce.isascii() else ("", False)
+                fixed += 1
+    log("semantic review fixed pictures:", fixed)
+    return fixed
+
+
+def delay_to_mention(scenes):
+    """One picture per sentence starts WITH the sentence; when the subject is only named later in that sentence, the previous picture stays until the
+    narrator says it (the first words of the sentence are handed to the previous picture), so nothing appears before it is spoken about."""
+    if not GEMINI_KEY:
+        return 0
+    rows = []
+    for i, sc in enumerate(scenes):
+        if sc.get("type") != "photo" or len(sc.get("shots") or []) < 2:
+            continue
+        for k, sh in enumerate(sc["shots"]):
+            txt = str(sh.get("text_hi") or "")
+            subj = sh.get("clip_en") or sh.get("query_en") or sh.get("entity_en")
+            if k >= 1 and len(txt.split()) >= 7 and subj:
+                rows.append((i, k, txt, subj))
+    moved = 0
+    for a in range(0, len(rows), 10):
+        part = rows[a:a + 10]
+        listing = "\n".join(f"S{i}.{k} [{subj}]: " + " ".join(f"{j}:{w}" for j, w in enumerate(txt.split())) for i, k, txt, subj in part)
+        prompt = ("Hindi sentences, every word numbered. In brackets: the subject of the picture shown for that sentence. For each give \"m\": the 0-based number of the word where that subject is "
+                  "FIRST spoken about (named, or its idea begins). 0 when the sentence starts with it. "
+                  'Return ONLY JSON: {"m":[{"id":"S0.1","m":0}]}\n' + listing)
+        try:
+            out = gemini_json(prompt, 0.0)
+        except Exception as e:  # noqa
+            log("mention timing failed:", str(e)[:100])
+            continue
+        for c in (out.get("m") or []):
+            m_ = re.match(r"S(\d+)\.(\d+)$", str(c.get("id") or ""))
+            if not m_:
+                continue
+            i, k = int(m_.group(1)), int(m_.group(2))
+            try:
+                m = int(c.get("m"))
+            except Exception:  # noqa
+                continue
+            sh = scenes[i]["shots"][k]
+            ws = str(sh.get("text_hi") or "").split()
+            if 3 <= m <= len(ws) - 3 and k >= 1:
+                prev = scenes[i]["shots"][k - 1]
+                prev["text_hi"] = (str(prev.get("text_hi") or "") + " " + " ".join(ws[:m])).strip()
+                sh["text_hi"] = " ".join(ws[m:])
+                moved += 1
+    log("pictures delayed until the narrator names them:", moved)
+    return moved
+
+
+def _label_hits(words, label):
+    toks = [t.strip("।,?!\"'") for t in (label or "").split() if len(t.strip("।,?!\"'")) > 1]
+    return [k for k, w in enumerate(words) if any(t in w.strip("।,?!\"'") or (len(w.strip("।,?!\"'")) > 2 and w.strip("।,?!\"'") in t) for t in toks)]
 
 
 def draw_popup(fr, sh, tl):
@@ -5205,19 +5705,19 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     if sc.get("items") and wt_:
         rr = ctx["rnd"]
         for k_, it in enumerate(sc["items"]):
-            if it["kind"] not in ITEM_KINDS or (it["kind"] == "explain" and it.get("png_img") is None):
+            if it["kind"] not in ITEM_KINDS or (it["kind"] in ("explain", "action") and it.get("png_img") is None):
                 continue
             w_ = min(it["w"], len(wt_) - 1)
             t0_ = max(0.1, wt_[w_][0] - 0.08)
             if it.get("at_end"):
                 t0_ = max(0.1, dur - ITEM_KINDS[it["kind"]] - 0.3)
-            items.append({"t0": t0_, "t1": min(dur - 0.1, t0_ + ITEM_KINDS[it["kind"]]), "span": ITEM_KINDS[it["kind"]], "slot": ITEM_SLOT[it["kind"]], "it": it,
+            items.append({"t0": t0_, "t1": min(dur - 0.1, t0_ + (it.get("span") or ITEM_KINDS[it["kind"]])), "span": it.get("span") or ITEM_KINDS[it["kind"]], "slot": ITEM_SLOT[it["kind"]], "it": it,
                           "ps": {"phase": rr.uniform(0, 6), "pop_side": -1 if k_ % 2 == 0 else 1, "popup": it.get("popup_img"),
                                  "ov": None if it["kind"] == "popup" else {"kind": it["kind"], "text": (it["text"] + "|" + it.get("sub", "")) if it["kind"] in ("place", "note") else it.get("text", ""), "mark": it.get("mark", ""), "it": it}}})
         items = schedule_items(items, dur)  # helpers share the screen only when they use different areas; none is shown shorter than its reading time
         for x_ in items:
             x_["ps"]["dur"] = max(0.4, x_["t1"] - x_["t0"])
-            if x_["it"]["kind"] in ("verdict", "explain", "person", "stat"):
+            if x_["it"]["kind"] in ("verdict", "explain", "person", "stat", "action"):
                 events.append((x_["t0"], "pop", 0.6))
 
     def draw(t):
@@ -5251,7 +5751,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                     x_["ps"]["_idx"] = idx
                     x_["ps"]["img"] = sh.get("img")
                     x_["ps"].pop("subj", None)
-                if ov_ and ov_["kind"] in ("note", "verdict", "explain") and "side" not in ov_:
+                if ov_ and ov_["kind"] in ("note", "verdict", "explain", "action") and "side" not in ov_:
                     ov_["side"] = empty_side(fr)  # keep the text off the person / subject
                 draw_popup(fr, x_["ps"], t - x_["t0"])
                 draw_ov(fr, x_["ps"], t - x_["t0"], pal)
@@ -5610,8 +6110,15 @@ def make_multi_draw(sc, dur, speech_dur, pal, events):
     for k, it in enumerate(items):
         t_ = it["t"] if it.get("t") is not None else (find_word_time(sc, it["label_hi"]) if k > 0 else 0.0)
         ts.append(t_)
-    base_t = [0.0] + [1.0 + k * max(1.2, (speech_dur - 1.5) / n) for k in range(1, n)]
-    ts = [t_ if (t_ is not None and (k == 0 or t_ > ts[k - 1] + 0.7)) else base_t[k] for k, t_ in enumerate(ts)]
+    fixed_ = []  # each panel arrives when it is named (never earlier); two panels are never closer than 0.9 s
+    for k, t_ in enumerate(ts):
+        if k == 0:
+            fixed_.append(0.0)
+        elif t_ is not None:
+            fixed_.append(max(t_, fixed_[-1] + 0.9))
+        else:
+            fixed_.append(fixed_[-1] + max(1.2, (speech_dur - 1.5) / n))
+    ts = fixed_
     if n > 1 and ts[-1] > dur - 1.1 and dur > 1.5:  # all panels must be in place before the sentence ends
         f_ = max(0.3, (dur - 1.1) / ts[-1])
         ts = [t_ * f_ for t_ in ts]
@@ -5964,15 +6471,15 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         return float(v[0] / v[2]), float(v[1] / v[2])
     P_ = [proj(*q) for q in pp]
     NP = len(P_)
-    A_, B_ = P_[0], P_[1]
+    A_, B_ = P_[0], P_[-1]
 
     def make_arc(a_pt, b_pt):
         c_ = ((a_pt[0] + b_pt[0]) / 2, (a_pt[1] + b_pt[1]) / 2 - (0.42 * math.hypot(b_pt[0] - a_pt[0], b_pt[1] - a_pt[1]) + 70))
         return [((1 - f) ** 2 * a_pt[0] + 2 * (1 - f) * f * c_[0] + f * f * b_pt[0], (1 - f) ** 2 * a_pt[1] + 2 * (1 - f) * f * c_[1] + f * f * b_pt[1])
                 for f in [k / 70 for k in range(71)]]
     arcs = [make_arc(P_[k], P_[k + 1]) for k in range(NP - 1)]
-    arc = arcs[0]
-    km = hav_km(pts[0], pts[1])
+    arc = arcs[0] if arcs else [(0.0, 0.0)] * 71
+    km = hav_km(pts[0], pts[-1])
     ktxt = (f"{km:.1f}" if km < 10 else f"{km:,.0f}") + " किमी दूर"
     mid_i = 38
     ang = math.degrees(math.atan2(arc[mid_i + 2][1] - arc[mid_i - 2][1], arc[mid_i + 2][0] - arc[mid_i - 2][0]))
@@ -6008,7 +6515,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         f_ = max(0.3, (dur - 1.0) / tp_[-1])
         tp_ = [t_ * f_ for t_ in tp_]
     kk = min(1.0, max(0.3, dur / (tp_[-1] + 2.2)))  # shorter sentence -> shorter camera moves
-    t1, t2 = tp_[0], tp_[1]
+    t1, t2 = tp_[0], tp_[-1]
     t_arr0 = t1 + 0.5 * kk
     t_text = t2 + 0.15
     events += [(0.2, "whoosh_soft", 0.8)] + [(t_, "pop", 0.8) for t_ in tp_] + ([(t_text, "ding", 0.7)] if NP == 2 else [])
@@ -6016,7 +6523,9 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
     ext = max(abs(A_[0] - B_[0]) * 1.6, abs(A_[1] - B_[1]) * 2.2, 160.0)
     z_far, z_near = 1.0, max(1.5, min(3.0, OW * 0.62 / ext))
     z_end = max(1.2, min(2.6, OW * 0.8 / ext))
-    if NP == 2:
+    if NP == 1:  # a single named place: the camera dives to it and pulls back
+        kfs = [(0.0, z_far, OW / 2, OH / 2), (max(0.05, t1 - 0.6 * kk), 1.7, A_[0], A_[1] - 40), (max(t1 + 0.6, min(t1 + 2.6, dur - 0.3)), 1.35, A_[0], A_[1] - 90)]
+    elif NP == 2:
         kfs = [(0.0, z_far, OW / 2, OH / 2), (max(0.05, t1 - 0.7 * kk), z_near, A_[0], A_[1] - 40), (t_arr0 + 0.3 * kk, z_near, A_[0], A_[1] - 40),
                (max(t_arr0 + 0.35 * kk, t2 - 0.1), z_near * 0.95, B_[0], B_[1] - 60), (max(t2 + 0.5 * kk, min(t2 + 2.0, dur - 0.3)), z_end, (A_[0] + B_[0]) / 2 - 40, (A_[1] + B_[1]) / 2 - 120)]
     else:  # several places: the camera follows every pin in turn, then pulls back to show them all
@@ -6090,6 +6599,13 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
 def make_map_draw(sc, dur, speech_dur, pal, events):
     np = _np()
     m = sc["map"]
+    try:
+        spread_ = max([hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in m["pins"] for b_ in m["pins"]] or [0.0])
+    except Exception:  # noqa
+        spread_ = 0.0
+    if m["pins"] and spread_ < 6000 and os.environ.get("TERRAIN_ONLY", "1") != "0":  # only the tilted terrain map, no satellite / globe look
+        m2 = dict(m, mode="terrain", route=len(m["pins"]) >= 2)
+        return make_terrain_draw(dict(sc, map=m2), dur, speech_dur, pal, events)
     if m.get("mode") == "terrain" and len(m["pins"]) >= 2:
         return make_terrain_draw(sc, dur, speech_dur, pal, events)
     pins = m["pins"]
@@ -6520,8 +7036,8 @@ def build_video(scenes, tdir, pal):
 def mux_final(silent, voice, music, sfx, out, max_mb=None):
     dur = ffprobe_dur(voice)
     fc = ("[1:a]highpass=f=70,aresample=44100,asplit=2[v][vsc];"
-          "[2:a]volume=0.12[m];"
-          "[m][vsc]sidechaincompress=threshold=0.04:ratio=9:attack=15:release=500[duck];"
+          "[2:a]volume=0.062[m];"
+          "[m][vsc]sidechaincompress=threshold=0.03:ratio=12:attack=12:release=600[duck];"
           + ("[3:a]aresample=44100,aformat=channel_layouts=stereo,volume=0.55[fx];" if sfx else "")
           + "[v]aformat=channel_layouts=stereo[vst];"
           + ("[vst][duck][fx]amix=inputs=3:" if sfx else "[vst][duck]amix=inputs=2:")
@@ -7204,6 +7720,12 @@ def make_visuals(scenes, imgdir):
                             it["photo_img"] = Image.open(pp_).convert("RGB")
                     except Exception as e:  # noqa
                         log("person photo failed:", type(e).__name__, str(e)[:100])
+                if it["kind"] == "action" and it.get("png_img") is None and EXPLAIN_MAX[0] > 0:
+                    EXPLAIN_MAX[0] -= 1
+                    try:
+                        it["png_img"] = action_png(it.get("query_en", ""), it.get("pose", ""), it.get("verb", "run"), imgdir / f"{i:03d}_i{n_}_act.png")
+                    except Exception as e:  # noqa
+                        log("action png failed:", type(e).__name__, str(e)[:100])
                 if it["kind"] == "explain" and it.get("png_img") is None and EXPLAIN_MAX[0] > 0:
                     EXPLAIN_MAX[0] -= 1
                     try:
@@ -7680,6 +8202,15 @@ def selftest():
                                 {"w": 14, "kind": "note", "text": "", "sub": "Britannica - Volcano", "dom": "britannica.com", "ref": True, "style": "banner"},
                                 {"w": 0, "kind": "srclist", "text": "Wikipedia - Volcano|en.wikipedia.org\nBritannica - Volcano|britannica.com", "at_end": True}],
                       "shots": shots([("ज्वालामुखी का मुख यानी क्रेटर ऐसा दिखता है और यह उत्तर प्रदेश से दूर है, ऐसा माना जाता है कि यह बहुत पुराना है", "rock", (150, 90, 60), (40, 20, 10))])})
+    lion_ = clean_cutout(Path("/home/claude/cut_src_test.png")) if Path("/home/claude/cut_src_test.png").exists() else None
+    if lion_ is None:
+        lion_ = Image.new("RGBA", (500, 360), (0, 0, 0, 0))
+        ImageDraw.Draw(lion_).ellipse([40, 90, 440, 300], fill=(190, 140, 80, 255))
+        ImageDraw.Draw(lion_).ellipse([330, 40, 470, 170], fill=(175, 120, 60, 255))
+    for verb_, dir_, pos_ in (("run", "right", "rock"), ("approach", "toward", "moon")):
+        ov_scenes.append({"type": "photo", "tone": "suspense", "headline_hi": "", "narration_hi": "शेर दौड़ता हुआ तालाब की तरफ गया और फिर पानी पीने लगा, आसपास सब कुछ शांत था",
+                          "items": [{"w": 0, "kind": "action", "text": "", "query_en": "lion", "pose": "lion running", "verb": verb_, "dir": dir_, "span": ACTION_SPAN[verb_], "png_img": png_sticker(lion_, 560)}],
+                          "shots": shots([("शेर दौड़ता हुआ तालाब की तरफ गया और फिर पानी पीने लगा, आसपास सब कुछ शांत था", pos_, (60, 110, 120), (10, 30, 40))])})
     ov_scenes.append({"type": "multi", "vs": True, "tone": "serious", "headline_hi": "", "narration_hi": "नया तरीका बिल्कुल अलग है और पुराना तरीका बिल्कुल अलग था",
                       "items": [{"label_hi": "नया तरीका", "prompt_en": "x", "image": art(t0 / "vs_a.png", "rock", (150, 110, 70), (60, 30, 20), 1920), "t": 0.0},
                                 {"label_hi": "पुराना तरीका", "prompt_en": "x", "image": art(t0 / "vs_b.png", "planet", (90, 120, 150), (20, 30, 50), 1920), "t": 1.6}]})
