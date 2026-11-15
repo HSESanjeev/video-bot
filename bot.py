@@ -193,42 +193,8 @@ def gemini_models():
 GROUND_SRC = []
 
 
-GOV = {"t0": time.time(), "opt": 0, "skipped": 0, "slow": 0, "cool": 0.0}
-RUN_BUDGET_MIN = float(os.environ.get("RUN_BUDGET_MIN", "200"))  # the workflow is cancelled after 240 min: everything optional stops long before
-OPT_MAX = int(os.environ.get("OPTIONAL_LLM_MAX", "70"))
-
-
-def elapsed_min():
-    return (time.time() - GOV["t0"]) / 60.0
-
-
-def llm_optional_ok():
-    """Optional Gemini calls (picture checks, editing passes) run only while the key is healthy, the budget is not used up and there is plenty of time left."""
-    return bool(GEMINI_KEY) and GOV["opt"] < OPT_MAX and time.time() >= GOV["cool"] and elapsed_min() < 90
-
-
-def gemini(prompt, json_mode=False, temperature=0.8, search=False, image=None, optional=False):
-    """Returns (text, grounding_titles). optional=True: one quick try, skipped completely while Gemini is slow / rate limited."""
-    if optional:
-        if not llm_optional_ok():
-            GOV["skipped"] += 1
-            raise RuntimeError("optional Gemini call skipped (rate limit / budget / time)")
-        GOV["opt"] += 1
-    t_call = time.time()
-    try:
-        return _gemini_raw(prompt, json_mode, temperature, search, image, optional)
-    finally:
-        dur = time.time() - t_call
-        if dur > 30:
-            GOV["slow"] += 1
-            if GOV["slow"] >= 2 and time.time() >= GOV["cool"]:
-                GOV["cool"] = time.time() + 900
-                log(f"Gemini is slow / rate limited ({dur:.0f}s for one call): optional passes and picture checks pause for 15 minutes")
-        elif dur < 12:
-            GOV["slow"] = 0
-
-
-def _gemini_raw(prompt, json_mode, temperature, search, image, optional):
+def gemini(prompt, json_mode=False, temperature=0.8, search=False, image=None):
+    """Returns (text, grounding_titles)."""
     parts_ = [{"text": prompt}]
     if image:
         parts_.append({"inline_data": {"mime_type": "image/jpeg", "data": image}})
@@ -239,14 +205,14 @@ def _gemini_raw(prompt, json_mode, temperature, search, image, optional):
     if search:
         body["tools"] = [{"google_search": {}}]
     last = None
-    for model in (gemini_models()[:1] if optional else gemini_models()):
-        for attempt in range(1 if optional else 2):
+    for model in gemini_models():
+        for attempt in range(2):
             try:
                 r = requests.post(f"{GBASE}/models/{model}:generateContent",
-                                  headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=60 if optional else 240)
+                                  headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=240)
                 if r.status_code in (429, 500, 503):
                     last = f"{model} HTTP {r.status_code}"
-                    time.sleep(3 if optional else 15 * (attempt + 1))
+                    time.sleep(15 * (attempt + 1))
                     continue
                 if r.status_code in (400, 403, 404):
                     last = f"{model} HTTP {r.status_code}: {r.text[:300]}"
@@ -270,12 +236,8 @@ def _gemini_raw(prompt, json_mode, temperature, search, image, optional):
                 return text, titles
             except requests.RequestException as e:
                 last = f"{model} {type(e).__name__}"
-                time.sleep(3 if optional else 10)
+                time.sleep(10)
     raise RuntimeError(f"Gemini failed: {last}")
-
-
-def gemini_json_opt(prompt, temperature=0.2):
-    return gemini_json(prompt, temperature, optional=True)
 
 
 def parse_json(text):
@@ -290,9 +252,9 @@ def parse_json(text):
     return json.loads(t)
 
 
-def gemini_json(prompt, temperature=0.8, optional=False):
-    for _ in range(2 if optional else 3):
-        text, _t = gemini(prompt, json_mode=True, temperature=temperature, optional=optional)
+def gemini_json(prompt, temperature=0.8):
+    for _ in range(3):
+        text, _t = gemini(prompt, json_mode=True, temperature=temperature)
         try:
             return parse_json(text)
         except Exception as e:
@@ -741,7 +703,7 @@ For EACH scene decide ONLY these two things:
 Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"vs":false,"terrain":null,"map":null}}]}}
 {listing}"""
         try:
-            out = gemini_json_opt(prompt, 0.2)
+            out = gemini_json(prompt, 0.2)
         except Exception as e:  # noqa
             log("extras (split/terrain) failed:", str(e)[:100])
             continue
@@ -830,7 +792,7 @@ PARAGRAPHS:
 SCENES:
 {listing}"""
             try:
-                out = gemini_json_opt(prompt, 0.1)
+                out = gemini_json(prompt, 0.1)
             except Exception as e:  # noqa
                 log("extras (sources) failed:", str(e)[:100])
                 continue
@@ -867,7 +829,7 @@ SCENES:
 Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 """ + "\n".join(rows_)
             try:
-                out = gemini_json_opt(prompt, 0.1)
+                out = gemini_json(prompt, 0.1)
             except Exception as e:  # noqa
                 log("extras (clips) failed:", str(e)[:100])
                 continue
@@ -919,7 +881,7 @@ def finalize_overlays(scenes, topic=""):
         assign_note_styles(scenes)
     except Exception as e:  # noqa
         log("assign_note_styles failed:", type(e).__name__, str(e)[:100])
-    log("overlay finalize:", st, "| optional Gemini calls:", GOV["opt"], "skipped:", GOV["skipped"], "| minutes used:", round(elapsed_min()))
+    log("overlay finalize:", st)
     return st
 
 
@@ -963,7 +925,7 @@ Go through EVERY word of EACH scene and detect everything below that is really s
 Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
 {listing}"""
         try:
-            out = gemini_json_opt(prompt, 0.2)
+            out = gemini_json(prompt, 0.2)
         except Exception as e:  # noqa
             log("overlay pass failed:", str(e)[:100])
             continue
@@ -1144,7 +1106,7 @@ def wiki_sources(topic, extra_text="", want=6):
     titles = []
     if GEMINI_KEY:
         try:
-            out = gemini_json_opt(f"Topic / story: {topic}\n{extra_text[:1500]}\nList up to 5 EXACT English Wikipedia article titles that document the real facts, people, places or studies behind this (no guesses: only articles that surely exist). "
+            out = gemini_json(f"Topic / story: {topic}\n{extra_text[:1500]}\nList up to 5 EXACT English Wikipedia article titles that document the real facts, people, places or studies behind this (no guesses: only articles that surely exist). "
                               'Return ONLY JSON: {"titles": ["..."]}', 0.1)
             titles = [str(t).strip() for t in (out.get("titles") or []) if str(t).strip().isascii()][:5]
         except Exception as e:  # noqa
@@ -2219,15 +2181,14 @@ def pexels_photo(query, out, size=(1920, 1080)):
     return True
 
 
-VERIFY = {"n": 0, "off": os.environ.get("VERIFY_IMAGES", "1") == "0", "no": 0, "slow": 0}
+VERIFY = {"n": 0, "off": os.environ.get("VERIFY_IMAGES", "1") == "0", "no": 0}
 
 
 def verify_image(path, subject):
     """Ask Gemini to LOOK at the picture: does it clearly show this subject? (True when unsure or when the check is unavailable.)"""
-    if VERIFY["off"] or not GEMINI_KEY or not subject or VERIFY["n"] >= int(os.environ.get("VERIFY_MAX", "100")) or not llm_optional_ok():
+    if VERIFY["off"] or not GEMINI_KEY or not subject or VERIFY["n"] >= int(os.environ.get("VERIFY_MAX", "300")):
         return True
     try:
-        t_v = time.time()
         im = Image.open(path).convert("RGB")
         im.thumbnail((640, 640))
         buf = io.BytesIO()
@@ -2235,12 +2196,7 @@ def verify_image(path, subject):
         VERIFY["n"] += 1
         txt, _t = gemini(f'Look at this picture. Is "{subject}" clearly the main thing shown, as a REAL photograph (not a different animal, object or place that merely looks similar)? '
                          "Answer NO if the picture is a cartoon, animation, 3D render, drawing, painting, toy, statue, sculpture, carving or mural, unless the subject itself is such a thing. "
-                         "Answer with one word: YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode(), optional=True)
-        if time.time() - t_v > 25:
-            VERIFY["slow"] += 1
-            if VERIFY["slow"] >= 2:
-                VERIFY["off"] = True
-                log("picture checks switched off: Gemini answers too slowly")
+                         "Answer with one word: YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
         ok = not txt.strip().upper().startswith("NO")
         if not ok:
             VERIFY["no"] += 1
@@ -2512,7 +2468,6 @@ def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
         return False  # no picture is even tagged with the thing: better no picture than a wrong one
     top = [h for h in scored if len(qw & {w for t in tags_of(h) for w in norm_words(t)}) == best][:8]
     random.shuffle(top)
-    nv = 0
     for h in top[:4]:
         data = requests.get(h.get("largeImageURL") or h["webformatURL"], timeout=60).content
         try:
@@ -2522,8 +2477,7 @@ def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
         except Exception:  # noqa
             continue
         fit_image(data, out, size)
-        nv += 1
-        if kind == "photo" and nv <= 2 and not verify_image(out, query):
+        if kind == "photo" and not verify_image(out, query):
             continue
         return True
     return False
@@ -2534,7 +2488,7 @@ LOCAL_SD = {"pipe": None, "dead": os.environ.get("LOCAL_SD", "1") == "0", "n": 0
 
 def img_local_sd(prompt, out, size, kind="photo"):
     """Unlimited free AI pictures made on the GitHub runner itself (SD-Turbo on CPU, ~20-60 s per picture, no quota, no key)."""
-    if LOCAL_SD["dead"] or LOCAL_SD["n"] >= int(os.environ.get("LOCAL_SD_MAX", "30")):
+    if LOCAL_SD["dead"]:
         return False
     try:
         import torch
@@ -4953,7 +4907,7 @@ def ensure_sources(topic, story=""):
     try:
         qs = []
         if GEMINI_KEY:
-            out = gemini_json_opt(f"Topic / story: {topic}\n{story[:1200]}\nGive 4 short ENGLISH Wikipedia search phrases (people, places, events, studies, concepts) that document the real facts of this. "
+            out = gemini_json(f"Topic / story: {topic}\n{story[:1200]}\nGive 4 short ENGLISH Wikipedia search phrases (people, places, events, studies, concepts) that document the real facts of this. "
                               'Return ONLY JSON: {"queries": ["..."]}', 0.1)
             qs = [str(q).strip() for q in (out.get("queries") or []) if str(q).strip().isascii()][:4]
         if topic and topic.isascii():
@@ -5029,7 +4983,7 @@ Return ONLY JSON: {{"matches":[...]}}
 {listing}
 {plist}"""
         try:
-            out = gemini_json_opt(prompt, 0.1)
+            out = gemini_json(prompt, 0.1)
         except Exception as e:  # noqa
             log("source matching failed:", str(e)[:100])
             continue
@@ -5272,7 +5226,7 @@ def commons_png(query, out):
             ok = "YES"
             if GEMINI_KEY and not VERIFY["off"]:
                 ok, _t = gemini(f'Look at this picture. Is it a clear, correct picture of "{query}" (a real object photo, a cut-out or a proper scientific diagram - NOT a cartoon character, toy, statue or unrelated thing)? Answer YES or NO.',
-                                temperature=0.0, image=base64.b64encode(buf.getvalue()).decode(), optional=True)
+                                temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
             if not str(ok).strip().upper().startswith("YES"):
                 continue
             im.save(out)
@@ -5438,7 +5392,7 @@ def cutout_complete(rgba, query):
         buf = io.BytesIO()
         card.save(buf, "JPEG", quality=82)
         ans, _t = gemini(f'This is a cut-out of "{query}" on a magenta background. Is the WHOLE object present - no part cut off, erased, transparent, or missing (legs, tail, ears, handles, wheels)? '
-                         "Answer YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode(), optional=True)
+                         "Answer YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
         return str(ans).strip().upper().startswith("YES")
     except Exception:  # noqa
         return True
@@ -5574,7 +5528,7 @@ def semantic_review(scenes, topic=""):
 Return ONLY the rows that must be FIXED: {{"fix":[{{"id":"S0.1","query_en":"2-4 plain English words for a real stock photo","prompt_en":"realistic description of that single subject","clip_en":"subject + visible action, or empty"}}]}}. Return {{"fix":[]}} when all are fine.
 {listing}"""
         try:
-            out = gemini_json_opt(prompt, 0.15)
+            out = gemini_json(prompt, 0.15)
         except Exception as e:  # noqa
             log("semantic review failed:", str(e)[:100])
             continue
@@ -5619,7 +5573,7 @@ def delay_to_mention(scenes):
                   "FIRST spoken about (named, or its idea begins). 0 when the sentence starts with it. "
                   'Return ONLY JSON: {"m":[{"id":"S0.1","m":0}]}\n' + listing)
         try:
-            out = gemini_json_opt(prompt, 0.0)
+            out = gemini_json(prompt, 0.0)
         except Exception as e:  # noqa
             log("mention timing failed:", str(e)[:100])
             continue
@@ -5745,7 +5699,7 @@ def resolve_years(scenes):
                     todo.append((i, k, str(it.get("text", ""))))
     if todo and GEMINI_KEY:
         try:
-            out = gemini_json_opt("Hindi spoken dates. Give the calendar year as a number (and month 1-12 if a month is spoken). Use null when no real year 1000-2100 is meant. "
+            out = gemini_json("Hindi spoken dates. Give the calendar year as a number (and month 1-12 if a month is spoken). Use null when no real year 1000-2100 is meant. "
                               'Return ONLY JSON: {"y":[{"id":0,"year_num":1984,"month":12}]}\n' + "\n".join(f"{n}: {t}" for n, (_i, _k, t) in enumerate(todo)), 0.0)
             for r in (out.get("y") or []):
                 n = int(r.get("id"))
@@ -5823,7 +5777,7 @@ def locate_features(img, subject, parts):
         buf = io.BytesIO()
         flat.save(buf, "JPEG", quality=82)
         txt, _t = gemini(f'This picture shows "{subject}". Give the centre of each named part as fractions of the picture width and height (x and y from 0 to 1, origin top-left): {json.dumps(parts)}. '
-                         'Return ONLY JSON: {"points":[{"part":"...","x":0.5,"y":0.5}]}', json_mode=True, temperature=0.0, image=base64.b64encode(buf.getvalue()).decode(), optional=True)
+                         'Return ONLY JSON: {"points":[{"part":"...","x":0.5,"y":0.5}]}', json_mode=True, temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
         for r in (parse_json(txt).get("points") or []):
             for n, p in enumerate(parts):
                 if str(r.get("part", "")).strip().lower() == p.lower() and pts[n] is None:
@@ -5980,7 +5934,7 @@ Picture rules: a named city / village / forest / river / mountain = an AERIAL DR
 Return ONLY JSON: {{"rows":[{{"id":"S0.1","parts":[{{"from":0,"query_en":"2-4 English words","prompt_en":"realistic photo description","clip_en":"subject + action or empty","entity_en":"exact Wikipedia title or empty"}}]}}]}}
 {listing}"""
         try:
-            out = gemini_json_opt(prompt, 0.15)
+            out = gemini_json(prompt, 0.15)
         except Exception as e:  # noqa
             log("concept shots failed:", str(e)[:100])
             continue
@@ -6052,7 +6006,7 @@ Real photographic subjects only, never people's faces, never cartoons.
 Return ONLY JSON: {{"scenes":[{{"i":0,"w":word number where it is spoken,"kind":"action" or "explain","text_hi":"label 1-3 words (explain only)","query_en":"1-3 English words","...":"..."}}]}}
 {listing}"""
         try:
-            out = gemini_json_opt(prompt, 0.25)
+            out = gemini_json(prompt, 0.25)
         except Exception as e:  # noqa
             log("png pass failed:", str(e)[:100])
             continue
@@ -8371,16 +8325,6 @@ def make_visuals(scenes, imgdir):
     failed = requested = 0
     prev_img = None
     for i, sc in enumerate(scenes):
-        el_ = elapsed_min()
-        if el_ > 100 and not VERIFY["off"]:
-            VERIFY["off"] = True
-            log(f"time guard ({el_:.0f} min used): picture checks off")
-        if el_ > 110 and (EXPLAIN_MAX[0] > 0 or VERDICT_MAX[0] > 0):
-            EXPLAIN_MAX[0] = VERDICT_MAX[0] = 0
-            log("time guard: no more cut-out / circle pictures")
-        if el_ > 125 and not LOCAL_SD["dead"]:
-            LOCAL_SD["dead"] = True
-            log("time guard: slow local AI pictures off")
         if sc["type"] == "photo":
             for n_, it in enumerate(sc.get("items") or []):
                 if it["kind"] == "person" and it.get("photo_img") is None:
@@ -8429,9 +8373,6 @@ def make_visuals(scenes, imgdir):
                         log("popup failed:", type(e).__name__, str(e)[:100])
             for k, sh in enumerate(sc["shots"]):
                 p = imgdir / f"{i:03d}_s{k}.png"
-                if elapsed_min() > 140 and prev_img:  # out of time: keep the previous picture (the camera still moves), finish the video
-                    sh["image"] = prev_img
-                    continue
                 pp = (sh.get("popup_en") or "").strip()
                 if pp and POPUPS_MAX[0] > 0:
                     POPUPS_MAX[0] -= 1
