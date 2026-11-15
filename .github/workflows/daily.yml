@@ -94,10 +94,6 @@ jobs:
           TEST_SECONDS: ${{ github.event.inputs.video_seconds || vars.TEST_SECONDS || '30' }}
           # your own topic or full story (Variable CUSTOM_STORY). Value 0 or empty = automatic topic as usual
           CUSTOM_STORY: ${{ github.event.inputs.custom_story || vars.CUSTOM_STORY }}
-          # speed guards (the job is cancelled after 240 min): optional Gemini calls pause when Gemini is slow, picture work stops early
-          OPTIONAL_LLM_MAX: ${{ vars.OPTIONAL_LLM_MAX || '70' }}
-          LOCAL_SD_MAX: ${{ vars.LOCAL_SD_MAX || '30' }}
-          MAX_EXPLAIN_PNG: ${{ vars.MAX_EXPLAIN_PNG || '30' }}
         run: |
           if [ "${{ github.event.inputs.mode }}" = "check" ]; then
             python bot.py --check
