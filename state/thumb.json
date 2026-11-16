@@ -1,4 +1,7 @@
 {
  "layout": "side",
- "accent": 0
+ "accent": 0,
+ "styles": [
+  "banner_zoom"
+ ]
 }
