@@ -193,8 +193,48 @@ def gemini_models():
 GROUND_SRC = []
 
 
-def gemini(prompt, json_mode=False, temperature=0.8, search=False, image=None):
-    """Returns (text, grounding_titles)."""
+GOV = {"t0": time.time(), "opt": 0, "skipped": 0, "slow": 0, "cool": 0.0}
+RUN_BUDGET_MIN = float(os.environ.get("RUN_BUDGET_MIN", "200"))  # the workflow is cancelled after 240 min: everything optional stops long before
+OPT_MAX = int(os.environ.get("OPTIONAL_LLM_MAX", "150"))
+
+
+def optional_model():
+    """Editing passes use the light model (its own quota bucket) so they never starve the script / director calls."""
+    names = gemini_models()
+    return os.environ.get("OPTIONAL_MODEL") or next((n for n in names if "flash-lite" in n), names[0])
+
+
+def elapsed_min():
+    return (time.time() - GOV["t0"]) / 60.0
+
+
+def llm_optional_ok():
+    """Optional Gemini calls (picture checks, editing passes) run only while the key is healthy, the budget is not used up and there is plenty of time left."""
+    return bool(GEMINI_KEY) and GOV["opt"] < OPT_MAX and time.time() >= GOV["cool"] and elapsed_min() < 175
+
+
+def gemini(prompt, json_mode=False, temperature=0.8, search=False, image=None, optional=False):
+    """Returns (text, grounding_titles). optional=True: one quick try, skipped completely while Gemini is slow / rate limited."""
+    if optional:
+        if not llm_optional_ok():
+            GOV["skipped"] += 1
+            raise RuntimeError("optional Gemini call skipped (rate limit / budget / time)")
+        GOV["opt"] += 1
+    t_call = time.time()
+    try:
+        return _gemini_raw(prompt, json_mode, temperature, search, image, optional)
+    finally:
+        dur = time.time() - t_call
+        if dur > 30:
+            GOV["slow"] += 1
+            if GOV["slow"] >= 2 and time.time() >= GOV["cool"]:
+                GOV["cool"] = time.time() + 900
+                log(f"Gemini is slow / rate limited ({dur:.0f}s for one call): optional passes and picture checks pause for 15 minutes")
+        elif dur < 12:
+            GOV["slow"] = 0
+
+
+def _gemini_raw(prompt, json_mode, temperature, search, image, optional):
     parts_ = [{"text": prompt}]
     if image:
         parts_.append({"inline_data": {"mime_type": "image/jpeg", "data": image}})
@@ -205,14 +245,14 @@ def gemini(prompt, json_mode=False, temperature=0.8, search=False, image=None):
     if search:
         body["tools"] = [{"google_search": {}}]
     last = None
-    for model in gemini_models():
-        for attempt in range(2):
+    for model in ([optional_model()] if optional else gemini_models()):
+        for attempt in range(1 if optional else 2):
             try:
                 r = requests.post(f"{GBASE}/models/{model}:generateContent",
-                                  headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=240)
+                                  headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=60 if optional else 240)
                 if r.status_code in (429, 500, 503):
                     last = f"{model} HTTP {r.status_code}"
-                    time.sleep(15 * (attempt + 1))
+                    time.sleep(3 if optional else 15 * (attempt + 1))
                     continue
                 if r.status_code in (400, 403, 404):
                     last = f"{model} HTTP {r.status_code}: {r.text[:300]}"
@@ -236,8 +276,12 @@ def gemini(prompt, json_mode=False, temperature=0.8, search=False, image=None):
                 return text, titles
             except requests.RequestException as e:
                 last = f"{model} {type(e).__name__}"
-                time.sleep(10)
+                time.sleep(3 if optional else 10)
     raise RuntimeError(f"Gemini failed: {last}")
+
+
+def gemini_json_opt(prompt, temperature=0.2):
+    return gemini_json(prompt, temperature, optional=True)
 
 
 def parse_json(text):
@@ -252,9 +296,9 @@ def parse_json(text):
     return json.loads(t)
 
 
-def gemini_json(prompt, temperature=0.8):
-    for _ in range(3):
-        text, _t = gemini(prompt, json_mode=True, temperature=temperature)
+def gemini_json(prompt, temperature=0.8, optional=False):
+    for _ in range(2 if optional else 3):
+        text, _t = gemini(prompt, json_mode=True, temperature=temperature, optional=optional)
         try:
             return parse_json(text)
         except Exception as e:
@@ -264,8 +308,8 @@ def gemini_json(prompt, temperature=0.8):
 
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
-ITEM_KINDS = {"bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8}
-ITEM_SLOT = {"bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P"}
+ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8}
+ITEM_SLOT = {"quote": "N", "bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P"}
 
 DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
 
@@ -399,6 +443,52 @@ def apply_special(sc, d):
         except Exception:  # noqa
             pass
     return False
+
+
+STORY_CTX = {"on": False, "adj": "", "look": "", "text": ""}
+HUMAN_RE = re.compile(r"\b(man|men|woman|women|girl|boy|child|children|baby|infant|mother|father|family|parents|villager\w*|people|farmer|doctor|teacher|priest|house|home|hut|village|street|kitchen|crowd|wedding|funeral|school|neighbou?r\w*|relative\w*|husband|wife|daughter|son|grandmother|grandfather)\b", re.I)
+
+
+def story_context(topic, story, script):
+    """One call: where and among whom does the story happen? Every picture then stays inside that country / culture / era."""
+    STORY_CTX.update({"on": False, "adj": "", "look": "", "text": ""})
+    if not GEMINI_KEY:
+        return STORY_CTX
+    try:
+        out = gemini_json(f"""Topic / story: {topic}
+{(story or script or '')[:2500]}
+Does this story happen among PEOPLE of a specific country / culture (a family, a village, a case, a historical event)? Answer with JSON only:
+{{"people": true or false, "country": "India", "adjective": "Indian", "region": "e.g. rural Uttar Pradesh village", "era": "e.g. 1980s", "look": "10-18 English words describing how every picture must look: architecture, clothes, objects, light, e.g. 'rural Indian village, mud-brick houses, hand pump, charpai, women in sarees, warm cinematic light, 1980s'"}}
+people=false for pure science / nature / space / animal topics.""", 0.1)
+        if out.get("people") and str(out.get("adjective") or "").isascii() and out.get("adjective"):
+            STORY_CTX.update({"on": True, "adj": str(out["adjective"])[:20], "look": str(out.get("look") or "")[:160],
+                              "text": f"{out.get('country', '')} / {out.get('region', '')} / {out.get('era', '')}: {out.get('look', '')}"[:260]})
+    except Exception as e:  # noqa
+        log("story context failed:", str(e)[:100])
+    log("story context:", STORY_CTX["text"] or "none (science / nature topic)")
+    return STORY_CTX
+
+
+def apply_context(scenes):
+    """Every picture about people / places gets the story's country, culture and era: a girl's mother is an Indian woman, never a buffalo or a Russian."""
+    if not STORY_CTX["on"]:
+        return 0
+    n = 0
+    adj, look = STORY_CTX["adj"], STORY_CTX["look"]
+    for sc in scenes:
+        for sh in sc.get("shots") or []:
+            q = str(sh.get("query_en") or "")
+            if q and HUMAN_RE.search(q):
+                if adj.lower() not in q.lower():
+                    sh["query_en"] = f"{adj} {q}"[:60]
+                    n += 1
+                if sh.get("clip_en") and adj.lower() not in str(sh["clip_en"]).lower() and HUMAN_RE.search(str(sh["clip_en"])):
+                    sh["clip_en"] = f"{adj} {sh['clip_en']}"[:60]
+                if look and look.split(",")[0].lower() not in str(sh.get("prompt_en") or "").lower():
+                    sh["prompt_en"] = (str(sh.get("prompt_en") or ("a realistic photo of " + q)) + ", " + look)[:420]
+                sh["entity_en"] = ""  # a Wikipedia lookup would return a different country's photo
+    log("story context applied to pictures:", n)
+    return n
 
 
 def parse_year(it):
@@ -703,7 +793,7 @@ For EACH scene decide ONLY these two things:
 Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"vs":false,"terrain":null,"map":null}}]}}
 {listing}"""
         try:
-            out = gemini_json(prompt, 0.2)
+            out = gemini_json_opt(prompt, 0.2)
         except Exception as e:  # noqa
             log("extras (split/terrain) failed:", str(e)[:100])
             continue
@@ -792,7 +882,7 @@ PARAGRAPHS:
 SCENES:
 {listing}"""
             try:
-                out = gemini_json(prompt, 0.1)
+                out = gemini_json_opt(prompt, 0.1)
             except Exception as e:  # noqa
                 log("extras (sources) failed:", str(e)[:100])
                 continue
@@ -829,7 +919,7 @@ SCENES:
 Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 """ + "\n".join(rows_)
             try:
-                out = gemini_json(prompt, 0.1)
+                out = gemini_json_opt(prompt, 0.1)
             except Exception as e:  # noqa
                 log("extras (clips) failed:", str(e)[:100])
                 continue
@@ -868,7 +958,7 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 def finalize_overlays(scenes, topic=""):
     """Always runs after the director (even when it failed): rule-based detector, Gemini detector, guaranteed source cards, source list, card styles."""
     st = {}
-    for name, fn in (("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)),
+    for name, fn in (("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
                      ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)),
                      ("overlays", lambda: overlay_pass(scenes, topic)), ("png_pass", lambda: png_pass(scenes, topic)),
                      ("years", lambda: resolve_years(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
@@ -881,7 +971,7 @@ def finalize_overlays(scenes, topic=""):
         assign_note_styles(scenes)
     except Exception as e:  # noqa
         log("assign_note_styles failed:", type(e).__name__, str(e)[:100])
-    log("overlay finalize:", st)
+    log("overlay finalize:", st, "| optional Gemini calls:", GOV["opt"], "skipped:", GOV["skipped"], "| minutes used:", round(elapsed_min()))
     return st
 
 
@@ -890,9 +980,10 @@ _NOTE_N = [0]
 
 def assign_note_styles(scenes):
     """Every source card gets a different look in turn (banner / torn paper / dark text page / document page), so all styles appear in one video."""
-    order = SRC_STYLES[:]
+    order = STYLE_CYCLE[:]
     if not _NOTE_N[0]:
-        random.shuffle(order)
+        r_ = random.randrange(len(order))
+        order = order[r_:] + order[:r_]
     rev = {v["text"]: v for v in SRC_PARAS.values()}
     for sc in scenes:
         for it in sc.get("items", []) if isinstance(sc.get("items"), list) else []:
@@ -903,89 +994,6 @@ def assign_note_styles(scenes):
                 sp_ = rev.get(it.get("text"))
                 if sp_ and not it.get("dom"):
                     it["dom"] = _dom(sp_.get("url", ""))
-
-
-def overlay_pass(scenes, topic=""):
-    """Narrow pass that GUARANTEES the reference-style helpers are tried: year slider, name card, big stat, round cross/tick pop-ups, speech bubbles."""
-    ph = [(i, sc) for i, sc in enumerate(scenes) if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
-    n_add = {"year": 0, "person": 0, "stat": 0, "verdict": 0, "bubble": 0, "title": 0, "explain": 0, "action": 0}
-    for a in range(0, len(ph), 3):
-        batch = ph[a:a + 3]
-        listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
-        prompt = f"""Film editor task. Hindi narration, every word numbered (index:word). Video topic: {topic}
-Go through EVERY word of EACH scene and detect everything below that is really spoken (up to 4 helpers per scene; never two on the same word; each exactly on the word where it is spoken; empty list only when truly nothing applies):
-- "year": a date / year / period is spoken. {{"w":..,"kind":"year","text_hi":"as spoken","year_num":1984 or null,"month":12 or null}}. year_num ONLY when a real calendar year 1000-2100 is spoken (month only when a month is spoken).
-- "person": a REAL, notable public person (scientist, researcher, author, leader, historical figure) is named for the first time. {{"w":..,"kind":"person","text_hi":"name as spoken","entity_en":"exact English Wikipedia article title"}}. NEVER for private people, victims, villagers, fictional or story characters.
-- "title": the main character / subject of a story is introduced by name for the first time (also private people). {{"w":..,"kind":"title","text_hi":"1-3 words"}} (at most one per video).
-- "stat": a striking short duration / number / count said for emphasis ("३ महीने", "४५ मिनट", "दस हज़ार"). {{"w":..,"kind":"stat","text_hi":"1-3 words"}}
-- "verdict": the narrator says what is false / true, a myth / fact, what did NOT happen / what did. {{"w":..,"kind":"verdict","text_hi":"","circles":[{{"query_en":"1-3 English words for a REAL photo","mark":"cross" or "tick","label_hi":"1-2 words"}}]}} with 2-3 circles.
-- "explain": the narrator explains / describes a concrete thing (an object, organ, machine, animal part, instrument, structure) that is clearer with a clean picture of just that thing. {{"w":..,"kind":"explain","text_hi":"label, 1-3 words","query_en":"1-3 English words naming the REAL object","anim":"pop" or "slide" or "drop" or "zoom" or "spin"}}. At most one per scene, never for people, animals' faces or places.
-- "action": the narrator describes something MOVING or doing a visible action ("the lion ran towards the lake", "the bird flew away", "the rock fell", "the ship came closer"). {{"w":..,"kind":"action","text_hi":"","query_en":"1-3 English words: the real moving thing (an animal, person, vehicle)","pose_en":"what it looks like while moving, e.g. 'lion running'","verb":"run" or "walk" or "swim" or "fly" or "jump" or "fall" or "rise" or "approach" or "retreat" or "spin" or "shake" or "grow","dir":"right" or "left" or "toward" or "away" or "up" or "down"}}. The engine cuts the thing out and slides / bounces it across the picture. At most one per scene; never for plain standing subjects.
-- "bubble": the narrator quotes what a person said. {{"w":..,"kind":"bubble","text_hi":"the quoted words, max 6","side":"left" or "right"}} (two speakers: first left, second right).
-Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
-{listing}"""
-        try:
-            out = gemini_json(prompt, 0.2)
-        except Exception as e:  # noqa
-            log("overlay pass failed:", str(e)[:100])
-            continue
-        for r in (out.get("scenes") or []):
-            try:
-                i = int(r.get("i"))
-            except Exception:  # noqa
-                continue
-            if not (0 <= i < len(scenes)) or not any(i == j for j, _ in batch):
-                continue
-            sc = scenes[i]
-            nwd = len(sc["narration_hi"].split())
-            have = sc.setdefault("items", [])
-            for it in (r.get("items") or [])[:4]:
-                if not isinstance(it, dict):
-                    continue
-                kind = str(it.get("kind") or "")
-                try:
-                    w = int(it.get("w"))
-                except Exception:  # noqa
-                    continue
-                if kind not in ("year", "person", "title", "stat", "verdict", "bubble", "explain", "action") or not (0 <= w < nwd):
-                    continue
-                if any(isinstance(x, dict) and abs(x.get("w", -9) - w) < 4 and x.get("kind") == kind for x in have) or any(isinstance(x, dict) and x.get("w") == w for x in have):
-                    continue
-                if kind == "title" and (n_add["title"] >= 1 or any(isinstance(x, dict) and x.get("kind") == "title" for sc2 in scenes for x in (sc2.get("items") or []))):
-                    continue
-                txt = clean_short(it.get("text_hi"), 40)
-                rec = None
-                if kind == "verdict":
-                    rec = parse_verdict(w, it)
-                elif kind == "person":
-                    ent_ = clean_short(it.get("entity_en"), 70)
-                    if txt and ent_ and ent_.isascii():
-                        rec = {"w": w, "kind": "person", "text": txt, "entity_en": ent_, "sub": ""}
-                elif kind == "action":
-                    q_, vb_ = clean_short(it.get("query_en"), 50), str(it.get("verb") or "").lower()
-                    if q_ and q_.isascii() and vb_ in ACTION_SPAN:
-                        dr_ = str(it.get("dir") or "").lower()
-                        dr_ = dr_ if dr_ in ("right", "left", "toward", "away", "up", "down") else "right"
-                        rec = {"w": w, "kind": "action", "text": "", "query_en": q_, "pose": clean_short(it.get("pose_en"), 60), "verb": vb_, "dir": dr_, "span": ACTION_SPAN[vb_]}
-                elif kind == "explain":
-                    q_ = clean_short(it.get("query_en"), 50)
-                    if q_ and q_.isascii():
-                        rec = {"w": w, "kind": "explain", "text": txt or "", "query_en": q_, "anim": str(it.get("anim") or "pop") if str(it.get("anim") or "pop") in KF_PRESETS else "pop"}
-                elif txt:
-                    rec = {"w": w, "kind": kind, "text": txt, "mark": "", "sub": ""}
-                    if kind == "year":
-                        yn, mo = parse_year(it)
-                        if yn:
-                            rec["year_num"], rec["month"] = yn, mo
-                    if kind == "bubble" and str(it.get("side") or "") in ("left", "right"):
-                        rec["side"] = str(it["side"])
-                if rec:
-                    have.append(rec)
-                    n_add[kind] += 1
-            have.sort(key=lambda x: x.get("w", 0) if isinstance(x, dict) else 0)
-            del have[14:]
-    log("overlay pass added:", n_add)
-    return n_add
 
 
 def director_pass(scenes, topic=""):
@@ -1106,7 +1114,7 @@ def wiki_sources(topic, extra_text="", want=6):
     titles = []
     if GEMINI_KEY:
         try:
-            out = gemini_json(f"Topic / story: {topic}\n{extra_text[:1500]}\nList up to 5 EXACT English Wikipedia article titles that document the real facts, people, places or studies behind this (no guesses: only articles that surely exist). "
+            out = gemini_json_opt(f"Topic / story: {topic}\n{extra_text[:1500]}\nList up to 5 EXACT English Wikipedia article titles that document the real facts, people, places or studies behind this (no guesses: only articles that surely exist). "
                               'Return ONLY JSON: {"titles": ["..."]}', 0.1)
             titles = [str(t).strip() for t in (out.get("titles") or []) if str(t).strip().isascii()][:5]
         except Exception as e:  # noqa
@@ -2181,14 +2189,15 @@ def pexels_photo(query, out, size=(1920, 1080)):
     return True
 
 
-VERIFY = {"n": 0, "off": os.environ.get("VERIFY_IMAGES", "1") == "0", "no": 0}
+VERIFY = {"n": 0, "off": os.environ.get("VERIFY_IMAGES", "1") == "0", "no": 0, "slow": 0}
 
 
 def verify_image(path, subject):
     """Ask Gemini to LOOK at the picture: does it clearly show this subject? (True when unsure or when the check is unavailable.)"""
-    if VERIFY["off"] or not GEMINI_KEY or not subject or VERIFY["n"] >= int(os.environ.get("VERIFY_MAX", "300")):
+    if VERIFY["off"] or not GEMINI_KEY or not subject or VERIFY["n"] >= int(os.environ.get("VERIFY_MAX", "100")) or not llm_optional_ok():
         return True
     try:
+        t_v = time.time()
         im = Image.open(path).convert("RGB")
         im.thumbnail((640, 640))
         buf = io.BytesIO()
@@ -2196,7 +2205,12 @@ def verify_image(path, subject):
         VERIFY["n"] += 1
         txt, _t = gemini(f'Look at this picture. Is "{subject}" clearly the main thing shown, as a REAL photograph (not a different animal, object or place that merely looks similar)? '
                          "Answer NO if the picture is a cartoon, animation, 3D render, drawing, painting, toy, statue, sculpture, carving or mural, unless the subject itself is such a thing. "
-                         "Answer with one word: YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
+                         "Answer with one word: YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode(), optional=True)
+        if time.time() - t_v > 25:
+            VERIFY["slow"] += 1
+            if VERIFY["slow"] >= 2:
+                VERIFY["off"] = True
+                log("picture checks switched off: Gemini answers too slowly")
         ok = not txt.strip().upper().startswith("NO")
         if not ok:
             VERIFY["no"] += 1
@@ -2468,6 +2482,7 @@ def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
         return False  # no picture is even tagged with the thing: better no picture than a wrong one
     top = [h for h in scored if len(qw & {w for t in tags_of(h) for w in norm_words(t)}) == best][:8]
     random.shuffle(top)
+    nv = 0
     for h in top[:4]:
         data = requests.get(h.get("largeImageURL") or h["webformatURL"], timeout=60).content
         try:
@@ -2477,7 +2492,8 @@ def pixabay_photo(query, out, size=(1920, 1080), kind="photo"):
         except Exception:  # noqa
             continue
         fit_image(data, out, size)
-        if kind == "photo" and not verify_image(out, query):
+        nv += 1
+        if kind == "photo" and nv <= 2 and not verify_image(out, query):
             continue
         return True
     return False
@@ -2488,7 +2504,7 @@ LOCAL_SD = {"pipe": None, "dead": os.environ.get("LOCAL_SD", "1") == "0", "n": 0
 
 def img_local_sd(prompt, out, size, kind="photo"):
     """Unlimited free AI pictures made on the GitHub runner itself (SD-Turbo on CPU, ~20-60 s per picture, no quota, no key)."""
-    if LOCAL_SD["dead"]:
+    if LOCAL_SD["dead"] or LOCAL_SD["n"] >= int(os.environ.get("LOCAL_SD_MAX", "30")):
         return False
     try:
         import torch
@@ -2530,7 +2546,8 @@ STYLE_OBJ = ("single isolated object, centered, whole object visible, plain pure
 IMG_CREDITS = []
 WIKI_UA = {"User-Agent": "nature-video-bot/1.0 (educational video project; https://github.com)"}
 BAD_TITLE = ("map", "diagram", "logo", "flag", "stamp", "drawing", "svg", "icon", "chart", "graph", "coat of arms", "poster", "cover", "screenshot",
-             "illustration", "painting", "skeleton", "locator", "location", "plan of", "scheme", "emblem", "signature", "portrait of")
+             "illustration", "painting", "skeleton", "locator", "location", "plan of", "scheme", "emblem", "signature", "portrait of",
+             "engraving", "woodcut", "lithograph", "etching", "sketch", "print ", "illustrated", "cartoon", "clipart", "caricature", "drawn", "manuscript", "newspaper", "book ")
 OK_LIC = ("cc by", "cc0", "public domain", "pd", "cc-by", "attribution", "gfdl", "no restrictions")
 
 
@@ -2581,6 +2598,8 @@ def wiki_real_photo(query, out, size):
                 continue
             if any(b in title.lower() for b in BAD_TITLE) or not _lic_ok(meta) or unreal(title, q):
                 continue
+            if not (norm_words(title) & norm_words(q)):
+                continue  # the file name must share a word with what the narrator talks about
             cands.append((ii.get("thumburl") or ii.get("url"), title, _strip_html(meta.get("Artist", {}).get("value")),
                           meta.get("LicenseShortName", {}).get("value", ""), ii.get("descriptionurl", "")))
     except Exception as e:  # noqa
@@ -4107,9 +4126,10 @@ def ov_sprite(kind, text, mark, pal):
 # =========================================================================== V2 OVERLAYS
 # Source cards in 4 styles (banner / torn paper / dark text page / document page), sliding year timeline, person name card with real photo,
 # round pop-ups with cross / tick, big red stat text.  Every card is drawn from REAL page text only (never written by the bot).
-SRC_STYLES = ["banner", "paper", "dark", "doc"]
-V2_KINDS = ("note", "year", "person", "stat", "verdict", "explain", "srclist", "action", "place", "name", "feature")
-OV_MAXT = {"place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0, "name": 4.4, "place": 4.8, "feature": 7.6}
+SRC_STYLES = ["banner", "paper", "dark", "doc", "strip", "box"]
+STYLE_CYCLE = ["strip", "box", "strip", "paper", "strip", "dark", "box", "doc", "banner"]  # small lower-left cards are the most common in the reference
+V2_KINDS = ("quote", "note", "year", "person", "stat", "verdict", "explain", "srclist", "action", "place", "name", "feature")
+OV_MAXT = {"quote": 4.4, "place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0, "name": 4.4, "place": 4.8, "feature": 7.6}
 _BLACK = {}
 
 
@@ -4428,6 +4448,36 @@ def build_card(style, body, title, dom, mark):
                 ImageDraw.Draw(ex).ellipse([r0[0] - 12, r0[1] - 5, r0[2] + 12, r0[3] + 5], outline=(210, 28, 38, 255), width=4)
                 ex = ex.rotate(-2, resample=Image.BICUBIC, center=((r0[0] + r0[2]) / 2, (r0[1] + r0[3]) / 2))
         card = SrcCard(bg, text, runs, _hl_marker, extra=ex, rot=-2.4)
+    elif style in ("strip", "box"):  # the reference's most common card: small, at the lower left, ~58% of the width
+        fH, fB = font_for("A", 19, "cond"), font_for("A", 21, "serif")
+        maxw = 640 if style == "strip" else 600
+        body = _fit_text(probe, body, mark, fB, maxw, 3)
+        words = body.split()
+        idx = _mark_idx(words, mark)
+        lines, _sp = _flow(probe, body, fB, maxw, 3)
+        lh = int(fB.size * 1.5)
+        head = "SOURCE: " + (title or "").upper()
+        while len(head) > 12 and probe.textlength(head, font=fH) > maxw:  # the header must fit inside the card
+            head = head[:-4].rstrip() + "..."
+        ph = 26 + 30 + len(lines) * lh + 24
+        pw = maxw + 70
+        if style == "strip":
+            paper = _paper(pw, ph, seed=len(body))
+            paper.putalpha(_torn_mask(pw, ph, 5, 8, seed=len(title) + 1))
+            bg = _with_shadow(paper, (4, 6), 7, 0.5, 16)
+            ox, oy, hc, bc = 16 + 36, 16 + 20, (122, 20, 26, 255), (44, 34, 28, 255)
+        else:
+            bg = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
+            ImageDraw.Draw(bg).rounded_rectangle([0, 0, pw - 1, ph - 1], radius=10, fill=(8, 8, 12, 178))
+            ImageDraw.Draw(bg).rectangle([0, 8, 5, ph - 8], fill=(214, 28, 40, 255))
+            ox, oy, hc, bc = 26, 18, (255, 208, 70, 255), (240, 236, 228, 255)
+        text = Image.new("RGBA", bg.size, (0, 0, 0, 0))
+        dt = ImageDraw.Draw(text)
+        dt.text((ox, oy + 20), head, font=fH, fill=hc, anchor="ls")
+        y = oy + 30
+        _draw_words(dt, lines, fB, ox, y, lh, bc)
+        runs = _runs_of(lines, idx, ox, y, lh, fB.size, 4)
+        card = SrcCard(bg, text, runs, _hl_marker if style == "strip" else _hl_underline, rot=-1.0 if style == "strip" else 0.0)
     else:  # "doc": a document page with typewriter text and a yellow highlighter, a second page behind it
         fT, fB, fH = font_for("A", 36, "serif"), font_for("A", 27, "type"), font_for("A", 20, "type")
         maxw = 780
@@ -4501,6 +4551,11 @@ def draw_note(fr, ps, tl, ov, t0, t1, a):
     if style == "banner":
         spr = card.frame(p)
         put(fr, spr, W / 2, H - spr.height / 2 + (1 - q) * spr.height * 0.3, 1.0, a)
+    elif style in ("strip", "box"):  # slides in from the left, slides out again; the rest of the picture stays free
+        qin = e_out(cl((tl - t0) / 0.45))
+        qout = 1 - e_out(cl((tl - (t1 - 0.4)) / 0.4))
+        spr = card.frame(e_out(cl((tl - t0 - 0.5) / 1.0)))
+        put(fr, spr, 30 + spr.width / 2 - (1 - min(qin, qout)) * (spr.width + 60), H - 30 - spr.height / 2, 1.0, 1.0)
     elif style == "paper":
         qin = e_out(cl((tl - t0) / 0.85))  # the paper UNROLLS from the top ... and rolls back up at the end
         qout = 1 - e_out(cl((tl - (t1 - 0.65)) / 0.6))
@@ -4782,8 +4837,8 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
     k = ov["kind"]
     it = ov.get("it") or {}
     a = cl((tl - t0) * 5) * (1 - cl((tl - (t1 - 0.35)) / 0.35))
-    if k == "note" and it.get("text") and (it.get("style") in ("paper", "doc")):
-        a = 1.0  # the paper rolls itself in and out
+    if k == "note" and it.get("text") and (it.get("style") in ("paper", "doc", "strip", "box")):
+        a = 1.0  # these cards move themselves in and out
     if a <= 0.01:
         return True
     if k == "explain":
@@ -4797,6 +4852,9 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
         return True
     if k == "place":
         draw_place(fr, tl, t0, a, ov)
+        return True
+    if k == "quote":
+        draw_quote(fr, tl, t0, a, ov)
         return True
     if k == "name":
         draw_name(fr, tl, t0, a, ov)
@@ -4826,8 +4884,8 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
 
 
 # =========================================================================== V3: guaranteed sources, auto word-detector, roll-out paper, keyframe-animated PNG
-ITEM_PRI = {"note": 6, "srclist": 6, "feature": 6, "verdict": 5, "explain": 5, "action": 5, "name": 3, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2}
-ITEM_MIN = {"year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "verdict": 3.4, "explain": 3.4, "srclist": 3.6, "action": 2.6, "name": 2.4, "feature": 5.0}
+ITEM_PRI = {"quote": 3, "note": 6, "srclist": 6, "feature": 6, "verdict": 5, "explain": 5, "action": 5, "name": 3, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2}
+ITEM_MIN = {"quote": 2.4, "year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "verdict": 3.4, "explain": 3.4, "srclist": 3.6, "action": 2.6, "name": 2.4, "feature": 5.0}
 
 
 def item_zones(it):
@@ -4907,7 +4965,7 @@ def ensure_sources(topic, story=""):
     try:
         qs = []
         if GEMINI_KEY:
-            out = gemini_json(f"Topic / story: {topic}\n{story[:1200]}\nGive 4 short ENGLISH Wikipedia search phrases (people, places, events, studies, concepts) that document the real facts of this. "
+            out = gemini_json_opt(f"Topic / story: {topic}\n{story[:1200]}\nGive 4 short ENGLISH Wikipedia search phrases (people, places, events, studies, concepts) that document the real facts of this. "
                               'Return ONLY JSON: {"queries": ["..."]}', 0.1)
             qs = [str(q).strip() for q in (out.get("queries") or []) if str(q).strip().isascii()][:4]
         if topic and topic.isascii():
@@ -4972,8 +5030,8 @@ def force_source_cards(scenes, topic=""):
     paras = list(SRC_PARAS.items())[:45]
     plist = "\n".join(f'[{k}] {v["title"][:45]}: "{v["text"][:240]}"' for k, v in paras)
     cands = []
-    for a in range(0, len(free), 5):
-        batch = free[a:a + 5]
+    for a in range(0, len(free), 8):
+        batch = free[a:a + 8]
         listing = "\n".join(f"SCENE {ph.index(sc)}: {_numbered(sc)}" for sc in batch)
         prompt = f"""Hindi documentary scenes (every word numbered) and real source paragraphs (English). Topic: {topic}
 For each scene: if one source paragraph supports, confirms or documents a SPECIFIC claim the narrator makes IN THAT SCENE, return it:
@@ -4983,7 +5041,7 @@ Return ONLY JSON: {{"matches":[...]}}
 {listing}
 {plist}"""
         try:
-            out = gemini_json(prompt, 0.1)
+            out = gemini_json_opt(prompt, 0.1)
         except Exception as e:  # noqa
             log("source matching failed:", str(e)[:100])
             continue
@@ -5226,7 +5284,7 @@ def commons_png(query, out):
             ok = "YES"
             if GEMINI_KEY and not VERIFY["off"]:
                 ok, _t = gemini(f'Look at this picture. Is it a clear, correct picture of "{query}" (a real object photo, a cut-out or a proper scientific diagram - NOT a cartoon character, toy, statue or unrelated thing)? Answer YES or NO.',
-                                temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
+                                temperature=0.0, image=base64.b64encode(buf.getvalue()).decode(), optional=True)
             if not str(ok).strip().upper().startswith("YES"):
                 continue
             im.save(out)
@@ -5392,7 +5450,7 @@ def cutout_complete(rgba, query):
         buf = io.BytesIO()
         card.save(buf, "JPEG", quality=82)
         ans, _t = gemini(f'This is a cut-out of "{query}" on a magenta background. Is the WHOLE object present - no part cut off, erased, transparent, or missing (legs, tail, ears, handles, wheels)? '
-                         "Answer YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
+                         "Answer YES or NO.", temperature=0.0, image=base64.b64encode(buf.getvalue()).decode(), optional=True)
         return str(ans).strip().upper().startswith("YES")
     except Exception:  # noqa
         return True
@@ -5517,8 +5575,8 @@ def semantic_review(scenes, topic=""):
             if str(sh.get("text_hi") or "").strip() and (sh.get("query_en") or sh.get("prompt_en")):
                 rows.append((i, k, sh))
     fixed = 0
-    for a in range(0, len(rows), 12):
-        part = rows[a:a + 12]
+    for a in range(0, len(rows), 20):
+        part = rows[a:a + 20]
         listing = "\n".join(f'S{i}.{k}: "{sh["text_hi"][:160]}" -> picture: {sh.get("clip_en") or sh.get("query_en") or sh.get("prompt_en", "")[:60]}' for i, k, sh in part)
         prompt = f"""Documentary picture editor (topic: {topic}). For each Hindi sentence the picture query is shown. Check that the picture shows what the sentence MEANS:
 - EMOTIONS / STATES (happy, sad, angry, afraid, lonely, proud, tired, in pain, shocked...) need a REAL PERSON whose face / body clearly shows that emotion (e.g. "sad man crying alone", "happy family laughing").
@@ -5528,7 +5586,7 @@ def semantic_review(scenes, topic=""):
 Return ONLY the rows that must be FIXED: {{"fix":[{{"id":"S0.1","query_en":"2-4 plain English words for a real stock photo","prompt_en":"realistic description of that single subject","clip_en":"subject + visible action, or empty"}}]}}. Return {{"fix":[]}} when all are fine.
 {listing}"""
         try:
-            out = gemini_json(prompt, 0.15)
+            out = gemini_json_opt(prompt, 0.15)
         except Exception as e:  # noqa
             log("semantic review failed:", str(e)[:100])
             continue
@@ -5573,7 +5631,7 @@ def delay_to_mention(scenes):
                   "FIRST spoken about (named, or its idea begins). 0 when the sentence starts with it. "
                   'Return ONLY JSON: {"m":[{"id":"S0.1","m":0}]}\n' + listing)
         try:
-            out = gemini_json(prompt, 0.0)
+            out = gemini_json_opt(prompt, 0.0)
         except Exception as e:  # noqa
             log("mention timing failed:", str(e)[:100])
             continue
@@ -5607,7 +5665,10 @@ def item_zones(it):
     """Screen areas: BL bottom-left, BR bottom-right, M middle, T top, FULL everything. Wide bottom things (banner card, year slider, source list) use BL+BR."""
     k = it["kind"]
     if k == "note":
-        return {"BL", "BR"} if ((it.get("style") or "banner") == "banner" or not it.get("text")) else {"FULL"}
+        st_ = it.get("style") or "banner"
+        if not it.get("text") or st_ == "banner":
+            return {"BL", "BR"}
+        return {"BL"} if st_ in ("strip", "box") else {"FULL"}
     if k in ("year", "srclist"):
         return {"BL", "BR"}
     if k == "place":
@@ -5621,16 +5682,19 @@ def item_zones(it):
     return {"M"}
 
 
+QUICK_KINDS = {"year", "place", "name", "person", "stat", "bubble", "quote", "verdict", "explain", "action"}
+
+
 def schedule_items(items, dur):
-    """Helpers share the screen only when they use different areas. A higher-priority helper (source card, explanation) cuts a lower one; equal ones wait
-    for each other's reading time; nothing important is dropped just because the screen was busy."""
+    """Said now = shown now. Quick helpers (year, place, name, stat, quote, bubble, PNG) appear at their word and make room by cutting an earlier helper of the same area;
+    only big cards may wait (at most 1.5 s). A helper is dropped only when a higher-priority card fills its area."""
     items.sort(key=lambda x: (x["t0"], -ITEM_PRI.get(x["it"]["kind"], 1)))
     placed = []
     for b in items:
-        zb, mb = item_zones(b["it"]), item_min(b["it"])
-        pb = ITEM_PRI.get(b["it"]["kind"], 1)
+        kb, zb, mb = b["it"]["kind"], item_zones(b["it"]), item_min(b["it"])
+        pb = ITEM_PRI.get(kb, 1)
         b["t1"] = min(dur - 0.1, b["t0"] + max(mb, b["span"]))
-        if b["t1"] - b["t0"] < min(mb, 1.4):
+        if b["t1"] - b["t0"] < min(mb, 1.2):
             continue
         ok = True
         for _ in range(6):
@@ -5642,18 +5706,24 @@ def schedule_items(items, dur):
                 if shown >= ma:
                     a["t1"] = b["t0"] - 0.05
                     continue
-                nt = a["t0"] + ma  # the earlier one has not been on screen long enough yet
-                room = nt + mb <= dur - 0.1
-                if room and nt - b["t0"] <= 2.0:  # a short wait is better than cutting it
-                    b["t0"], b["t1"] = nt, min(dur - 0.1, nt + max(mb, b["span"]))
-                    moved = True
-                elif pb > pa:
-                    if shown < 0.6:
+                if pb >= pa and kb in QUICK_KINDS:
+                    if shown < 0.5:
                         placed.remove(a)
                     else:
                         a["t1"] = b["t0"] - 0.05
                     continue
-                elif room and nt - b["t0"] <= 3.5:
+                nt = a["t0"] + ma
+                room = nt + mb <= dur - 0.1
+                if room and nt - b["t0"] <= (1.5 if kb in ("note", "srclist", "feature") else 0.0):
+                    b["t0"], b["t1"] = nt, min(dur - 0.1, nt + max(mb, b["span"]))
+                    moved = True
+                elif pb > pa:
+                    if shown < 0.5:
+                        placed.remove(a)
+                    else:
+                        a["t1"] = b["t0"] - 0.05
+                    continue
+                elif room and nt - b["t0"] <= 1.2:
                     b["t0"], b["t1"] = nt, min(dur - 0.1, nt + max(mb, b["span"]))
                     moved = True
                 else:
@@ -5666,7 +5736,7 @@ def schedule_items(items, dur):
     return placed
 
 
-DRAW_LAYER = {"action": 0, "explain": 0, "feature": 0, "verdict": 1, "stat": 1, "person": 2, "name": 2, "place": 2, "year": 3, "bubble": 3, "note": 4, "srclist": 4}
+DRAW_LAYER = {"quote": 1, "action": 0, "explain": 0, "feature": 0, "verdict": 1, "stat": 1, "person": 2, "name": 2, "place": 2, "year": 3, "bubble": 3, "note": 4, "srclist": 4}
 
 
 # ---- year: always at the bottom (slider with ticks when the year is known, else a pill)
@@ -5699,7 +5769,7 @@ def resolve_years(scenes):
                     todo.append((i, k, str(it.get("text", ""))))
     if todo and GEMINI_KEY:
         try:
-            out = gemini_json("Hindi spoken dates. Give the calendar year as a number (and month 1-12 if a month is spoken). Use null when no real year 1000-2100 is meant. "
+            out = gemini_json_opt("Hindi spoken dates. Give the calendar year as a number (and month 1-12 if a month is spoken). Use null when no real year 1000-2100 is meant. "
                               'Return ONLY JSON: {"y":[{"id":0,"year_num":1984,"month":12}]}\n' + "\n".join(f"{n}: {t}" for n, (_i, _k, t) in enumerate(todo)), 0.0)
             for r in (out.get("y") or []):
                 n = int(r.get("id"))
@@ -5747,6 +5817,34 @@ def name_sprite(text, sub):
     return out
 
 
+def quote_sprite(text):
+    key = ("quote", text)
+    if key in _CARDS:
+        return _CARDS[key]
+    ws = text.split()
+    n = 1 if len(ws) <= 3 else (2 if len(ws) <= 6 else 3)
+    per = -(-len(ws) // n)
+    lines = [" ".join(ws[k:k + per]) for k in range(0, len(ws), per)]
+    lays = [text_layer(l_, font_for(l_, 66, "title"), fill=(255, 255, 255) if k < len(lines) - 1 else (255, 214, 60), stroke=3, stroke_fill=(0, 0, 0), shadow=(0, 5, 8, 0.9), max_w=int(W * 0.5))
+            for k, l_ in enumerate(lines)]
+    w_ = max(l.width for l in lays) + 20
+    pitch = [int(l.height * 0.78) for l in lays]
+    h_ = sum(pitch) + 24
+    out = Image.new("RGBA", (w_, h_), (0, 0, 0, 0))
+    y = 0
+    for l, p_ in zip(lays, pitch):
+        out.alpha_composite(l, (w_ - l.width - 10, y))
+        y += p_
+    _CARDS[key] = out
+    return out
+
+
+def draw_quote(fr, tl, t0, a, ov):
+    spr = quote_sprite(ov.get("text") or "")
+    q = e_out(cl((tl - t0) / 0.45))
+    put(fr, spr, W - 56 - spr.width / 2 + (1 - q) * 420, H * 0.40, 1.0, a)
+
+
 def draw_place(fr, tl, t0, a, ov):
     it = ov.get("it") or {}
     spr = place_sprite(it.get("text") or "", it.get("sub") or "")
@@ -5777,7 +5875,7 @@ def locate_features(img, subject, parts):
         buf = io.BytesIO()
         flat.save(buf, "JPEG", quality=82)
         txt, _t = gemini(f'This picture shows "{subject}". Give the centre of each named part as fractions of the picture width and height (x and y from 0 to 1, origin top-left): {json.dumps(parts)}. '
-                         'Return ONLY JSON: {"points":[{"part":"...","x":0.5,"y":0.5}]}', json_mode=True, temperature=0.0, image=base64.b64encode(buf.getvalue()).decode())
+                         'Return ONLY JSON: {"points":[{"part":"...","x":0.5,"y":0.5}]}', json_mode=True, temperature=0.0, image=base64.b64encode(buf.getvalue()).decode(), optional=True)
         for r in (parse_json(txt).get("points") or []):
             for n, p in enumerate(parts):
                 if str(r.get("part", "")).strip().lower() == p.lower() and pts[n] is None:
@@ -5925,8 +6023,8 @@ def concept_shots(scenes, topic=""):
             if len(str(sh.get("text_hi") or "").split()) >= 8:
                 rows.append((i, k, sh))
     made = 0
-    for a in range(0, len(rows), 8):
-        part = rows[a:a + 8]
+    for a in range(0, len(rows), 14):
+        part = rows[a:a + 14]
         listing = "\n".join(f"S{i}.{k}: " + " ".join(f"{j}:{w}" for j, w in enumerate(str(sh["text_hi"]).split())) for i, k, sh in part)
         prompt = f"""Documentary editor (topic: {topic}). Each row = ONE picture shown while the narrator says these numbered Hindi words. A picture must change at EVERY new idea, so what is on screen always matches the words being spoken.
 Decide for each row whether it holds 2 or 3 different ideas (a place is named, THEN a person / a birth / an event, THEN a feeling, a profession, a part, a movement). If so give the part starts. Each part has at least 3 words. One idea = one part.
@@ -5934,7 +6032,7 @@ Picture rules: a named city / village / forest / river / mountain = an AERIAL DR
 Return ONLY JSON: {{"rows":[{{"id":"S0.1","parts":[{{"from":0,"query_en":"2-4 English words","prompt_en":"realistic photo description","clip_en":"subject + action or empty","entity_en":"exact Wikipedia title or empty"}}]}}]}}
 {listing}"""
         try:
-            out = gemini_json(prompt, 0.15)
+            out = gemini_json_opt(prompt, 0.15)
         except Exception as e:  # noqa
             log("concept shots failed:", str(e)[:100])
             continue
@@ -5993,10 +6091,10 @@ def png_pass(scenes, topic=""):
     if need <= 0 or not lack or not GEMINI_KEY:
         return 0
     added = 0
-    for a in range(0, len(lack), 4):
+    for a in range(0, len(lack), 8):
         if added >= need:
             break
-        batch = lack[a:a + 4]
+        batch = lack[a:a + 8]
         listing = "\n".join(f"SCENE {ph.index(sc)}: {_numbered(sc)}" for sc in batch)
         prompt = f"""Hindi documentary scenes (every word numbered), topic: {topic}. For EACH scene pick the ONE concrete thing worth showing as an animated cut-out PNG on top of the background picture, to explain what the narrator says.
 - something that MOVES or acts (an animal running, a bird flying, a rock falling, a ship coming closer) -> "action" {{"verb":"run|walk|swim|fly|jump|fall|rise|approach|retreat|spin|shake|grow","dir":"right|left|toward|away|up|down","pose_en":"e.g. lion running"}}
@@ -6006,7 +6104,7 @@ Real photographic subjects only, never people's faces, never cartoons.
 Return ONLY JSON: {{"scenes":[{{"i":0,"w":word number where it is spoken,"kind":"action" or "explain","text_hi":"label 1-3 words (explain only)","query_en":"1-3 English words","...":"..."}}]}}
 {listing}"""
         try:
-            out = gemini_json(prompt, 0.25)
+            out = gemini_json_opt(prompt, 0.25)
         except Exception as e:  # noqa
             log("png pass failed:", str(e)[:100])
             continue
@@ -6096,10 +6194,10 @@ def auto_overlays(scenes):
 def overlay_pass(scenes, topic=""):
     """Gemini detector over every word: year, place (+ its region), name (person / animal / thing), real person card, stat, verdict, PNG explain / action, feature call-out, bubble."""
     ph = [(i, sc) for i, sc in enumerate(scenes) if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
-    n_add = {k: 0 for k in ("year", "place", "name", "person", "stat", "verdict", "explain", "action", "feature", "bubble")}
+    n_add = {k: 0 for k in ("year", "place", "name", "person", "stat", "verdict", "explain", "action", "feature", "bubble", "quote")}
     seen_names = set()
-    for a in range(0, len(ph), 3):
-        batch = ph[a:a + 3]
+    for a in range(0, len(ph), 5):
+        batch = ph[a:a + 5]
         listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
         prompt = f"""Film editor task. Hindi narration, every word numbered (index:word). Video topic: {topic}
 Go through EVERY word of EACH scene and detect everything below that is really spoken (up to 6 helpers per scene; never two on the same word; each exactly on the word where it is spoken):
@@ -6113,10 +6211,11 @@ Go through EVERY word of EACH scene and detect everything below that is really s
 - "action": something MOVING or doing a visible action. {{"w":..,"kind":"action","text_hi":"","query_en":"the real moving thing","pose_en":"e.g. lion running","verb":"run|walk|swim|fly|jump|fall|rise|approach|retreat|spin|shake|grow","dir":"right|left|toward|away|up|down"}}
 - "feature": the narrator lists SPECIAL FEATURES / abilities / parts of ONE subject. {{"w":..,"kind":"feature","text_hi":"","query_en":"the subject","pose_en":"subject, side view","features":[{{"label_hi":"short Hindi label","part_en":"the body part / detail in English"}}]}} 2-4 features, at most one per video.
 - "bubble": the narrator quotes what a person said. {{"w":..,"kind":"bubble","text_hi":"the quoted words, max 6","side":"left" or "right"}}
+- "quote": a short dramatic line, prediction, threat or promise (max 7 words) that deserves BIG text at the right of the screen. {{"w":..,"kind":"quote","text_hi":"the line"}} (at most 2 per scene)
 Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
 {listing}"""
         try:
-            out = gemini_json(prompt, 0.2)
+            out = gemini_json_opt(prompt, 0.2)
         except Exception as e:  # noqa
             log("overlay pass failed:", str(e)[:100])
             continue
@@ -7566,24 +7665,27 @@ def make_layers_draw(sc, dur, speech_dur, pal, events):
 
 
 
+def _make_draw(sc, dur, sp, pal, ctx, events):
+    typ = sc["type"]
+    if typ == "multi":
+        return make_multi_draw(sc, dur, sp, pal, events)
+    if typ in ("merge", "split", "steps", "compare"):
+        return make_explainer(sc, dur, pal, events)
+    if typ == "counter":
+        return make_counter_draw(sc, dur, sp, pal, events)
+    if typ == "bars":
+        return make_bars_draw(sc, dur, sp, pal, events)
+    if typ == "kinetic":
+        return make_kinetic_draw(sc, dur, sp, ctx, events, pal)
+    if typ == "map":
+        return make_map_draw(sc, dur, sp, pal, events)
+    return make_photo_draw(sc, dur, sp, ctx, events, pal)
+
+
 def render_scene(i, sc, out, pal, ctx, prev_sc, last):
     dur, sp = sc["dur"], sc["speech_dur"]
     events = []
-    typ = sc["type"]
-    if typ == "multi":
-        draw = make_multi_draw(sc, dur, sp, pal, events)
-    elif typ in ("merge", "split", "steps", "compare"):
-        draw = make_explainer(sc, dur, pal, events)
-    elif typ == "counter":
-        draw = make_counter_draw(sc, dur, sp, pal, events)
-    elif typ == "bars":
-        draw = make_bars_draw(sc, dur, sp, pal, events)
-    elif typ == "kinetic":
-        draw = make_kinetic_draw(sc, dur, sp, ctx, events, pal)
-    elif typ == "map":
-        draw = make_map_draw(sc, dur, sp, pal, events)
-    else:
-        draw = make_photo_draw(sc, dur, sp, ctx, events, pal)
+    draw = _make_draw(sc, dur, sp, pal, ctx, events)
     subs = make_subtrack(sc["narration_hi"], sp, dur, pal, sc.get("wt"))
     trans, tdur = pick_transition(i, sc, prev_sc, ctx)
     nm, g = TRANS_SFX.get(trans, (None, 0))
@@ -7627,24 +7729,75 @@ def render_scene(i, sc, out, pal, ctx, prev_sc, last):
     ctx["t0"] += dur
 
 
+_RENDER = {}
+
+
+def _scene_plan(scenes):
+    t0, frames, plan = 0.0, 0, []
+    for sc in scenes:
+        n = max(2, int(round((t0 + sc["dur"]) * FPS)) - frames)
+        plan.append((t0, frames, n))
+        frames += n
+        t0 += sc["dur"]
+    return plan
+
+
+def _last_frame(i):
+    """The last picture of scene i (the next scene blends from it); drawn again in the worker that needs it."""
+    scenes, pal, plan = _RENDER["scenes"], _RENDER["pal"], _RENDER["plan"]
+    sc = scenes[i]
+    ctx = {"prev": Image.new("RGB", (W, H), (0, 0, 0)), "t0": plan[i][0], "frames": plan[i][1], "sfx": [], "imgs": {}, "rnd": random.Random(i), "last_cam": None}
+    return _make_draw(sc, sc["dur"], sc["speech_dur"], pal, ctx, [])((plan[i][2] - 1) / FPS)
+
+
+def _render_chunk(rng):
+    lo, hi = rng
+    scenes, tdir, pal, plan = _RENDER["scenes"], _RENDER["tdir"], _RENDER["pal"], _RENDER["plan"]
+    ctx = {"prev": _last_frame(lo - 1) if lo else Image.new("RGB", (W, H), (0, 0, 0)), "t0": plan[lo][0], "frames": plan[lo][1], "sfx": [],
+           "imgs": {}, "rnd": random.Random(1000 + lo), "last_cam": None}
+    for i in range(lo, hi):
+        sc = scenes[i]
+        render_scene(i, sc, tdir / f"scene_{i:03d}.mp4", pal, ctx, scenes[i - 1] if i else None, i == len(scenes) - 1)
+        keep = {x.get("image") for x in sc.get("shots", [])} | {sc.get("image")}
+        ctx["imgs"] = {k: v for k, v in ctx["imgs"].items() if k[0] in keep}
+        log(f"video scene {i + 1}/{len(scenes)} ({sc['type']}) done")
+    return ctx["sfx"]
+
+
 def build_video(scenes, tdir, pal):
     tdir.mkdir(parents=True, exist_ok=True)
-    ctx = {"prev": Image.new("RGB", (W, H), (0, 0, 0)), "t0": 0.0, "frames": 0, "sfx": [], "imgs": {},
-           "rnd": random.Random(), "last_cam": None}
-    parts = []
-    for i, sc in enumerate(scenes):
-        out = tdir / f"scene_{i:03d}.mp4"
-        render_scene(i, sc, out, pal, ctx, scenes[i - 1] if i else None, i == len(scenes) - 1)
-        parts.append(out)
-        keep = {s.get("image") for s in sc.get("shots", [])} | {sc.get("image")}
-        ctx["imgs"] = {k: v for k, v in ctx["imgs"].items() if k[0] in keep}
-        if i % 4 == 0:
-            log(f"video scene {i + 1}/{len(scenes)} ({sc['type']})")
+    workers = int(os.environ.get("RENDER_WORKERS", str(min(4, os.cpu_count() or 1))))
+    plan = _scene_plan(scenes)
+    parts = [tdir / f"scene_{i:03d}.mp4" for i in range(len(scenes))]
+    if workers <= 1 or len(scenes) < 4:
+        ctx = {"prev": Image.new("RGB", (W, H), (0, 0, 0)), "t0": 0.0, "frames": 0, "sfx": [], "imgs": {},
+               "rnd": random.Random(), "last_cam": None}
+        for i, sc in enumerate(scenes):
+            render_scene(i, sc, parts[i], pal, ctx, scenes[i - 1] if i else None, i == len(scenes) - 1)
+            keep = {s_.get("image") for s_ in sc.get("shots", [])} | {sc.get("image")}
+            ctx["imgs"] = {k: v for k, v in ctx["imgs"].items() if k[0] in keep}
+            if i % 4 == 0:
+                log(f"video scene {i + 1}/{len(scenes)} ({sc['type']})")
+        sfx = ctx["sfx"]
+    else:
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+        _RENDER.update(scenes=scenes, tdir=tdir, pal=pal, plan=plan)
+        total, chunks, lo, acc = sum(sc["dur"] for sc in scenes), [], 0, 0.0
+        for i, sc in enumerate(scenes):
+            acc += sc["dur"]
+            if len(chunks) < workers - 1 and acc >= total / workers * (len(chunks) + 1) and i + 1 < len(scenes):
+                chunks.append((lo, i + 1))
+                lo = i + 1
+        chunks.append((lo, len(scenes)))
+        log(f"rendering {len(scenes)} scenes in {len(chunks)} parallel chunks: {chunks}")
+        with ProcessPoolExecutor(max_workers=len(chunks), mp_context=multiprocessing.get_context("fork")) as ex:
+            sfx = sorted([e for part in ex.map(_render_chunk, chunks) for e in part], key=lambda e: e[0])
     lst = tdir / "shots.txt"
     lst.write_text("".join(f"file '{p.resolve()}'\n" for p in parts))
     silent = tdir / "silent.mp4"
     run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", silent])
-    return silent, ctx["sfx"]
+    return silent, sfx
 
 
 def mux_final(silent, voice, music, sfx, out, max_mb=None):
@@ -8325,6 +8478,16 @@ def make_visuals(scenes, imgdir):
     failed = requested = 0
     prev_img = None
     for i, sc in enumerate(scenes):
+        el_ = elapsed_min()
+        if el_ > 100 and not VERIFY["off"]:
+            VERIFY["off"] = True
+            log(f"time guard ({el_:.0f} min used): picture checks off")
+        if el_ > 110 and (EXPLAIN_MAX[0] > 0 or VERDICT_MAX[0] > 0):
+            EXPLAIN_MAX[0] = VERDICT_MAX[0] = 0
+            log("time guard: no more cut-out / circle pictures")
+        if el_ > 125 and not LOCAL_SD["dead"]:
+            LOCAL_SD["dead"] = True
+            log("time guard: slow local AI pictures off")
         if sc["type"] == "photo":
             for n_, it in enumerate(sc.get("items") or []):
                 if it["kind"] == "person" and it.get("photo_img") is None:
@@ -8373,6 +8536,9 @@ def make_visuals(scenes, imgdir):
                         log("popup failed:", type(e).__name__, str(e)[:100])
             for k, sh in enumerate(sc["shots"]):
                 p = imgdir / f"{i:03d}_s{k}.png"
+                if elapsed_min() > 140 and prev_img:  # out of time: keep the previous picture (the camera still moves), finish the video
+                    sh["image"] = prev_img
+                    continue
                 pp = (sh.get("popup_en") or "").strip()
                 if pp and POPUPS_MAX[0] > 0:
                     POPUPS_MAX[0] -= 1
@@ -8527,7 +8693,8 @@ def pipeline():
             log(f"new voice length {fmt_time(total)}")
         except Exception as e:  # noqa
             log("rescale failed, continuing:", e)
-    director_pass(scenes, topic_en)
+    story_context(topic_en, own_story, script)
+    director_pass(scenes, topic_en + (("\nSTORY CONTEXT (keep EVERY picture inside it; relatives and neighbours are people of this culture, never animals or objects): " + STORY_CTX["text"]) if STORY_CTX["on"] else ""))
     prov = "gemini" if VOICE_USED[0].startswith("gemini") else "edge"
     wpms[prov] = round(word_count(script) / (total / 60), 1)
     save_json(WPM_FILE, wpms)
@@ -8811,7 +8978,7 @@ def selftest():
     for k_, st_ in enumerate(SRC_STYLES):
         ov_scenes.append({"type": "photo", "tone": "calm", "headline_hi": "", "narration_hi": "इस बात का स्रोत यह रिपोर्ट है, जो बताती है कि वह लगभग एक दिन तक कुछ नहीं बोली और फिर बोलने लगी",
                           "items": [{"w": 3, "kind": "note", "text": body_en, "sub": ttl_en, "dom": "peoplesreview.com", "mark": "did not say anything for about a day", "style": st_}],
-                          "shots": shots([("इस बात का स्रोत यह रिपोर्ट है, जो बताती है कि वह लगभग एक दिन तक कुछ नहीं बोली और फिर बोलने लगी", ("rock", "planet", "moon", "rock")[k_], (90 + 20 * k_, 100, 120), (20, 30, 40))])})
+                          "shots": shots([("इस बात का स्रोत यह रिपोर्ट है, जो बताती है कि वह लगभग एक दिन तक कुछ नहीं बोली और फिर बोलने लगी", ("rock", "planet", "moon", "rock")[k_ % 4], (90 + 20 * k_, 100, 120), (20, 30, 40))])})
     gear = Image.new("RGBA", (500, 500), (0, 0, 0, 0))
     gd = ImageDraw.Draw(gear)
     gd.ellipse([60, 60, 440, 440], fill=(200, 60, 50, 255))
@@ -8854,6 +9021,8 @@ def selftest():
                       "items": [{"label_hi": "नया तरीका", "prompt_en": "x", "image": art(t0 / "vs_a.png", "rock", (150, 110, 70), (60, 30, 20), 1920), "t": 0.0},
                                 {"label_hi": "पुराना तरीका", "prompt_en": "x", "image": art(t0 / "vs_b.png", "planet", (90, 120, 150), (20, 30, 50), 1920), "t": 1.6}]})
     sc[-1:-1] = ov_scenes
+    if os.environ.get("SELFTEST_SCENES"):
+        sc = sc[:int(os.environ["SELFTEST_SCENES"])] + sc[-1:]
 
     for k, sc_ in enumerate(sc):
         sc_["grade"] = GRADES[k % 6]
