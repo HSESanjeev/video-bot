@@ -900,7 +900,7 @@ SCENES:
                 mk = clean_short(m.get("mark_en"), 50)
                 if mk and mk.lower() not in sp_["text"].lower():
                     mk = ""
-                sc.setdefault("items", []).append({"w": w, "kind": "note", "text": sp_["text"], "mark": mk, "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))})
+                sc.setdefault("items", []).append({"w": w, "kind": "note", "text": window_text(sp_["text"], mk), "mark": mk, "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))})
                 stat["notes"] += 1
     # 2b) action clips: wherever the narrator describes a visible ACTION, that moment becomes a real video clip of exactly that action
     if (PIXABAY_KEY or PEXELS_KEY):
@@ -958,7 +958,7 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 def finalize_overlays(scenes, topic=""):
     """Always runs after the director (even when it failed): rule-based detector, Gemini detector, guaranteed source cards, source list, card styles."""
     st = {}
-    for name, fn in (("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
+    for name, fn in (("declared_sources", lambda: notes_from_declared_src(scenes, topic)), ("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
                      ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)),
                      ("overlays", lambda: overlay_pass(scenes, topic)), ("png_pass", lambda: png_pass(scenes, topic)),
                      ("years", lambda: resolve_years(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
@@ -1159,7 +1159,7 @@ def wiki_sources(topic, extra_text="", want=6):
     return got
 
 
-def collect_sources(max_src=12, topic="", story=""):
+def collect_sources(max_src=14, topic="", story=""):
     """Open the pages the web-search research was grounded on and keep their REAL paragraphs for on-screen source captions."""
     import html as _html
     SRC_PARAS.clear()
@@ -1178,9 +1178,9 @@ def collect_sources(max_src=12, topic="", story=""):
             for m in re.findall(r"<p[^>]*>(.*?)</p>", h, re.S | re.I):
                 t = _html.unescape(_strip_html(m))
                 nw = len(t.split())
-                if 25 <= nw <= 140 and sum(c.isascii() and c.isalpha() for c in t) > 0.7 * len(t) and "cookie" not in t.lower() and "subscribe" not in t.lower() and "javascript" not in t.lower():
-                    paras.append(trim_words(t))
-                if len(paras) >= 7:
+                if 25 <= nw <= 150 and sum(c.isascii() and c.isalpha() for c in t) > 0.7 * len(t) and "cookie" not in t.lower() and "subscribe" not in t.lower() and "javascript" not in t.lower():
+                    paras.append(trim_words(t, 60))
+                if len(paras) >= 10:
                     break
             if not paras:
                 continue
@@ -1211,11 +1211,11 @@ def sources_block():
 def research_story(story, topic):
     """Sources for the owner's own story: search the web for pages that confirm its facts (the story itself is never changed)."""
     body = " ".join(story.split())
-    parts = [body[i:i + 1800] for i in range(0, min(len(body), 5400), 1800)] or [topic]
+    parts = [body[i:i + 1500] for i in range(0, min(len(body), 9000), 1500)] or [topic]
     for k, part in enumerate(parts):
         prompt = (f"Story topic: {topic}\nStory excerpt (Hindi or English):\n{part}\n\nUsing web search, find reliable English-language sources "
                   "(Wikipedia, NASA, Britannica, WWF, government or university pages, major news) that confirm the specific facts, names, numbers and places in this excerpt. "
-                  "List the facts you could confirm as short English bullets.")
+                  "Find the REAL article / report / page about exactly this story or event (the same people, place and case) and list the facts it states as short English bullets.")
         try:
             gemini(prompt, search=True, temperature=0.2)
         except Exception as e:  # noqa
@@ -1223,16 +1223,57 @@ def research_story(story, topic):
 
 
 def research(topic):
-    prompt = (f"Topic: {topic}\nUsing web search, collect the key well-established scientific facts about this topic "
-              "(origins, mechanisms, widely accepted figures with rounded numbers, and the most surprising true facts). "
-              "Prefer NASA, Smithsonian, National Geographic, universities, scientific journals. "
-              "Write 15-25 short bullet facts in English. Mark anything still debated as 'debated'.")
-    try:
-        text, titles = gemini(prompt, search=True, temperature=0.3)
-        return text, titles[:6]
-    except Exception as e:
-        log("Research (search grounding) failed, continuing without it:", e)
-        return "", []
+    """ARTICLE FIRST: three differently-angled web searches so that several REAL articles (NASA, Britannica, Smithsonian, universities, news) are found.
+    The pages themselves are opened afterwards (collect_sources) and the story is written FROM their passages."""
+    angles = [
+        "the key well-established scientific facts (origins, mechanisms, widely accepted figures with rounded numbers, the most surprising true facts)",
+        "the best explanatory articles (NASA, Smithsonian, National Geographic, Britannica, BBC, university pages) - what they say step by step",
+        "dates, numbers, places, named scientists / studies and any recent discovery that changed what we know",
+    ]
+    texts, titles_all = [], []
+    for ang in angles:
+        prompt = (f"Topic: {topic}\nUsing web search, find REAL articles about this topic and collect {ang}. "
+                  "Write 10-15 short bullet facts in English, each tied to what the article actually says. Mark anything still debated as 'debated'.")
+        try:
+            text, titles = gemini(prompt, search=True, temperature=0.3)
+            texts.append(text)
+            titles_all += [t for t in titles if t not in titles_all]
+        except Exception as e:
+            log("Research (search grounding) failed for one angle, continuing:", e)
+    return "\n".join(texts), titles_all[:8]
+
+
+def passages_block(limit=70):
+    """The real article passages the story must be built from (numbered, so a scene can name the passage it is based on)."""
+    if not SRC_PARAS:
+        return ""
+    out = ["REAL ARTICLE PASSAGES (the story MUST be built from these; [id] is used in the scene field \"src\"):"]
+    for k, v in list(SRC_PARAS.items())[:limit]:
+        out.append(f'[{k}] ({v["title"][:55]}) {v["text"]}')
+    return "\n".join(out)
+
+
+def window_text(text, mark, maxw=38):
+    """Source-card text: the sentence(s) around the marked fact, copied word for word from the real passage."""
+    words = text.split()
+    if len(words) <= maxw:
+        return text
+    i = text.lower().find((mark or "").lower()) if mark else -1
+    if i < 0:
+        return trim_words(text, maxw)
+    sents = re.split(r"(?<=[.!?])\s+", text)
+    pos, hit = 0, 0
+    for k, snt in enumerate(sents):
+        if pos <= i < pos + len(snt) + 1:
+            hit = k
+            break
+        pos += len(snt) + 1
+    chosen = [sents[hit]]
+    for j in (hit + 1, hit - 1):
+        if 0 <= j < len(sents) and len(" ".join(chosen + [sents[j]]).split()) <= maxw:
+            chosen = chosen + [sents[j]] if j > hit else [sents[j]] + chosen
+    out = " ".join(chosen)
+    return out if len(out.split()) <= maxw + 12 else trim_words(out, maxw)
 
 
 SCRIPT_RULES = """RULES FOR THE SCRIPT
@@ -1258,8 +1299,9 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 - "bars": compare 2-4 real sizes as animated bars. "bars": [{"label_hi": "पृथ्वी", "value": 12742, "unit_hi": "किमी"}, ...]. Same unit for all, rounded well-established values only.
 - "map": use whenever the narrator names a country, region, city, route, journey or migration. "map": {"mode": "flat", "route": false, "pins": [{"label_hi": "भारत", "lat": 22.0, "lon": 79.0}, ...]} (1-4 real places with correct latitude/longitude; route true draws an animated line through the pins in order, e.g. a journey or spread; mode "globe" for far-apart places). The narration says the place names.
 - "map" with mode "terrain" (BEST for a distance or "from this place to that place" within about 1000 km, e.g. two villages/cities/districts): a tilted satellite-style terrain map with big region names on the ground, two yellow place tags, an animated arrow between them and the distance written on it; the camera follows each point. Format: "map": {"mode": "terrain", "pins": [{"label_hi": "शरीफपुरा गाँव", "lat": 27.4, "lon": 79.6}, {"label_hi": "बिरपुर गाँव", "lat": 27.3, "lon": 79.5}], "regions": [{"label_hi": "फ़र्रुख़ाबाद", "lat": 27.4, "lon": 79.6}, {"label_hi": "मैनपुरी", "lat": 27.2, "lon": 79.0}]} where regions are the 2-4 districts/states/countries around the two places (centre lat/lon). Use terrain ONLY when exactly two places are named (a start and an end): the distance is computed automatically. When THREE OR MORE places are named in a row use terrain with 3-5 pins in the order named: no distance, just pins and an arrow from each place to the next on the same ground.
+- "sketch": ANIMATED LINE-ART DIAGRAM drawn stroke by stroke on parchment (like a premium explainer film) that makes a MECHANISM visible: how something forms, collides, flows, grows, splits, is built from layers, or how two things differ. Use it for about 20-30% of the scenes (the scenes that explain HOW or WHY; at least two in the video, never scene 1 or the last scene). Fields: "type": "sketch", "headline_hi" (2-5 Hindi words, the key claim, shown big on the left word by word), "sketch_brief_en" (one precise English sentence: exactly what the drawing shows, e.g. "a small planet Theia hitting the young Earth from the left, debris flying out, then the Moon forming from the debris"), "year_hi" (a date / time like "४५० करोड़ साल पहले" ONLY if the narration says one, else ""), narration 18-34 words. The drawing is made later from sketch_brief_en, so describe it concretely.
 - "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook and key insights.
-STYLE TARGET = a real documentary: use type "photo" for at least 80% of ALL scenes, because every photo scene is edited word by word with real pictures, camera keyframes, maps, dates and source cards by the director. Cartoon-style explainer cards (merge, split, steps, compare, bars) look cheap, so use them ONLY if a point truly cannot be shown with real pictures, and then at most one in the whole video. Use "counter" only for one really striking number, "map" whenever places/routes are named (this is the preferred explainer), "kinetic" at most once (the re-hook). Photo scenes should have 22-40 words of narration (several different subjects/details per scene give the director more to show).
+STYLE TARGET = a real documentary: use type "photo" for at least 60% of ALL scenes and "sketch" for the explaining scenes, because every photo scene is edited word by word with real pictures, camera keyframes, maps, dates and source cards by the director. Cartoon-style explainer cards (merge, split, steps, compare, bars) look cheap: use "sketch" scenes instead whenever a point is a mechanism or process. Use "counter" only for one really striking number, "map" whenever places/routes are named (this is the preferred explainer), "kinetic" at most once (the re-hook). Photo scenes should have 22-40 words of narration (several different subjects/details per scene give the director more to show).
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
 Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in any picture, no real people.
 Every scene also has "grade" (colour grading that fits the scene: warm for fire/desert/sunrise/early Earth, cool for ocean/ice/night/space, cinematic for dramatic reveals, vivid for lively nature and animals, dark for danger and mystery, dread for creepy/scary/dangerous night scenes (cold teal), bwred for shock, fear, anger or a dramatic turning point (black and white with red glow), redwash for violence or emergency, natural for calm facts) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
@@ -1276,7 +1318,7 @@ TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
 def build_script_prompt(topic, cat, style, target_sec, facts, words):
     n_scenes = max(5 if TEST_SEC else 14, round(words / 21))
     test_note = ("\nTEST MODE: this is a very short test video. Use only about 5-6 scenes, a hook of 15-18 words, no long recap. "
-                 "Ignore the minimum counts below. Almost all scenes must be type photo (map or counter allowed once if natural); no merge/split/steps/compare/bars.\n") if TEST_SEC else ""
+                 "Ignore the minimum counts below. Almost all scenes must be type photo; exactly ONE sketch scene (scene 3 or 4) is wanted; map or counter allowed once if natural; no merge/split/steps/compare/bars.\n") if TEST_SEC else ""
     return f"""You are a script writer and film editor for a Hindi nature & science explainer YouTube channel.
 TOPIC: {topic}
 CATEGORY: {cat}
@@ -1284,8 +1326,10 @@ STRUCTURE STYLE: {style[1]}
 TARGET: about {words} Hindi words of narration in total ({target_sec} seconds), around {n_scenes} scenes.{test_note}
 {SCRIPT_RULES}
 
-VERIFIED FACTS TO PREFER (may be empty):
-{facts[:12500]}
+ARTICLE-FIRST RULE: the REAL ARTICLE PASSAGES below are the truth. Build the story from them: every fact, number, name and date in the narration must come from a passage (or from the bullet facts), told in your own simple Hindi but keeping the claim exactly as the article states it. In each scene put the id of the main passage it is based on in "src" (for example "2.3"; empty string when the scene states no article fact). The sentence of the scene that states the fact must be a faithful Hindi version of that passage, so that when the viewer sees the article's English sentence on the screen it says the same thing the narrator says.
+
+VERIFIED FACTS AND ARTICLE PASSAGES TO USE (may be empty):
+{facts[:16000]}
 
 Return ONLY JSON in exactly this shape:
 {{
@@ -1303,7 +1347,7 @@ Return ONLY JSON in exactly this shape:
  "description_hi": "3-4 short Hindi lines telling what the viewer will learn",
  "tags": ["8-12 tags mixing Hindi and English"],
  "scenes": [
-  {{"narration_hi": "...", "type": "photo", "tone": "suspense", "grade": "dark", "transition": "fade", "headline_hi": "",
+  {{"narration_hi": "...", "src": "1.2", "type": "photo", "tone": "suspense", "grade": "dark", "transition": "fade", "headline_hi": "",
     "shots": [{{"text_hi": "first phrase of the narration", "prompt_en": "...", "label_hi": "key word"}}, {{"text_hi": "next phrase, same subject", "prompt_en": "", "focus_x": 0.3, "focus_y": 0.4, "label_hi": ""}}, {{"text_hi": "phrase naming something new", "prompt_en": "...", "query_en": "lion", "label_hi": ""}}]}},
    {{"narration_hi": "...", "type": "multi", "tone": "wonder", "headline_hi": "",
     "items": [{{"label_hi": "name of first thing", "query_en": "real photo search words", "prompt_en": "..."}}, {{"label_hi": "name of second thing", "query_en": "...", "prompt_en": "..."}}]}},
@@ -1408,6 +1452,12 @@ def validate_script(s, verbatim=False, min_scenes=None):
                 else:
                     sc["map"] = {"pins": pins, "route": bool(mp.get("route")) and len(pins) >= 2,
                                  "mode": "globe" if md == "globe" else "flat"}
+            else:
+                typ = "photo"
+        elif typ == "sketch":
+            br = clean_short(sc.get("sketch_brief_en"), 300)
+            if br and idx > 0 and idx != len(s["scenes"]) - 1:
+                sc["sketch_brief_en"], sc["year_hi"] = br, clean_short(sc.get("year_hi"), 24)
             else:
                 typ = "photo"
         elif typ == "kinetic":
@@ -1571,7 +1621,7 @@ Improve this explainer-video script JSON:
 - Replace difficult words with simple ones; make sure a 15-year-old understands everything on first listen.
 - Keep scene 1 a truthful suspense hook (25-30 words, type "photo") that does not reveal the answer.
 - Check that every picture matches the words spoken at that moment (each shot's prompt_en must show exactly what its text_hi says; a merge scene must really show A and B combining into the result named in the narration; counter/bars numbers must be correct and round). Fix types/items/labels/headlines/shots where they do not teach.
-- Keep at least 80% of the scenes as type photo (real-photo documentary scenes); no merge/split/steps/compare/bars/kinetic cards; map or multi (split-screen list of real photos) are welcome; and a grade + transition on every scene. Every shot must show what is spoken at that moment.
+- Keep at least 60% of the scenes as type photo (real-photo documentary scenes) and keep the "sketch" scenes (with their sketch_brief_en, headline_hi, year_hi) where a mechanism is explained; no merge/split/steps/compare/bars/kinetic cards; map or multi (split-screen list of real photos) are welcome; and a grade + transition on every scene. Every shot must show what is spoken at that moment.
 - Keep roughly the same number of scenes (+/-2) and total narration length (+/-10%, now about {word_count(script)} words).
 - Keep numbers in narration written in Hindi words, no English letters in narration, keep every field and the exact JSON shape.
 Return ONLY the improved JSON.
@@ -2083,6 +2133,9 @@ def fail_summary():
     return "; ".join(f"{k} x{v}" for k, v in IMG_FAILS.items()) or "no details"
 
 
+NATIVE = {}  # picture path -> real pixel width that survives the 1920x1080 crop (zoom is limited by it so pictures never turn blurry)
+
+
 def fit_image(raw_bytes, out_png, size=(1920, 1080)):
     tmp = Path(str(out_png) + ".tmp")
     tmp.write_bytes(raw_bytes)
@@ -2092,6 +2145,10 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
     tmp.unlink(missing_ok=True)
     if im.width < 400 or im.height < 400:
         raise ValueError("image too small")
+    NATIVE[str(out_png)] = size[0] / max(size[0] / im.width, size[1] / im.height)  # real source pixels across the visible width
+    if im.width < size[0] * 0.9:  # small source: upscale in two steps and sharpen so zooming later stays crisp
+        k = size[0] / im.width
+        im = im.resize((int(im.width * k), int(im.height * k)), Image.LANCZOS).filter(ImageFilter.UnsharpMask(radius=1.6, percent=70, threshold=2))
     try:
         cx, cy = subject_center(im)
         im = ImageOps.fit(im, size, Image.LANCZOS, centering=(min(0.85, max(0.15, cx)), min(0.7, max(0.3, cy))))
@@ -2647,7 +2704,7 @@ def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity="",
         suffix = suffix.replace("plain pure white background", "plain flat bright green background")
     size = (1080, 1080) if kind in ("card", "obj") else (1920, 1080)
     full = f"{prompt}, {suffix}"
-    dims = {"photo": (1024, 576), "thumb": (1024, 576), "card": (512, 512), "obj": (512, 512)}[kind]
+    dims = {"photo": (1344, 756), "thumb": (1344, 756), "card": (512, 512), "obj": (512, 512)}[kind]
     chain = [("cloudflare", lambda: img_cloudflare(full, out, size, dims))]
     rq = query or fallback_query or query_from_prompt(prompt)
     if kind in ("photo", "thumb") and rq and os.environ.get("REAL_PHOTOS") != "0":
@@ -3553,7 +3610,7 @@ def grain_bank():
     if "grain" not in _C:
         np = _np()
         rng = np.random.default_rng(7)
-        _C["grain"] = [(rng.standard_normal((H, W, 1)) * 3.0).astype(np.float32) for _ in range(6)]
+        _C["grain"] = [(rng.standard_normal((H, W, 1)) * 1.1).astype(np.float32) for _ in range(6)]
     return _C["grain"]
 
 
@@ -3696,9 +3753,14 @@ def shot_frame(shot, tl):
         z, cx, cy = cam_state(shot["cam"], p, tl)
     if tl < 0.3 and shot["cam"] != "focus" and not shot.get("kfs"):
         z *= 1 + 0.10 * (1 - e_out(tl / 0.3))  # quick punch-in on the beat the word is spoken
-    fr = src.resize((W, H), Image.BILINEAR, box=crop_box(z, cx, cy))
+    zc = shot.get("zcap", 2.1)
+    if z > zc:  # never magnify beyond the real pixels of the picture: that is what made pictures slowly turn blurry
+        z = zc
+        m_ = (1 - 1 / z) / 2
+        cx, cy = min(0.5 + m_, max(0.5 - m_, cx)), min(0.5 + m_, max(0.5 - m_, cy))
+    fr = src.resize((W, H), Image.BICUBIC, box=crop_box(z, cx, cy))
     if shot.get("par"):
-        fg = src.resize((W, H), Image.BILINEAR, box=crop_box(z * (1 + 0.07 * p), cx, cy))
+        fg = src.resize((W, H), Image.BICUBIC, box=crop_box(min(zc, z * (1 + 0.07 * p)), cx, cy))
         fr = Image.composite(fg, fr, par_mask())
     if shot.get("focus") and tl < 0.8:
         r = (1 - tl / 0.8) * 9
@@ -3899,6 +3961,12 @@ def graded_image(ctx, path, grade="natural"):
     return ctx["imgs"][key]
 
 
+def zoom_cap(path):
+    """Largest camera zoom at which this picture is still sharp on a 1280-wide frame (at most 1.3x magnification of real pixels)."""
+    nat = NATIVE.get(str(path), 1920.0)
+    return max(1.06, min(2.1, 1.3 * nat / W))
+
+
 def pick_cam(ctx):
     rnd = ctx["rnd"]
     c = rnd.choice([x for x in CAMS if x != ctx.get("last_cam")])
@@ -3967,7 +4035,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                 for kf in s_["kf"]:
                     wi = min(nw - 1, max(0, int(kf["w"])))
                     ta = min(sd - 0.2, max(0.45, wt[wi][0] + 0.12 - a))
-                    zz = min(2.1, max(1.15, kf["z"]))
+                    zz = min(zoom_cap(s_["image"]), max(1.08, kf["z"]))
                     m_ = (1 - 1 / zz) / 2
                     tx, ty = min(0.5 + m_, max(0.5 - m_, kf["fx"])), min(0.5 + m_, max(0.5 - m_, kf["fy"]))
                     t_last = kfs[-1][0]
@@ -3986,7 +4054,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                           "pulse": ((rnd.choice([(200, 20, 30), (20, 120, 140), (255, 255, 255)]) if (new_img and shots and rnd.random() < (0.4 if tone in ("suspense", "serious", "excited") else 0.12)) else None)),
                           "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
                           "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
-                          "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4,
+                          "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4, "zcap": zoom_cap(s_["image"]),
                           "ov": (s_.get("ov") if j == 0 else None), "popup": (s_.get("popup_img") if j == 0 else None),
                           "clip": s_.get("clip"), "reader": None, "grade": s_.get("grade") if s_.get("grade") in GRADES else sc.get("grade", "natural"),
                           "pop_side": rnd.choice([-1, 1]),
@@ -4081,19 +4149,25 @@ def ov_sprite(kind, text, mark, pal):
             full.alpha_composite(scrim)
             full.alpha_composite(card, (40, 40))
         sp = full
-    elif kind == "place":  # location tag, bottom-left (big name + small region line)
+    elif kind == "place":  # location tag, bottom-left: dark glass panel, accent bar, outlined text, equal padding on all sides
         main_, _, sub_ = text.partition("|")
-        a1 = text_layer(main_.strip(), load_font(70, "title"), fill=(255, 255, 255), shadow=(0, 4, 8, 0.8))
-        a2 = text_layer(sub_.strip(), load_font(30, "sub"), fill=(235, 220, 200), shadow=(0, 2, 4, 0.8)) if sub_.strip() else None
-        w = max(a1.width, a2.width if a2 else 0) + 40
-        h = a1.height + (a2.height if a2 else 0) + 20
-        sp = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(sp).rectangle([0, 8, 8, h - 8], fill=tuple(pal["accent"]) + (255,))
-        sp.alpha_composite(a1, (22, 0))
+        a1 = text_layer(main_.strip(), load_font(64, "title"), fill=(255, 255, 255), stroke=3, stroke_fill=(10, 10, 14), shadow=(0, 4, 8, 0.8))
+        a2 = text_layer(sub_.strip(), load_font(30, "sub"), fill=(240, 226, 205), stroke=2, stroke_fill=(10, 10, 14), shadow=(0, 2, 4, 0.8)) if sub_.strip() else None
+        pad_ = 22
+        tw_, th_ = max(a1.width, a2.width if a2 else 0), a1.height + (a2.height - 10 if a2 else 0)
+        w, h = tw_ + 2 * pad_ + 16, th_ + 2 * pad_
+        sp = Image.new("RGBA", (w + 40, h + 40), (0, 0, 0, 0))
+        pm = Image.new("L", (w + 40, h + 40), 0)
+        ImageDraw.Draw(pm).rounded_rectangle([20, 20, w + 20, h + 20], 18, fill=165)
+        glass = Image.new("RGBA", sp.size, (8, 10, 18, 255))
+        glass.putalpha(pm.filter(ImageFilter.GaussianBlur(1.2)))
+        sp.alpha_composite(glass)
+        ImageDraw.Draw(sp).rounded_rectangle([20, 20, 28, h + 20], 4, fill=tuple(pal["accent"]) + (255,))
+        sp.alpha_composite(a1, (20 + 16 + pad_ - 6, 20 + pad_ - 6))
         if a2:
-            sp.alpha_composite(a2, (22, a1.height - 6))
+            sp.alpha_composite(a2, (20 + 16 + pad_ - 6, 20 + pad_ + a1.height - 16))
     elif kind == "title":  # huge glowing title reveal
-        lay = text_layer(text, load_font(190, "title"), fill=(255, 244, 214), fill2=(255, 140, 50), max_w=int(W * 0.86), shadow=(0, 6, 10, 0.8))
+        lay = text_layer(text, load_font(190, "title"), fill=(255, 244, 214), fill2=(255, 140, 50), max_w=int(W * 0.86), stroke=5, stroke_fill=(30, 8, 4), shadow=(0, 6, 10, 0.8))
         pad_ = 70
         big_ = Image.new("RGBA", (lay.width + 2 * pad_, lay.height + 2 * pad_), (0, 0, 0, 0))
         big_.alpha_composite(lay, (pad_, pad_))
@@ -4104,7 +4178,7 @@ def ov_sprite(kind, text, mark, pal):
         sp.alpha_composite(glow)
         sp.alpha_composite(big_)
     else:  # year / time marker on a timeline
-        lay = text_layer(text, load_font(58, "title"), fill=(255, 255, 255), stroke=0)
+        lay = text_layer(text, load_font(58, "title"), fill=(255, 255, 255), stroke=2, stroke_fill=(90, 8, 18))
         pw, ph = lay.width + 56, lay.height + 22
         w, h = max(1000, pw + 60), ph + 70
         sp = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -4113,9 +4187,12 @@ def ov_sprite(kind, text, mark, pal):
         for x in range(30, w - 20, 70):
             d.line([(x, ph + 28), (x, ph + 44)], fill=(255, 255, 255, 170), width=2)
         pl = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-        col = Image.new("RGBA", (pw, ph), (200, 20, 40, 255))
-        col.putalpha(rounded_mask((pw, ph), 14))
-        pl.alpha_composite(col)
+        edge = Image.new("RGBA", (pw, ph), (255, 255, 255, 255))
+        edge.putalpha(rounded_mask((pw, ph), 14))
+        pl.alpha_composite(edge)
+        col = Image.new("RGBA", (pw - 6, ph - 6), (200, 20, 40, 255))
+        col.putalpha(rounded_mask((pw - 6, ph - 6), 11))
+        pl.alpha_composite(col, (3, 3))
         pl.alpha_composite(lay, ((pw - lay.width) // 2, (ph - lay.height) // 2))
         sp.alpha_composite(pl, ((w - pw) // 2, 0))
         d.polygon([(w // 2 - 10, ph), (w // 2 + 10, ph), (w // 2, ph + 14)], fill=(200, 20, 40, 255))
@@ -5058,8 +5135,8 @@ Return ONLY JSON: {{"matches":[...]}}
             mk = clean_short(r.get("mark_en"), 70)
             if not mk or mk.lower() not in sp_["text"].lower():
                 mk = auto_mark(sp_["text"]) if fit == "direct" else ""
-            cands.append((0 if fit == "direct" else 1, sc, str(r.get("src")).strip(), {"w": w, "kind": "note", "text": sp_["text"], "mark": mk,
-                                                                                    "sub": sp_["title"].replace("|", "-")[:70], "dom": ""}))
+            cands.append((0 if fit == "direct" else 1, sc, str(r.get("src")).strip(), {"w": w, "kind": "note", "text": window_text(sp_["text"], mk), "mark": mk,
+                                                                                    "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))}))
     cands.sort(key=lambda c: c[0])
     added, used_src, used_sc = 0, set(), set()
     for _fit, sc, src, rec in cands:
@@ -5072,6 +5149,49 @@ Return ONLY JSON: {{"matches":[...]}}
         used_sc.add(id(sc))
         added += 1
     log(f"source cards matched to the narration: {added} (had {have}, target {target})")
+    return added
+
+
+def notes_from_declared_src(scenes, topic=""):
+    """The script was written FROM real article passages and every scene names its passage ("src"). Here the source card of that passage is placed at the word where
+    the narrator states the fact, and shows the article's own sentence (word for word) with the key words highlighted."""
+    ph = [sc for sc in _ph_scenes(scenes) if str(sc.get("src") or "").strip() in SRC_PARAS]
+    has = lambda sc: any(isinstance(i, dict) and i.get("kind") == "note" for i in (sc.get("items") or []))
+    todo = [sc for sc in ph if not has(sc)]
+    if not todo or not GEMINI_KEY:
+        return 0
+    added = 0
+    for a in range(0, len(todo), 8):
+        batch = todo[a:a + 8]
+        listing = "\n".join(f'SCENE {k}: {_numbered(sc)}\nPASSAGE [{sc["src"]}]: "{SRC_PARAS[str(sc["src"]).strip()]["text"][:700]}"' for k, sc in enumerate(batch))
+        prompt = f"""Hindi documentary scenes (every word numbered) and, for each, the real English article passage the scene was written from. Topic: {topic}
+For each scene return where the narrator states the fact that the passage states: {{"i": scene number, "w": number of the word where that fact is spoken, "mark_en": "2-8 words copied EXACTLY from the passage that state that fact", "ok": true or false}}.
+ok=false when the narration does not really state what the passage says. Never invent.
+Return ONLY JSON: {{"matches":[...]}}
+{listing}"""
+        try:
+            out = gemini_json_opt(prompt, 0.1)
+        except Exception as e:  # noqa
+            log("declared source matching failed:", str(e)[:100])
+            continue
+        for r in (out.get("matches") or []):
+            try:
+                i, w = int(r.get("i")), int(r.get("w"))
+            except Exception:  # noqa
+                continue
+            if not (0 <= i < len(batch)) or r.get("ok") is False:
+                continue
+            sc = batch[i]
+            sp_ = SRC_PARAS[str(sc["src"]).strip()]
+            if not (0 <= w < len(sc["narration_hi"].split())):
+                continue
+            mk = clean_short(r.get("mark_en"), 70)
+            if not mk or mk.lower() not in sp_["text"].lower():
+                mk = auto_mark(sp_["text"])
+            sc.setdefault("items", []).append({"w": w, "kind": "note", "text": window_text(sp_["text"], mk), "mark": mk,
+                                               "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))})
+            added += 1
+    log(f"source cards from the script's own article passages: {added}")
     return added
 
 
@@ -7665,8 +7785,302 @@ def make_layers_draw(sc, dur, speech_dur, pal, events):
 
 
 
+# --------------------------------------------------------------------------- SKETCH scenes: animated line-art diagrams that EXPLAIN (parchment / dark paper, drawn on stroke by stroke)
+SK_WU, SK_HU = 100.0, 56.25
+SK_THEMES = {
+    "paper": {"top": (236, 224, 200), "bot": (214, 196, 160), "ink": (58, 40, 28), "accent": (188, 34, 34), "soft": (226, 205, 168), "rays": (170, 140, 100), "dark": False},
+    "dark": {"top": (9, 11, 22), "bot": (20, 24, 44), "ink": (240, 204, 124), "accent": (255, 122, 52), "soft": (60, 54, 40), "rays": (120, 100, 60), "dark": True},
+}
+
+
+def sk_theme(sc):
+    dark = sc.get("tone") == "suspense" or sc.get("grade") in ("dark", "dread", "bwred", "redwash")
+    return SK_THEMES["dark" if dark else "paper"]
+
+
+def sk_bg(th):
+    key = ("skbg", th["dark"])
+    if key in _C:
+        return _C[key]
+    np = _np()
+    yy = np.linspace(0, 1, H, dtype=np.float32)[:, None, None]
+    top, bot = np.array(th["top"], dtype=np.float32), np.array(th["bot"], dtype=np.float32)
+    a = top * (1 - yy) + bot * yy
+    a = np.broadcast_to(a, (H, W, 3)).copy()
+    rng = np.random.default_rng(11)
+    blot = Image.fromarray((rng.random((9, 16)) * 255).astype(np.uint8)).resize((W, H), Image.BICUBIC)
+    a += ((np.asarray(blot, dtype=np.float32) / 255.0 - 0.5) * (17 if not th["dark"] else 10))[..., None]
+    a *= vig_mask() * (0.55 if th["dark"] else 0.32) + (0.45 if th["dark"] else 0.68)
+    img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).convert("RGBA")
+    rays = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    rd = ImageDraw.Draw(rays)
+    cx, cy = W * 0.70, H * 0.50
+    for k in range(36):
+        ang = k * math.pi / 18
+        rd.line([(cx, cy), (cx + math.cos(ang) * W, cy + math.sin(ang) * W)], fill=tuple(th["rays"]) + (26,), width=2)
+    img.alpha_composite(rays)
+    _C[key] = img.convert("RGB")
+    return _C[key]
+
+
+def sk_points(pr):
+    t = pr["t"]
+    if t in ("line", "arrow"):
+        pts = [tuple(p) for p in pr["p"]]
+        if t == "arrow" and len(pts) >= 2:
+            (x0, y0), (x1, y1) = pts[-2], pts[-1]
+            ang = math.atan2(y1 - y0, x1 - x0)
+            hl = 2.2
+            pts += [(x1 - hl * math.cos(ang - 0.45), y1 - hl * math.sin(ang - 0.45)), (x1, y1), (x1 - hl * math.cos(ang + 0.45), y1 - hl * math.sin(ang + 0.45))]
+        return pts
+    if t == "rect":
+        x0, y0, x1, y1 = pr["b"]
+        return [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+    if t == "circle":
+        cx, cy = pr["c"]
+        r = pr["r"]
+        return [(cx + r * math.cos(2 * math.pi * k / 56), cy + r * math.sin(2 * math.pi * k / 56)) for k in range(57)]
+    if t == "arc":
+        cx, cy = pr["c"]
+        r, a0, a1 = pr["r"], math.radians(pr["a0"]), math.radians(pr["a1"])
+        n = max(8, int(abs(a1 - a0) / 0.12))
+        return [(cx + r * math.cos(a0 + (a1 - a0) * k / n), cy + r * math.sin(a0 + (a1 - a0) * k / n)) for k in range(n + 1)]
+    if t == "poly":
+        pts = [tuple(p) for p in pr["p"]]
+        return pts + pts[:1]
+    return []
+
+
+def clean_prims(raw):
+    """Gemini's drawing instructions -> safe, bounded list of strokes (coordinates clamped to the 100 x 56.25 canvas)."""
+    if isinstance(raw, dict):
+        raw = raw.get("strokes") or raw.get("shapes") or raw.get("items") or []
+    out = []
+
+    def num(v, lo, hi):
+        return max(lo, min(hi, float(v)))
+
+    def pt(p):
+        return [num(p[0], 0, SK_WU), num(p[1], 0, SK_HU)]
+
+    for pr in (raw or [])[:48]:
+        try:
+            t = str(pr.get("t") or "").lower()
+            col = pr.get("col") if pr.get("col") in ("ink", "accent") else "ink"
+            fill = pr.get("fill") if pr.get("fill") in ("ink", "accent", "soft") else ""
+            w = num(pr.get("w", 2), 1, 4)
+            if t in ("line", "arrow", "poly"):
+                pts = [pt(p) for p in pr.get("p", [])][:24]
+                if len(pts) >= 2:
+                    out.append({"t": t, "p": pts, "col": col, "w": w, "fill": fill if t == "poly" else ""})
+            elif t == "rect":
+                b = [num(v, 0, SK_WU) for v in pr.get("b", [])][:4]
+                if len(b) == 4 and b[2] > b[0] and b[3] > b[1]:
+                    out.append({"t": t, "b": b, "col": col, "w": w, "fill": fill})
+            elif t == "circle":
+                c = pt(pr.get("c"))
+                out.append({"t": t, "c": c, "r": num(pr.get("r"), 0.6, 30), "col": col, "w": w, "fill": fill})
+            elif t == "arc":
+                out.append({"t": t, "c": pt(pr.get("c")), "r": num(pr.get("r"), 0.6, 40), "a0": num(pr.get("a0", 0), -720, 720), "a1": num(pr.get("a1", 180), -720, 720), "col": col, "w": w, "fill": ""})
+            elif t == "text":
+                s_ = clean_short(pr.get("s"), 26)
+                if s_:
+                    out.append({"t": "text", "p": pt(pr.get("p")), "s": s_, "size": num(pr.get("size", 3), 1.8, 5), "col": col})
+        except Exception:  # noqa
+            continue
+    return out
+
+
+def sketch_prompt(sc, topic):
+    return f"""You are an illustrator for a premium explainer film. Draw ONE clear teaching diagram as animated line-art (like an engineer's sketch / museum diagram), to be drawn stroke by stroke while the narrator speaks.
+VIDEO TOPIC: {topic}
+WHAT TO DRAW: {sc.get('sketch_brief_en')}
+NARRATION (Hindi): {sc['narration_hi']}
+Canvas: x from 0 to 100, y from 0 to 56.25 (y grows downward). The LEFT 38 units are reserved for the headline text: draw ONLY inside x 40..97 and y 5..47 (the bottom strip is for the timeline).
+Return ONLY JSON: {{"strokes": [ ... ]}} with 16-34 strokes in the order they should be drawn (big shapes first, details next, labels last). Stroke types:
+ {{"t":"line","p":[[x,y],[x,y],...],"w":2,"col":"ink"}}   polyline (2-12 points)
+ {{"t":"arrow","p":[[x,y],[x,y]],"w":2,"col":"accent"}}   arrow showing movement / cause
+ {{"t":"circle","c":[x,y],"r":8,"w":2,"col":"ink","fill":"soft"}}   (fill optional: soft, ink or accent)
+ {{"t":"arc","c":[x,y],"r":10,"a0":0,"a1":180,"w":2,"col":"ink"}}   degrees
+ {{"t":"rect","b":[x0,y0,x1,y1],"w":2,"col":"ink","fill":"soft"}}
+ {{"t":"poly","p":[[x,y],...],"w":2,"col":"ink","fill":"soft"}}   closed shape
+ {{"t":"text","p":[x,y],"s":"short label","size":3,"col":"ink"}}   at most 4 labels, each at most 3 words, in simple Hindi (Devanagari) or a proper noun; p is the CENTRE of the label
+Rules: the drawing must show the exact idea of the narration (what collides with what, what flows where, which part is inside which); use "accent" colour only for the key moving / changing element and its arrow; use real proportions (a small moon next to a bigger planet), keep everything inside the allowed area, no overlapping labels, simple clean shapes a child understands."""
+
+
+def build_sketches(scenes, topic=""):
+    """Ask Gemini for the line drawing of every sketch scene; a scene whose drawing fails becomes an ordinary picture scene."""
+    n_ok = 0
+    for sc in scenes:
+        if sc.get("type") != "sketch":
+            continue
+        prims = None
+        if GEMINI_KEY:
+            try:
+                prims = clean_prims(gemini_json(sketch_prompt(sc, topic), 0.5))
+            except Exception as e:  # noqa
+                log("sketch drawing failed:", str(e)[:100])
+        if prims and len(prims) >= 6:
+            sc["strokes"] = prims
+            n_ok += 1
+            continue
+        sc["type"] = "photo"
+        sc["shots"] = [{"text_hi": sc["narration_hi"], "prompt_en": clean_short(sc.get("sketch_brief_en"), 300) or "a dramatic wide nature scene", "label_hi": "",
+                        "query_en": "", "entity_en": "", "motion": False, "clip_en": "", "popup_en": "", "ov": None, "fx": None, "fy": None}]
+    log(f"sketch scenes drawn: {n_ok}")
+
+
+def _sk_stroke_mask(pts, w_px, frac, bbox):
+    """Anti-aliased mask (drawn at 2x) of the first `frac` of a polyline; returns (mask_L_1x, (x0, y0))."""
+    x0, y0, x1, y1 = bbox
+    mw, mh = max(2, x1 - x0), max(2, y1 - y0)
+    big = Image.new("L", (mw * 2, mh * 2), 0)
+    d = ImageDraw.Draw(big)
+    segs, tot = [], 0.0
+    for a, b in zip(pts, pts[1:]):
+        l = math.hypot(b[0] - a[0], b[1] - a[1])
+        segs.append((a, b, l))
+        tot += l
+    target, acc, drawn = tot * frac, 0.0, [pts[0]]
+    for a, b, l in segs:
+        if acc + l <= target:
+            drawn.append(b)
+            acc += l
+        else:
+            r = (target - acc) / max(l, 1e-6)
+            drawn.append((a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r))
+            break
+    pp = [((x - x0) * 2, (y - y0) * 2) for x, y in drawn]
+    if len(pp) >= 2:
+        d.line(pp, fill=255, width=int(w_px * 2), joint="curve")
+        r_ = w_px
+        for x, y in (pp[0], pp[-1]):
+            d.ellipse([x - r_, y - r_, x + r_, y + r_], fill=255)
+    return big.resize((mw, mh), Image.LANCZOS), (x0, y0), drawn[-1]
+
+
+def make_sketch_draw(sc, dur, sp, pal, events):
+    th = sk_theme(sc)
+    ux, uy = W / SK_WU, H / SK_HU
+    strokes = sc["strokes"]
+    # timing: strokes are drawn one after another (longer strokes take longer); labels fade in when reached
+    t_a, t_b = 0.35, max(1.5, min(dur - 0.8, sp * 0.86))
+    lens = []
+    for pr in strokes:
+        if pr["t"] == "text":
+            lens.append(6.0)
+        else:
+            pts = sk_points(pr)
+            lens.append(max(4.0, sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))))
+    tot = sum(lens)
+    plan, acc = [], 0.0
+    for pr, l in zip(strokes, lens):
+        s0 = t_a + (t_b - t_a) * acc / tot
+        acc += l
+        plan.append((s0, t_a + (t_b - t_a) * acc / tot))
+    px = []
+    for pr in strokes:
+        if pr["t"] == "text":
+            px.append(None)
+            continue
+        pts = [(x * ux, y * uy) for x, y in sk_points(pr)]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        wpx = pr["w"] * 1.5
+        bb = (max(0, int(min(xs) - wpx - 6)), max(0, int(min(ys) - wpx - 6)), min(W, int(max(xs) + wpx + 6)), min(H, int(max(ys) + wpx + 6)))
+        px.append((pts, wpx, bb))
+    ink, acc_c, soft = tuple(th["ink"]), tuple(th["accent"]), tuple(th["soft"])
+    cols = {"ink": ink, "accent": acc_c, "soft": soft}
+    # headline: words appear one by one at the left, like kinetic type
+    hw = (sc.get("headline_hi") or "").split()
+    big_f = load_font(64, "head")
+    head_sp = []
+    for k in range(1, len(hw) + 1):
+        head_sp.append(text_layer(" ".join(hw[:k]), big_f, fill=ink, max_w=int(W * 0.34), align="left", stroke=0,
+                                  shadow=None if not th["dark"] else (0, 3, 6, 0.7)))
+    h_t = [0.25 + (max(0.8, sp * 0.5)) * k / max(1, len(hw)) for k in range(len(hw))]
+    year = (sc.get("year_hi") or "").strip()
+    year_sp = text_layer(year, load_font(30, "title"), fill=ink, stroke=0) if year else None
+    label_sp = {}
+    for i, pr in enumerate(strokes):
+        if pr["t"] == "text":
+            label_sp[i] = text_layer(pr["s"], load_font(int(pr["size"] * 12), "sub"), fill=cols[pr["col"]], stroke=2 if th["dark"] else 0, stroke_fill=(0, 0, 0))
+    state = {"k": 0, "layer": Image.new("RGBA", (W, H), (0, 0, 0, 0))}
+
+    def commit(i):
+        pr = strokes[i]
+        if pr["t"] == "text":
+            return
+        pts, wpx, bb = px[i]
+        if pr.get("fill") and pr["t"] in ("poly", "rect", "circle"):
+            fl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            fd = ImageDraw.Draw(fl)
+            c_ = cols[pr["fill"]] + (255 if pr["fill"] != "soft" else 235,)
+            if pr["t"] == "circle":
+                fd.polygon(pts, fill=c_)
+            else:
+                fd.polygon(pts, fill=c_)
+            state["layer"].alpha_composite(fl.crop(bb), (bb[0], bb[1]))
+        m, (x0, y0), _tip = _sk_stroke_mask(pts, wpx, 1.0, bb)
+        col = Image.new("RGBA", m.size, cols[pr["col"]] + (255,))
+        col.putalpha(m)
+        state["layer"].alpha_composite(col, (x0, y0))
+
+    def draw(t):
+        fr = sk_bg(th).copy()
+        done = sum(1 for (a, b) in plan if b <= t)
+        if done < state["k"]:
+            state["k"], state["layer"] = 0, Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        while state["k"] < done:
+            commit(state["k"])
+            state["k"] += 1
+        # ground shadow so the drawing lifts off the paper
+        fr.paste(state["layer"], (0, 0), state["layer"])
+        tip = None
+        for i, (a, b) in enumerate(plan):
+            if a <= t < b and strokes[i]["t"] != "text":
+                frac = e_io(cl((t - a) / max(1e-3, b - a)))
+                pts, wpx, bb = px[i]
+                m, (x0, y0), tip = _sk_stroke_mask(pts, wpx, max(0.001, frac), bb)
+                col = Image.new("RGB", m.size, cols[strokes[i]["col"]])
+                fr.paste(col, (x0, y0), m)
+        if tip is not None:
+            r_ = 7
+            ImageDraw.Draw(fr).ellipse([tip[0] - r_, tip[1] - r_, tip[0] + r_, tip[1] + r_], outline=acc_c, width=3)
+        for i, spr in label_sp.items():
+            a, b = plan[i]
+            if t >= a:
+                al = e_out(cl((t - a) / 0.35))
+                pr = strokes[i]
+                put(fr, spr, pr["p"][0] * ux, pr["p"][1] * uy + (1 - al) * 8, 1.0, al)
+        for k, spr in enumerate(head_sp):
+            if t >= h_t[k]:
+                al = e_out(cl((t - h_t[k]) / 0.3))
+                if k == len(head_sp) - 1 or t < h_t[min(k + 1, len(h_t) - 1)]:
+                    put(fr, spr, W * 0.045 + spr.width / 2 + (1 - al) * -14, H * 0.42, 1.0, al)
+        if head_sp and t > h_t[-1] + 0.2:
+            wb = min(W * 0.30, W * 0.30 * e_out(cl((t - h_t[-1] - 0.2) / 0.6)))
+            ImageDraw.Draw(fr).rounded_rectangle([W * 0.05, H * 0.42 + head_sp[-1].height / 2 + 8, W * 0.05 + wb, H * 0.42 + head_sp[-1].height / 2 + 16], 4, fill=acc_c)
+        d_ = ImageDraw.Draw(fr)
+        for (cx_, cy_, sx, sy) in ((26, 20, 1, 1), (W - 26, 20, -1, 1), (26, H - 20, 1, -1), (W - 26, H - 20, -1, -1)):  # HUD corner ticks
+            d_.line([(cx_, cy_), (cx_ + 22 * sx, cy_)], fill=ink, width=2)
+            d_.line([(cx_, cy_), (cx_, cy_ + 22 * sy)], fill=ink, width=2)
+        y_l = H - 30
+        d_.line([(W * 0.22, y_l), (W * 0.92, y_l)], fill=ink, width=1)
+        d_.line([(W * 0.22, y_l), (W * 0.22 + (W * 0.70) * cl(t / max(0.1, dur)), y_l)], fill=acc_c, width=3)
+        for k in range(0, 15):
+            xx = W * 0.22 + W * 0.70 * k / 14
+            d_.line([(xx, y_l - 4), (xx, y_l + 4)], fill=ink, width=1)
+        if year_sp is not None:
+            put(fr, year_sp, 40 + year_sp.width / 2, H - 52, 1.0, e_out(cl(t / 0.5)))
+        return fr
+
+    return draw
+
+
 def _make_draw(sc, dur, sp, pal, ctx, events):
     typ = sc["type"]
+    if typ == "sketch":
+        return make_sketch_draw(sc, dur, sp, pal, events)
     if typ == "multi":
         return make_multi_draw(sc, dur, sp, pal, events)
     if typ in ("merge", "split", "steps", "compare"):
@@ -7697,7 +8111,7 @@ def render_scene(i, sc, out, pal, ctx, prev_sc, last):
     n = max(2, int(round((ctx["t0"] + dur) * FPS)) - ctx["frames"])
     ctx["frames"] += n
     cmd = ["ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
-           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", str(out)]
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "15", "-pix_fmt", "yuv420p", str(out)]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     pre = None
     try:
@@ -7810,22 +8224,21 @@ def mux_final(silent, voice, music, sfx, out, max_mb=None):
           + ("[vst][duck][fx]amix=inputs=3:" if sfx else "[vst][duck]amix=inputs=2:")
           + "duration=first:dropout_transition=0:normalize=0[mix];"
           f"[mix]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100,afade=t=out:st={max(0.5, dur - 2.0):.2f}:d=2.0[a]")
-    vopts = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
-    if max_mb:
-        kbps = int(max(500, min(5000, (max_mb * 8 * 1024) / dur - 136)))
-        vopts = ["-c:v", "libx264", "-preset", "veryfast", "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k",
-                 "-bufsize", f"{2 * kbps}k"]
+    hq = ["-c:v", "libx264", "-preset", "medium", "-crf", "17", "-x264-params", "aq-mode=3:deblock=-1,-1"]
     run(["ffmpeg", "-y", "-i", silent, "-i", voice, "-i", music, *(["-i", sfx] if sfx else []), "-filter_complex", fc,
-         "-map", "0:v", "-map", "[a]", "-vf", f"fade=t=out:st={max(0.5, dur - 1.6):.2f}:d=1.6", *vopts, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
+         "-map", "0:v", "-map", "[a]", "-vf", f"fade=t=out:st={max(0.5, dur - 1.6):.2f}:d=1.6", *hq, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
          "-movflags", "+faststart", "-shortest", out])
+    # the full-quality file stays in out/ (GitHub artifact, 3 days). Telegram only takes 50 MB: a smaller copy is made for it, never by lowering the master.
     if max_mb and Path(out).stat().st_size > max_mb * 1024 * 1024:
-        log("file still large, re-encoding smaller")
-        tmp = Path(str(out) + ".big.mp4")
-        Path(out).rename(tmp)
-        kb2 = int(max(400, (max_mb * 8 * 1024) / dur - 136) * 0.8)
-        run(["ffmpeg", "-y", "-i", tmp, "-c:v", "libx264", "-preset", "veryfast", "-b:v", f"{kb2}k",
-             "-maxrate", f"{kb2}k", "-bufsize", f"{2 * kb2}k", "-c:a", "copy", "-movflags", "+faststart", out])
-        tmp.unlink(missing_ok=True)
+        log("master is bigger than the Telegram limit: making a smaller Telegram copy (master kept in artifacts)")
+        small = Path(str(out).replace("video.mp4", "video_telegram.mp4"))
+        kb = int(max(600, (max_mb * 8 * 1024) / dur - 200))
+        run(["ffmpeg", "-y", "-i", out, "-c:v", "libx264", "-preset", "slow", "-b:v", f"{kb}k", "-maxrate", f"{int(kb * 1.25)}k",
+             "-bufsize", f"{2 * kb}k", "-x264-params", "aq-mode=3", "-c:a", "copy", "-movflags", "+faststart", small])
+        MASTER_NOTE[0] = str(small)
+
+
+MASTER_NOTE = [""]
 
 
 # --------------------------------------------------------------------------- thumbnails
@@ -8196,6 +8609,245 @@ def make_thumb_clean(img, text, out, layout="bottom", accent=None, size=(1920, 1
         if Path(out).stat().st_size <= 1_900_000 or q <= 70:
             break
         q -= 4
+
+
+# --------------------------------------------------------------------------- AI thumbnails: Gemini plans the thumbnail, Cloudflare paints a clear photo of the story's subject, 4 reference styles rotate
+THUMB_STYLES = ["hero_right", "top_title", "banner_zoom", "doc_tag"]
+T_YEL, T_RED, T_WHITE, T_BLK, T_GREEN = (255, 214, 0), (222, 24, 32), (255, 255, 255), (14, 14, 16), (28, 164, 72)
+
+
+def thumb_plan_prompt(script, topic_en, avoid):
+    return f"""You design YouTube thumbnails for a Hindi science / nature documentary channel. Study the story and plan ONE thumbnail picture that makes people curious (curiosity gap, never a lie).
+STORY: {topic_en}
+HINDI TITLE: {script.get('title_hi')}
+STORY HOOK (Hindi): {script['scenes'][0]['narration_hi'][:300]}
+The same picture will be used in the style that fits the story best. The four styles (reference thumbnails of top channels):
+ hero_right  = huge subject on the LEFT, 2-3 big Hindi words stacked on the RIGHT (first line yellow, others white) and a small caption line under them (e.g. "66 MILLION YEARS AGO...") - for dramatic / danger / extinction / disaster stories.
+ top_title   = one clean white title across the TOP, a spectacular subject below - for origin / space / planet / big-picture stories.
+ banner_zoom = a full-width yellow banner on top with a 5-8 word curiosity sentence (key words red), and a round magnified inset of one creepy / surprising DETAIL joined by a line - for mystery / hidden / shocking-detail stories.
+ doc_tag     = small white tag + two huge words (yellow + white) at the right and a green corner banner - for calm nature / wildlife / documentary stories.
+Return ONLY JSON:
+{{"subject_en": "the single real subject the story is about (e.g. Tyrannosaurus rex, Earth, Amazon anaconda)",
+ "photo_prompt_en": "ONE clear ultra-detailed photorealistic image of that subject: a single large sharp subject, dramatic cinematic lighting, a vivid colour scene around it; subject large on the left-centre of the frame with calmer darker space on the right and a little space above; no text, no letters, no watermark, no logo, no person's face",
+ "zoom_x": 0.30, "zoom_y": 0.35,
+ "ranking": ["best style first", "...", "...", "..."],
+ "hero_right": {{"lines": ["1-2 Hindi words", "1-2 Hindi words", "1-2 Hindi words (optional)"], "tag": "short caption 2-5 words, English or Hindi, may contain a year/number"}},
+ "top_title": {{"title": "3-5 Hindi words, a curiosity question or claim"}},
+ "banner_zoom": {{"banner": "5-8 Hindi words, curiosity gap", "red": ["the 1-2 most shocking words of the banner, copied exactly"]}},
+ "doc_tag": {{"lines": ["1-2 Hindi words", "1-2 Hindi words"], "tag": "tiny label 1-2 words", "corner": "2-3 Hindi words like पूरी कहानी"}}}}
+"zoom_x"/"zoom_y" = where in YOUR described picture (0..1, x from left, y from top) the most interesting detail (eye, mouth, claw, crack, surprise) is. ALL text short and punchy: never more than 5 big words in total per style. Vary your wording from earlier videos. Avoid these styles this time if possible: {', '.join(avoid) or 'none'}."""
+
+
+def thumb_plan(script, topic_en, avoid):
+    out = gemini_json(thumb_plan_prompt(script, topic_en, avoid), 0.8)
+    if not isinstance(out, dict):
+        raise ValueError("bad thumbnail plan")
+    base_t = clean_short(script.get("thumb_text_hi") or script.get("title_hi"), 40)
+    w = base_t.split()
+    hr = out.get("hero_right") if isinstance(out.get("hero_right"), dict) else {}
+    tt = out.get("top_title") if isinstance(out.get("top_title"), dict) else {}
+    bz = out.get("banner_zoom") if isinstance(out.get("banner_zoom"), dict) else {}
+    dt = out.get("doc_tag") if isinstance(out.get("doc_tag"), dict) else {}
+    lines = [clean_short(x, 22) for x in (hr.get("lines") or []) if clean_short(x, 22)][:3] or [" ".join(w[:2]), " ".join(w[2:4]) or "कैसे?"]
+    dl = [clean_short(x, 22) for x in (dt.get("lines") or []) if clean_short(x, 22)][:2] or lines[:2]
+    ban = clean_short(bz.get("banner"), 70) or base_t
+    red = [clean_short(x, 24) for x in (bz.get("red") or []) if clean_short(x, 24)][:2]
+    try:
+        zx, zy = min(0.9, max(0.1, float(out.get("zoom_x")))), min(0.85, max(0.15, float(out.get("zoom_y"))))
+    except Exception:  # noqa
+        zx, zy = 0.3, 0.38
+    rank = [x for x in (out.get("ranking") or []) if x in THUMB_STYLES]
+    rank += [x for x in THUMB_STYLES if x not in rank]
+    return {"subject": clean_short(out.get("subject_en"), 70), "prompt": clean_short(out.get("photo_prompt_en"), 600), "zx": zx, "zy": zy, "rank": rank,
+            "hero_right": {"lines": lines, "tag": clean_short(hr.get("tag"), 30)}, "top_title": {"title": clean_short(tt.get("title"), 40) or base_t},
+            "banner_zoom": {"banner": ban, "red": red}, "doc_tag": {"lines": dl, "tag": clean_short(dt.get("tag"), 18), "corner": clean_short(dt.get("corner"), 22) or "पूरी कहानी"}}
+
+
+def _tfit(lines, role, max_w, max_h, start=300, lo=60):
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    size = start
+    while size > lo:
+        f = load_font(size, role)
+        if max(probe.textlength(l, font=f) for l in lines) <= max_w and size * 1.1 * len(lines) <= max_h:
+            return size
+        size -= 6
+    return lo
+
+
+def _tline(text, size, fill, role="thumb", extrude=True):
+    f = load_font(size, role)
+    st = max(3, int(size * 0.07))
+    return text_layer(text, f, fill=fill, stroke=st, stroke_fill=(10, 10, 14), shadow=(0, max(3, int(size * 0.05)), max(3, int(size * 0.06)), 0.85),
+                      extrude=((max(3, int(size * 0.045)), (10, 10, 14)) if extrude else None))
+
+
+def _tshade(pic, where, strength=215, reach=0.62):
+    np = _np()
+    TW, TH = pic.size
+    ys, xs = np.linspace(0, 1, TH)[:, None], np.linspace(0, 1, TW)[None, :]
+    if where == "right":
+        a = np.clip((xs - (1 - reach)) / reach, 0, 1) ** 1.2 * strength * np.ones((TH, 1))
+    elif where == "top":
+        a = np.clip((reach - ys) / reach, 0, 1) ** 1.2 * strength * np.ones((1, TW))
+    else:
+        a = np.clip((ys - (1 - reach)) / reach, 0, 1) ** 1.2 * strength * np.ones((1, TW))
+    sh = np.zeros((TH, TW, 4), np.uint8)
+    sh[..., :3] = (3, 4, 12)
+    sh[..., 3] = a.astype(np.uint8)
+    pic.alpha_composite(Image.fromarray(sh))
+
+
+def _tstack(pic, layers, box, align="center", gap_k=0.14):
+    bx, by, bw, bh = box
+    ov = int(layers[0].height * gap_k)
+    tot = sum(l.height for l in layers) - ov * (len(layers) - 1)
+    y = by + (bh - tot) // 2
+    for l in layers:
+        x = bx + (bw - l.width) // 2 if align == "center" else bx
+        pic.alpha_composite(l, (max(0, x), max(0, y)))
+        y += l.height - ov
+    return y + ov
+
+
+def thumb_style_hero_right(pic, v):
+    TW, TH = pic.size
+    _tshade(pic, "right", 225, 0.60)
+    lines = v["lines"]
+    size = _tfit(lines, "thumb", int(TW * 0.44), int(TH * 0.52), 260)
+    layers = [_tline(l, size, T_YEL if i == 0 else T_WHITE) for i, l in enumerate(lines)]
+    y_end = _tstack(pic, layers, (int(TW * 0.52), int(TH * 0.12), int(TW * 0.45), int(TH * 0.62)))
+    if v.get("tag"):
+        ts = _tfit([v["tag"]], "cond", int(TW * 0.44), int(TH * 0.10), 64, 30)
+        tl = _tline(v["tag"], ts, T_WHITE, "cond", extrude=False)
+        pic.alpha_composite(tl, (int(TW * 0.52) + (int(TW * 0.45) - tl.width) // 2, min(TH - tl.height - 20, y_end + 4)))
+
+
+def thumb_style_top_title(pic, v):
+    TW, TH = pic.size
+    _tshade(pic, "top", 215, 0.42)
+    words = v["title"].split()
+    opts = [[" ".join(words)]] + ([[" ".join(words[:len(words) // 2]), " ".join(words[len(words) // 2:])]] if len(words) > 2 else [])
+    best = None
+    for o in opts:
+        sz = _tfit(o, "thumb", int(TW * 0.92), int(TH * 0.30), 230)
+        if best is None or sz > best[0]:
+            best = (sz, o)
+    f = load_font(best[0], "thumb")
+    layers = [text_layer(l, f, fill=T_WHITE, stroke=0, shadow=(0, 6, 12, 0.9)) for l in best[1]]
+    _tstack(pic, layers, (int(TW * 0.04), int(TH * 0.015), int(TW * 0.92), int(TH * 0.30)), gap_k=0.06)
+
+
+def thumb_style_banner_zoom(pic, v, zx, zy):
+    TW, TH = pic.size
+    bar = int(TH * 0.135)
+    d = ImageDraw.Draw(pic)
+    d.rectangle([0, 0, TW, bar], fill=T_YEL + (255,))
+    d.rectangle([0, bar, TW, bar + 5], fill=(40, 30, 0, 255))
+    words = v["banner"].split()
+    reds = " ".join(v["red"]).split()
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    size = int(bar * 0.82)
+    while size > 40:
+        f = load_font(size, "thumb")
+        if sum(probe.textlength(w, font=f) for w in words) + size * 0.3 * (len(words) - 1) <= TW * 0.95:
+            break
+        size -= 4
+    f = load_font(size, "thumb")
+    tot = sum(probe.textlength(w, font=f) for w in words) + size * 0.3 * (len(words) - 1)
+    x = (TW - tot) / 2
+    for w in words:
+        hit = any(w.strip("?!।,.") == r.strip("?!।,.") for r in reds)
+        lay = text_layer(w, f, fill=T_RED if hit else T_BLK, stroke=0)
+        pic.alpha_composite(lay, (int(x - (lay.width - probe.textlength(w, font=f)) / 2), int(bar / 2 - lay.height / 2 + 2)))
+        x += probe.textlength(w, font=f) + size * 0.3
+    D = int(TH * 0.46)
+    cw = int(TW * 0.20)
+    src = pic.convert("RGB")
+    l0 = int(min(TW - cw, max(0, zx * TW - cw / 2)))
+    t0 = int(min(TH - cw * 9 // 16 * 1.0 - 1, max(0, zy * TH - cw / 2)))
+    crop = src.crop((l0, t0, l0 + cw, t0 + cw)).resize((D, D), Image.LANCZOS)
+    cx, cy = int(TW * 0.745), int(TH * 0.53)
+    ox, oy = int(zx * TW), int(zy * TH)
+    ln = Image.new("RGBA", pic.size, (0, 0, 0, 0))
+    ld = ImageDraw.Draw(ln)
+    ang = math.atan2(cy - oy, cx - ox)
+    ex, ey = cx - math.cos(ang) * D / 2, cy - math.sin(ang) * D / 2
+    ld.line([(ox, oy), (ex, ey)], fill=(255, 255, 255, 255), width=6)
+    ld.ellipse([ox - 11, oy - 11, ox + 11, oy + 11], outline=(255, 255, 255, 255), width=5)
+    sh = Image.new("RGBA", pic.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sh).ellipse([cx - D // 2 + 6, cy - D // 2 + 10, cx + D // 2 + 6, cy + D // 2 + 10], fill=(0, 0, 0, 150))
+    pic.alpha_composite(sh.filter(ImageFilter.GaussianBlur(12)))
+    pic.alpha_composite(ln)
+    m = Image.new("L", (D, D), 0)
+    ImageDraw.Draw(m).ellipse([0, 0, D - 1, D - 1], fill=255)
+    pic.paste(crop, (cx - D // 2, cy - D // 2), m)
+    ImageDraw.Draw(pic).ellipse([cx - D // 2, cy - D // 2, cx + D // 2, cy + D // 2], outline=(255, 255, 255, 255), width=8)
+
+
+def thumb_style_doc_tag(pic, v):
+    TW, TH = pic.size
+    _tshade(pic, "right", 170, 0.55)
+    d = ImageDraw.Draw(pic)
+    if v.get("tag"):
+        tl = text_layer(v["tag"], load_font(64, "thumb"), fill=T_BLK, stroke=0)
+        w, h = tl.width + 60, tl.height + 18
+        x0, y0 = int(TW * 0.58), int(TH * 0.12)
+        d.polygon([(x0 + 16, y0), (x0 + w + 16, y0), (x0 + w, y0 + h), (x0, y0 + h)], fill=(255, 255, 255, 255))
+        pic.alpha_composite(tl, (x0 + 30, y0 + 8))
+    lines = v["lines"]
+    size = _tfit(lines, "thumb", int(TW * 0.42), int(TH * 0.46), 250)
+    layers = [_tline(l, size, T_YEL if i == len(lines) - 1 else T_WHITE) for i, l in enumerate(lines)]
+    _tstack(pic, layers, (int(TW * 0.54), int(TH * 0.26), int(TW * 0.43), int(TH * 0.50)))
+    d.polygon([(0, int(TH * 0.80)), (int(TW * 0.40), int(TH * 0.80)), (int(TW * 0.35), TH), (0, TH)], fill=T_GREEN + (255,))
+    cs = _tfit([v["corner"]], "thumb", int(TW * 0.30), int(TH * 0.15), 120, 40)
+    cl_ = text_layer(v["corner"], load_font(cs, "thumb"), fill=T_WHITE, stroke=0, shadow=(0, 3, 4, 0.5))
+    pic.alpha_composite(cl_, (int(TW * 0.02), int(TH * 0.80 + (TH * 0.20 - cl_.height) / 2)))
+
+
+def render_thumb(style, plan, hero, out):
+    base = Image.open(hero).convert("RGB") if not isinstance(hero, Image.Image) else hero.convert("RGB")
+    base = ImageOps.fit(base, (1920, 1080), Image.LANCZOS)
+    base = ImageEnhance.Contrast(ImageEnhance.Color(base).enhance(1.18)).enhance(1.1).filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
+    pic = base.convert("RGBA")
+    shuffle_thumb_font()
+    if style == "hero_right":
+        thumb_style_hero_right(pic, plan["hero_right"])
+    elif style == "top_title":
+        thumb_style_top_title(pic, plan["top_title"])
+    elif style == "banner_zoom":
+        thumb_style_banner_zoom(pic, plan["banner_zoom"], plan["zx"], plan["zy"])
+    else:
+        thumb_style_doc_tag(pic, plan["doc_tag"])
+    im = pic.convert("RGB")
+    q = 94
+    while True:
+        im.save(out, "JPEG", quality=q, optimize=True, subsampling=0 if q > 90 else 2)
+        if Path(out).stat().st_size <= 1_900_000 or q <= 70:
+            break
+        q -= 4
+
+
+def make_thumbs_ai(script, topic_en, imgdir, outdir):
+    """Returns [(path, caption)]: main thumbnail + an alternative in a different style. Raises when the AI plan or picture is unavailable (caller falls back)."""
+    st = load_json(STATE / "thumb.json", {})
+    recent = st.get("styles", [])[-2:]
+    plan = thumb_plan(script, topic_en, recent)
+    hero = imgdir / "thumb_ai.png"
+    prompt = plan["prompt"] or script.get("thumb_prompt_en") or topic_en
+    ok = img_cloudflare(prompt + ", " + STYLE_THUMB, hero, (1920, 1080), (1344, 756))
+    if not ok:
+        raise RuntimeError("Cloudflare could not paint the thumbnail picture: " + fail_summary())
+    order = [x for x in plan["rank"] if x != (recent[-1] if recent else "")] or plan["rank"]
+    main = order[0]
+    alt = next((x for x in order[1:] if x != main), THUMB_STYLES[0])
+    res = []
+    for k, (sty, cap) in enumerate(((main, "Thumbnail (best: " + main + ")"), (alt, "Thumbnail alternative (" + alt + ")"))):
+        p = outdir / ("thumbnail.jpg" if k == 0 else "thumbnail_alt.jpg")
+        render_thumb(sty, plan, hero, p)
+        res.append((p, cap))
+    save_json(STATE / "thumb.json", {**st, "styles": (st.get("styles", []) + [main])[-6:]})
+    log(f"AI thumbnails: {main} + {alt} (subject: {plan['subject']})")
+    return res
 
 
 def pick_thumb_layout(script, topic):
@@ -8668,6 +9320,8 @@ def pipeline():
         ensure_sources(topic_en, own_story)
     except Exception as e:  # noqa
         log("ensure_sources failed:", str(e)[:100])
+    if not own_story and passages_block():
+        facts = (facts or "") + "\n\n" + passages_block()
     script = own_story_script(own_story, topic_en) if own_story else write_script(topic_en, cat, style, target, facts, wpm)
     scenes = script["scenes"]
     mood = script["mood"] or MOOD_MAP.get(cat, "wonder")
@@ -8694,6 +9348,7 @@ def pipeline():
         except Exception as e:  # noqa
             log("rescale failed, continuing:", e)
     story_context(topic_en, own_story, script)
+    build_sketches(scenes, topic_en)
     director_pass(scenes, topic_en + (("\nSTORY CONTEXT (keep EVERY picture inside it; relatives and neighbours are people of this culture, never animals or objects): " + STORY_CTX["text"]) if STORY_CTX["on"] else ""))
     prov = "gemini" if VOICE_USED[0].startswith("gemini") else "edge"
     wpms[prov] = round(word_count(script) / (total / 60), 1)
@@ -8720,12 +9375,21 @@ def pipeline():
     log(f"final video {fmt_time(ffprobe_dur(final))}, {final.stat().st_size / 1e6:.1f} MB")
 
     any_img = next((sh["image"] for s in scenes for sh in s["shots"] if sh.get("image")), None)
-    hero = real_thumb_image(script, topic_en, imgdir, any_img)
-    thumb = outdir / "thumbnail.jpg"
+    outdir.mkdir(exist_ok=True)
+    thumb, thumb_alt = outdir / "thumbnail.jpg", None
+    try:  # AI thumbnail: Gemini plans it for THIS story, Cloudflare paints a clear photo of the subject, one of 4 reference styles
+        made = make_thumbs_ai(script, topic_en, imgdir, outdir)
+        thumb, thumb_alt = made[0][0], (made[1][0] if len(made) > 1 else None)
+    except Exception as e:  # noqa
+        log("AI thumbnail failed, using the classic thumbnail:", type(e).__name__, str(e)[:160])
+        hero = real_thumb_image(script, topic_en, imgdir, any_img)
+        text = script["thumb_text_hi"] or script["title_hi"]
+        layout, accent = pick_thumb_layout(script, topic_en)
+        log("thumbnail layout:", layout)
+        make_thumb_clean(hero, text, thumb, layout, accent)
+    hero = thumb  # (only used by the then/now thumbnail below)
+    hero = real_thumb_image(script, topic_en, imgdir, any_img) if script["thumb_prompt2_en"] else hero
     text = script["thumb_text_hi"] or script["title_hi"]
-    layout, accent = pick_thumb_layout(script, topic_en)
-    log("thumbnail layout:", layout)
-    make_thumb_clean(hero, text, thumb, layout, accent)
     thumb2 = None
     if script["thumb_prompt2_en"]:
         other = imgdir / "thumb2.png"
@@ -8775,8 +9439,10 @@ def pipeline():
 
     if UPLOAD_MODE != "youtube":
         notify("TITLE:\n" + meta["title"] + "\n\nDESCRIPTION:\n" + meta["description"] + "\n\nTAGS:\n" + ", ".join(meta["tags"]))
-        ok = tg_send_file(final, "video", (meta["title"] + "\n" + DIRECTOR_REPORT[0]) if DIRECTOR_REPORT[0] else meta["title"])
+        ok = tg_send_file(Path(MASTER_NOTE[0]) if MASTER_NOTE[0] else final, "video", (meta["title"] + "\n" + DIRECTOR_REPORT[0]) if DIRECTOR_REPORT[0] else meta["title"])
         tg_send_file(thumb, "doc", "Thumbnail 1")
+        if thumb_alt:
+            tg_send_file(thumb_alt, "doc", "Thumbnail 2 (alag style)")
         try:
             for f_, cap_ in zip(write_subtitles(scenes, outdir), ("Subtitles (SRT) - video par nahi dikhte, sirf editor ke liye", "Edit plan - kis time par kya laga hai")):
                 tg_send_file(f_, "doc", cap_)
@@ -8929,6 +9595,12 @@ def selftest():
         {"type": "counter", "tone": "excited", "headline_hi": "पृथ्वी की उम्र",
          "counter": {"from": 0.0, "to": 4.5, "decimals": 1, "unit_hi": "अरब साल पहले"},
          "narration_hi": "पृथ्वी की उम्र लगभग साढ़े चार अरब साल मानी जाती है"},
+        {"type": "sketch", "tone": "calm", "headline_hi": "टक्कर से चाँद बना", "year_hi": "४५० करोड़ साल पहले", "grade": "natural",
+         "strokes": clean_prims([{"t": "circle", "c": [64, 28], "r": 12, "fill": "soft"}, {"t": "circle", "c": [46, 20], "r": 4.5, "col": "accent", "fill": "soft"},
+                                 {"t": "arrow", "p": [[50, 22], [58, 26]], "col": "accent"}, {"t": "arc", "c": [64, 28], "r": 16, "a0": 200, "a1": 330},
+                                 {"t": "line", "p": [[78, 18], [84, 22], [88, 16]]}, {"t": "poly", "p": [[74, 38], [82, 34], [88, 42], [78, 45]], "fill": "soft"},
+                                 {"t": "text", "p": [64, 44], "s": "युवा पृथ्वी"}, {"t": "text", "p": [46, 13], "s": "थिया", "col": "accent"}]),
+         "narration_hi": "लगभग साढ़े चार अरब साल पहले, एक छोटा ग्रह युवा पृथ्वी से टकराया, और उसके मलबे से हमारा चाँद बना"},
         {"type": "split", "tone": "wonder", "headline_hi": "एक से दो हिस्से",
          "items": items([("पुरानी पृथ्वी",) + P, ("पृथ्वी", "planet", (200, 255, 220), (100, 200, 160)), ("मलबा",) + R]),
          "narration_hi": "इस टक्कर के बाद एक बड़ा गोला दो हिस्सों में बँट गया, एक हिस्सा पृथ्वी बना और दूसरा मलबा बना"},
