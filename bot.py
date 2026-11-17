@@ -308,8 +308,10 @@ def gemini_json(prompt, temperature=0.8, optional=False):
 
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
-ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8}
-ITEM_SLOT = {"quote": "N", "bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P"}
+ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8,
+              "measure": 4.0, "qmark": 2.8, "lens": 4.2, "beforeafter": 5.0, "compare": 5.6, "mark": 3.4, "chart": 5.6, "tline": 6.0, "hl": 3.6}
+ITEM_SLOT = {"quote": "N", "bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P",
+             "measure": "N", "qmark": "N", "lens": "N", "beforeafter": "N", "compare": "N", "mark": "N", "chart": "N", "tline": "N", "hl": "N"}
 
 DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
 
@@ -900,7 +902,7 @@ SCENES:
                 mk = clean_short(m.get("mark_en"), 50)
                 if mk and mk.lower() not in sp_["text"].lower():
                     mk = ""
-                sc.setdefault("items", []).append({"w": w, "kind": "note", "text": sp_["text"], "mark": mk, "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))})
+                sc.setdefault("items", []).append({"w": w, "kind": "note", "text": window_text(sp_["text"], mk), "mark": mk, "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))})
                 stat["notes"] += 1
     # 2b) action clips: wherever the narrator describes a visible ACTION, that moment becomes a real video clip of exactly that action
     if (PIXABAY_KEY or PEXELS_KEY):
@@ -955,13 +957,328 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
     return stat
 
 
+# =========================================================================== techniques_pass: puts every technique at the moment the narrator calls for it, then guarantees coverage
+PERMANENT_TECHNIQUES = {
+    "split": "split screen (multi scene) - two/three subjects named together",
+    "terrain": "terrain map - a journey / distance between two places",
+    "verdict": "cross and tick marks - myth / fact, false / true",
+    "roll": "paper roll / source cards",
+    "measure": "measuring screen - size, length, height, depth, weight, distance",
+    "qmark": "question marks - the narrator asks a question or a mystery",
+    "lens": "magnifier lens - tiny detail, 'look closely'",
+    "beforeafter": "before / after slider - then vs now, change over time",
+    "compare": "comparison panel - A vs B with numbers",
+    "mark": "Vox marker - circle / underline / arrow with a short label on the important thing",
+    "chart": "Vox animated chart - numbers said by the narrator",
+    "tline": "Vox multi-event timeline - 3-5 dated events in order",
+    "hl": "Vox highlight bar - the key claim in big text",
+}
+TECH_PER_MIN = {"qmark": 1.2, "lens": 1.0, "mark": 1.6, "hl": 1.6, "measure": 0.8, "compare": 0.5, "beforeafter": 0.4, "chart": 0.6, "tline": 0.4}
+TECH_MIN_ABS = {"qmark": 1, "lens": 1, "mark": 1, "hl": 1, "measure": 1, "compare": 1, "beforeafter": 1, "chart": 1, "tline": 1}
+TECH_MAX = {"beforeafter": 3}
+UNIT_RE = re.compile(r"(मीटर|किलोमीटर|सेंटीमीटर|सेमी|मिमी|फीट|फुट|इंच|किलोग्राम|किलो|टन|मील|लीटर|घंटे|साल|वर्ष|डिग्री|मीटर्स)")
+NUM_RE = re.compile(r"^[0-9०-९][0-9०-९,.]*$")
+Q_WORDS = ("क्यों", "कैसे", "आखिर", "रहस्य", "सवाल", "पहेली", "क्या")
+LENS_WORDS = ("ध्यान", "करीब", "बारीकी", "सूक्ष्म", "माइक्रोस्कोप", "गौर", "बारीक", "नज़दीक", "नजदीक")
+MARK_WORDS = ("यहीं", "यही", "इसी", "सबसे", "खास", "ख़ास", "असली", "मुख्य")
+_TECH_SEQ = [0]
+
+
+HI_NUMS = set("एक दो तीन चार पांच पाँच छह छः सात आठ नौ दस ग्यारह बारह तेरह चौदह पंद्रह पन्द्रह सोलह सत्रह अठारह उन्नीस बीस तीस चालीस पचास साठ सत्तर अस्सी नब्बे सौ हज़ार हजार लाख करोड़ अरब डेढ़ ढाई साढ़े सवा".split())
+
+
+def _tw(w):
+    return re.sub(r"[।,.!?\"'“”‘’:;()\-–—…]", "", w)
+
+
+def parse_new_item(kind, it, w):
+    """Validates / normalises one new-technique item from Gemini; None when it is unusable."""
+    txt = clean_short(it.get("text_hi"), 40)
+    base = {"w": w, "kind": kind, "text": txt or ""}
+    if kind == "measure":
+        if not txt:
+            return None
+        base.update({"orient": "v" if str(it.get("orient")) == "v" else "h", "sub": clean_short(it.get("sub_hi"), 30)})
+        return base
+    if kind == "qmark":
+        return base
+    if kind == "lens":
+        for k_ in ("fx", "fy"):
+            try:
+                v = float(it.get(k_))
+                if 0.1 <= v <= 0.9:
+                    base[k_] = v
+            except Exception:  # noqa
+                pass
+        return base
+    if kind == "mark":
+        base["shape"] = str(it.get("shape")) if str(it.get("shape")) in ("circle", "underline", "arrow") else "circle"
+        for k_ in ("fx", "fy"):
+            try:
+                v = float(it.get(k_))
+                if 0.1 <= v <= 0.9:
+                    base[k_] = v
+            except Exception:  # noqa
+                pass
+        return base
+    if kind == "hl":
+        if not txt or len(txt.split()) > 9:
+            return None
+        base["ci"] = _TECH_SEQ[0] % len(HL_COLS)
+        _TECH_SEQ[0] += 1
+        return base
+    if kind == "beforeafter":
+        a_ = clean_short(it.get("after_en"), 60)
+        if not a_ or not a_.isascii():
+            return None
+        base.update({"after_en": a_, "label_a": clean_short(it.get("label_a_hi"), 12) or "पहले", "label_b": clean_short(it.get("label_b_hi"), 12) or "बाद में", "span": 5.0})
+        return base
+    if kind == "compare":
+        A, B = clean_short(it.get("a_hi"), 18), clean_short(it.get("b_hi"), 18)
+        rows = []
+        for r in (it.get("rows") or [])[:3]:
+            if not isinstance(r, dict):
+                continue
+            try:
+                na, nb = float(r.get("na")), float(r.get("nb"))
+            except Exception:  # noqa
+                na = nb = 0.0
+            rows.append({"label_hi": clean_short(r.get("label_hi"), 22), "a_hi": clean_short(r.get("a_hi"), 18), "b_hi": clean_short(r.get("b_hi"), 18), "na": na, "nb": nb})
+        if not A or not B or not rows:
+            return None
+        base.update({"a_hi": A, "b_hi": B, "rows": rows, "span": 5.6})
+        return base
+    if kind == "chart":
+        pts = []
+        for p_ in (it.get("pts") or [])[:6]:
+            if not isinstance(p_, dict):
+                continue
+            try:
+                v = float(p_.get("v"))
+            except Exception:  # noqa
+                continue
+            pts.append({"label": clean_short(p_.get("label_hi"), 14), "v": v, "show": clean_short(p_.get("show_hi"), 14) or str(p_.get("v"))})
+        if len(pts) < 2:
+            return None
+        base.update({"title": clean_short(it.get("title_hi"), 32), "type": "line" if str(it.get("type")) == "line" else "bar", "pts": pts, "span": 5.6, "ci": _TECH_SEQ[0] % len(VOX_BG)})
+        _TECH_SEQ[0] += 1
+        return base
+    if kind == "tline":
+        ev = []
+        for e in (it.get("events") or [])[:5]:
+            if isinstance(e, dict) and clean_short(e.get("when_hi"), 14) and clean_short(e.get("what_hi"), 22):
+                ev.append({"when": clean_short(e["when_hi"], 14), "what": clean_short(e["what_hi"], 22)})
+        if len(ev) < 3:
+            return None
+        base.update({"events": ev, "span": 6.2, "ci": _TECH_SEQ[0] % len(VOX_BG)})
+        _TECH_SEQ[0] += 1
+        return base
+    return None
+
+
+def _free_word(have, w, kind, gap=3):
+    return not any(isinstance(x, dict) and (x.get("w") == w or (abs(x.get("w", -99) - w) < gap and x.get("kind") == kind)) for x in have)
+
+
+def det_techniques(scenes):
+    """Rule-based triggers on Hindi words (always runs, needs no Gemini)."""
+    n = {k: 0 for k in NEW_KINDS}
+    for sc in scenes:
+        if sc.get("type") != "photo" or not sc.get("wt"):
+            continue
+        wds = sc["narration_hi"].split()
+        if len(wds) != len(sc["wt"]):
+            continue
+        have = sc.setdefault("items", [])
+        for i, w_ in enumerate(wds):
+            t_ = _tw(w_)
+            if not t_:
+                continue
+            rec = None
+            if UNIT_RE.fullmatch(t_) and i >= 1 and (NUM_RE.match(_tw(wds[i - 1]) or "x") or _tw(wds[i - 1]) in HI_NUMS):
+                rec = {"w": i, "kind": "measure", "text": f"{_tw(wds[i-1])} {t_}", "orient": "h", "sub": ""}
+            elif t_ in Q_WORDS and (i == 0 or i >= 1) and t_ != "क्या" or (t_ == "क्या" and i == 0):
+                rec = {"w": i, "kind": "qmark", "text": ""}
+            elif any(t_.startswith(x) for x in LENS_WORDS):
+                rec = {"w": i, "kind": "lens", "text": ""}
+            elif t_ in MARK_WORDS:
+                rec = {"w": i, "kind": "mark", "text": "", "shape": ("circle", "arrow", "underline")[n["mark"] % 3]}
+            if rec and _free_word(have, i, rec["kind"], 5) and not any(isinstance(x, dict) and x.get("kind") == rec["kind"] and abs(x.get("w", -99) - i) < 8 for x in have):
+                if sum(1 for x in have if isinstance(x, dict) and x.get("kind") in ("measure", "qmark", "lens", "mark")) >= 3:
+                    continue
+                have.append(rec)
+                n[rec["kind"]] += 1
+        have.sort(key=lambda x: x.get("w", 0) if isinstance(x, dict) else 0)
+    return n
+
+
+def techniques_prompt(topic, listing):
+    return f"""Film editor task for a Hindi documentary in the VOX explainer style. Hindi narration, every word numbered (index:word). Video topic: {topic}
+Find every moment where one of these on-screen techniques fits what is REALLY being said (each exactly on its word, never two on one word, up to 5 per scene, use them generously):
+- "measure": a size / length / height / depth / weight / distance / duration is said. {{"w":..,"kind":"measure","text_hi":"value + unit as spoken, e.g. ३० मीटर","orient":"h" or "v" (v for height / depth),"sub_hi":"what is measured, 1-2 words"}}
+- "qmark": the narrator asks a question or names a mystery (क्यों, कैसे, आखिर...). {{"w":..,"kind":"qmark"}}
+- "lens": a tiny detail, "look closely", something small. {{"w":..,"kind":"lens","fx":0.1-0.9,"fy":0.1-0.9}} (position of the detail on the picture, typical composition)
+- "beforeafter": then vs now, a change, a before and an after of the SAME thing. {{"w":..,"kind":"beforeafter","after_en":"1-4 English words naming the REAL photo that shows the AFTER state","label_a_hi":"पहले","label_b_hi":"बाद में"}} (the picture already on screen is the before)
+- "compare": two things compared with numbers or qualities. {{"w":..,"kind":"compare","a_hi":"first","b_hi":"second","rows":[{{"label_hi":"what is compared","a_hi":"value of A as spoken","b_hi":"value of B as spoken","na":number or 0,"nb":number or 0}}]}} 1-3 rows, values only as the narrator says them.
+- "mark": the important thing on screen that the narrator points at. {{"w":..,"kind":"mark","shape":"circle"|"underline"|"arrow","text_hi":"1-3 word label or empty"}}
+- "chart": 2-6 numbers the narrator says that can be compared or that change. {{"w":..,"kind":"chart","type":"bar"|"line","title_hi":"short title","pts":[{{"label_hi":"short label","v":number,"show_hi":"as spoken"}}]}} Numbers ONLY as spoken, never invented.
+- "tline": 3-5 dated events told in order. {{"w":..,"kind":"tline","events":[{{"when_hi":"year / date as spoken","what_hi":"2-4 words"}}]}}
+- "hl": THE key claim / conclusion of the scene in at most 8 words, exactly as said. {{"w":..,"kind":"hl","text_hi":"the claim"}}
+Never invent facts or numbers. If nothing fits a scene return an empty list.
+Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
+{listing}"""
+
+
+def techniques_gemini(scenes, topic, only=None, per=5):
+    ph = [(i, sc) for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
+    n = {k: 0 for k in NEW_KINDS}
+    for a in range(0, len(ph), per):
+        batch = ph[a:a + per]
+        listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
+        pr = techniques_prompt(topic, listing)
+        if only:
+            pr += f"\nUSE ONLY THESE KINDS: {', '.join(only)} - find the best moment for each in these scenes (it is required)."
+        try:
+            out = gemini_json_opt(pr, 0.2)
+        except Exception as e:  # noqa
+            log("techniques pass failed:", str(e)[:100])
+            continue
+        for r in (out.get("scenes") or []):
+            try:
+                i = int(r.get("i"))
+            except Exception:  # noqa
+                continue
+            if not any(i == j for j, _ in batch):
+                continue
+            sc = scenes[i]
+            nwd = len(sc["narration_hi"].split())
+            have = sc.setdefault("items", [])
+            for it in (r.get("items") or [])[:6]:
+                if not isinstance(it, dict):
+                    continue
+                kind = str(it.get("kind") or "")
+                try:
+                    w = int(it.get("w"))
+                except Exception:  # noqa
+                    continue
+                if kind not in NEW_KINDS or not (0 <= w < nwd) or (only and kind not in only):
+                    continue
+                if not _free_word(have, w, kind, 4):
+                    continue
+                rec = parse_new_item(kind, it, w)
+                if rec:
+                    have.append(rec)
+                    n[kind] += 1
+            have.sort(key=lambda x: x.get("w", 0) if isinstance(x, dict) else 0)
+    return n
+
+
+def count_techniques(scenes):
+    c = {k: 0 for k in NEW_KINDS}
+    c.update({"split": 0, "terrain": 0, "verdict": 0})
+    for sc in scenes:
+        if sc.get("type") == "multi":
+            c["split"] += 1
+        if sc.get("type") == "map":
+            c["terrain"] += 1
+        if sc.get("terrain"):
+            c["terrain"] += 1
+        if sc.get("split"):
+            c["split"] += 1
+        for it in sc.get("items", []) if isinstance(sc.get("items"), list) else []:
+            if isinstance(it, dict) and it.get("kind") in c:
+                c[it["kind"]] += 1
+    return c
+
+
+def coverage_fill(scenes, topic):
+    """Every video must carry every technique, in proportion to its length: missing ones are requested from Gemini, then filled by fixed rules."""
+    ph = [sc for sc in scenes if sc.get("type") == "photo" and sc.get("wt")]
+    total_min = max(0.5, sum(float(sc.get("dur") or sc.get("duration") or 8.0) for sc in scenes) / 60.0) if scenes else 0.5
+    need = {k: max(TECH_MIN_ABS[k], int(round(TECH_PER_MIN[k] * total_min))) for k in TECH_PER_MIN}
+    have = count_techniques(scenes)
+    miss = [k for k in need if have.get(k, 0) < need[k]]
+    if miss:
+        techniques_gemini(scenes, topic, only=miss, per=8)
+        have = count_techniques(scenes)
+    # rule-based guarantee (no Gemini needed): question mark / lens / marker / highlight / timeline from existing year cards
+    def pick(pred):
+        best = None
+        for sc in ph:
+            wds = sc["narration_hi"].split()
+            if len(wds) != len(sc["wt"]):
+                continue
+            for i in range(min(len(wds), 12), len(wds) - 4):
+                if _free_word(sc.setdefault("items", []), i, "x", 2) and (pred is None or pred(sc, i)):
+                    return sc, i
+            if best is None and len(wds) > 6:
+                best = (sc, max(1, len(wds) // 2))
+        return best
+    used_sc = {}
+    def add(kind, rec_fn):
+        for sc in sorted(ph, key=lambda s: used_sc.get(id(s), 0)):
+            wds = sc["narration_hi"].split()
+            if len(wds) != len(sc["wt"]) or len(wds) < 8:
+                continue
+            for i in (len(wds) // 2, len(wds) // 3, (2 * len(wds)) // 3, 2):
+                if _free_word(sc.setdefault("items", []), i, kind, 5) and not any(isinstance(x, dict) and abs(x.get("w", -99) - i) < 3 for x in sc["items"]):
+                    rec = rec_fn(sc, i)
+                    if rec:
+                        sc["items"].append(rec)
+                        sc["items"].sort(key=lambda x: x.get("w", 0))
+                        used_sc[id(sc)] = used_sc.get(id(sc), 0) + 1
+                        return True
+        return False
+    for k in ("qmark", "lens", "mark", "hl"):
+        for _ in range(max(0, need.get(k, 1) - have.get(k, 0))):
+            if k == "qmark":
+                add(k, lambda sc, i: {"w": i, "kind": "qmark", "text": ""})
+            elif k == "lens":
+                add(k, lambda sc, i: {"w": i, "kind": "lens", "text": ""})
+            elif k == "mark":
+                add(k, lambda sc, i: {"w": i, "kind": "mark", "text": "", "shape": ("circle", "underline", "arrow")[(_TECH_SEQ[0] + i) % 3]})
+            elif k == "hl":
+                def mk(sc, i):
+                    h = clean_short(sc.get("headline_hi"), 40)
+                    if not h or len(h.split()) > 8:
+                        return None
+                    _TECH_SEQ[0] += 1
+                    return {"w": i, "kind": "hl", "text": h, "ci": _TECH_SEQ[0] % len(HL_COLS)}
+                add(k, mk)
+    if have.get("tline", 0) < 1:
+        ys = []
+        for sc in ph:
+            for it in sc.get("items", []):
+                if isinstance(it, dict) and it.get("kind") == "year" and it.get("text") and it.get("year_num"):
+                    ys.append((sc, it))
+        if len(ys) >= 3:
+            ev = [{"when": clean_short(it["text"], 14), "what": clean_short(sc.get("headline_hi") or "", 22) or clean_short(it["text"], 14)} for sc, it in ys[:5]]
+            sc0, it0 = ys[min(len(ys) - 1, 2)]
+            if _free_word(sc0["items"], it0["w"] + 3, "tline", 3):
+                sc0["items"].append({"w": min(len(sc0["narration_hi"].split()) - 1, it0["w"] + 3), "kind": "tline", "text": "", "events": ev, "span": 6.2, "ci": 1})
+    return count_techniques(scenes)
+
+
+def techniques_pass(scenes, topic=""):
+    n1 = det_techniques(scenes)
+    n2 = techniques_gemini(scenes, topic)
+    log("techniques: rules", {k: v for k, v in n1.items() if v}, "| gemini", {k: v for k, v in n2.items() if v})
+    return {"rules": n1, "gemini": n2}
+
+
+def techniques_coverage(scenes, topic=""):
+    c = coverage_fill(scenes, topic)
+    log("technique coverage per video:", c)
+    return c
+
+
 def finalize_overlays(scenes, topic=""):
     """Always runs after the director (even when it failed): rule-based detector, Gemini detector, guaranteed source cards, source list, card styles."""
     st = {}
-    for name, fn in (("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)), ("art", lambda: art_pass(scenes, topic)),
+    for name, fn in (("declared_sources", lambda: notes_from_declared_src(scenes, topic)), ("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
                      ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)),
                      ("overlays", lambda: overlay_pass(scenes, topic)), ("png_pass", lambda: png_pass(scenes, topic)),
-                     ("years", lambda: resolve_years(scenes)), ("hints", lambda: notes_from_hints(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
+                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
                      ("entity_sources", lambda: notes_for_entities(scenes)), ("source_list", lambda: add_source_outro(scenes))):
         try:
             st[name] = fn()
@@ -1159,7 +1476,7 @@ def wiki_sources(topic, extra_text="", want=6):
     return got
 
 
-def collect_sources(max_src=12, topic="", story=""):
+def collect_sources(max_src=14, topic="", story=""):
     """Open the pages the web-search research was grounded on and keep their REAL paragraphs for on-screen source captions."""
     import html as _html
     SRC_PARAS.clear()
@@ -1178,9 +1495,9 @@ def collect_sources(max_src=12, topic="", story=""):
             for m in re.findall(r"<p[^>]*>(.*?)</p>", h, re.S | re.I):
                 t = _html.unescape(_strip_html(m))
                 nw = len(t.split())
-                if 25 <= nw <= 140 and sum(c.isascii() and c.isalpha() for c in t) > 0.7 * len(t) and "cookie" not in t.lower() and "subscribe" not in t.lower() and "javascript" not in t.lower():
-                    paras.append(trim_words(t))
-                if len(paras) >= 7:
+                if 25 <= nw <= 150 and sum(c.isascii() and c.isalpha() for c in t) > 0.7 * len(t) and "cookie" not in t.lower() and "subscribe" not in t.lower() and "javascript" not in t.lower():
+                    paras.append(trim_words(t, 60))
+                if len(paras) >= 10:
                     break
             if not paras:
                 continue
@@ -1211,11 +1528,11 @@ def sources_block():
 def research_story(story, topic):
     """Sources for the owner's own story: search the web for pages that confirm its facts (the story itself is never changed)."""
     body = " ".join(story.split())
-    parts = [body[i:i + 1800] for i in range(0, min(len(body), 5400), 1800)] or [topic]
+    parts = [body[i:i + 1500] for i in range(0, min(len(body), 9000), 1500)] or [topic]
     for k, part in enumerate(parts):
         prompt = (f"Story topic: {topic}\nStory excerpt (Hindi or English):\n{part}\n\nUsing web search, find reliable English-language sources "
                   "(Wikipedia, NASA, Britannica, WWF, government or university pages, major news) that confirm the specific facts, names, numbers and places in this excerpt. "
-                  "List the facts you could confirm as short English bullets.")
+                  "Find the REAL article / report / page about exactly this story or event (the same people, place and case) and list the facts it states as short English bullets.")
         try:
             gemini(prompt, search=True, temperature=0.2)
         except Exception as e:  # noqa
@@ -1223,16 +1540,57 @@ def research_story(story, topic):
 
 
 def research(topic):
-    prompt = (f"Topic: {topic}\nUsing web search, collect the key well-established scientific facts about this topic "
-              "(origins, mechanisms, widely accepted figures with rounded numbers, and the most surprising true facts). "
-              "Prefer NASA, Smithsonian, National Geographic, universities, scientific journals. "
-              "Write 15-25 short bullet facts in English. Mark anything still debated as 'debated'.")
-    try:
-        text, titles = gemini(prompt, search=True, temperature=0.3)
-        return text, titles[:6]
-    except Exception as e:
-        log("Research (search grounding) failed, continuing without it:", e)
-        return "", []
+    """ARTICLE FIRST: three differently-angled web searches so that several REAL articles (NASA, Britannica, Smithsonian, universities, news) are found.
+    The pages themselves are opened afterwards (collect_sources) and the story is written FROM their passages."""
+    angles = [
+        "the key well-established scientific facts (origins, mechanisms, widely accepted figures with rounded numbers, the most surprising true facts)",
+        "the best explanatory articles (NASA, Smithsonian, National Geographic, Britannica, BBC, university pages) - what they say step by step",
+        "dates, numbers, places, named scientists / studies and any recent discovery that changed what we know",
+    ]
+    texts, titles_all = [], []
+    for ang in angles:
+        prompt = (f"Topic: {topic}\nUsing web search, find REAL articles about this topic and collect {ang}. "
+                  "Write 10-15 short bullet facts in English, each tied to what the article actually says. Mark anything still debated as 'debated'.")
+        try:
+            text, titles = gemini(prompt, search=True, temperature=0.3)
+            texts.append(text)
+            titles_all += [t for t in titles if t not in titles_all]
+        except Exception as e:
+            log("Research (search grounding) failed for one angle, continuing:", e)
+    return "\n".join(texts), titles_all[:8]
+
+
+def passages_block(limit=70):
+    """The real article passages the story must be built from (numbered, so a scene can name the passage it is based on)."""
+    if not SRC_PARAS:
+        return ""
+    out = ["REAL ARTICLE PASSAGES (the story MUST be built from these; [id] is used in the scene field \"src\"):"]
+    for k, v in list(SRC_PARAS.items())[:limit]:
+        out.append(f'[{k}] ({v["title"][:55]}) {v["text"]}')
+    return "\n".join(out)
+
+
+def window_text(text, mark, maxw=38):
+    """Source-card text: the sentence(s) around the marked fact, copied word for word from the real passage."""
+    words = text.split()
+    if len(words) <= maxw:
+        return text
+    i = text.lower().find((mark or "").lower()) if mark else -1
+    if i < 0:
+        return trim_words(text, maxw)
+    sents = re.split(r"(?<=[.!?])\s+", text)
+    pos, hit = 0, 0
+    for k, snt in enumerate(sents):
+        if pos <= i < pos + len(snt) + 1:
+            hit = k
+            break
+        pos += len(snt) + 1
+    chosen = [sents[hit]]
+    for j in (hit + 1, hit - 1):
+        if 0 <= j < len(sents) and len(" ".join(chosen + [sents[j]]).split()) <= maxw:
+            chosen = chosen + [sents[j]] if j > hit else [sents[j]] + chosen
+    out = " ".join(chosen)
+    return out if len(out.split()) <= maxw + 12 else trim_words(out, maxw)
 
 
 SCRIPT_RULES = """RULES FOR THE SCRIPT
@@ -1258,8 +1616,9 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 - "bars": compare 2-4 real sizes as animated bars. "bars": [{"label_hi": "पृथ्वी", "value": 12742, "unit_hi": "किमी"}, ...]. Same unit for all, rounded well-established values only.
 - "map": use whenever the narrator names a country, region, city, route, journey or migration. "map": {"mode": "flat", "route": false, "pins": [{"label_hi": "भारत", "lat": 22.0, "lon": 79.0}, ...]} (1-4 real places with correct latitude/longitude; route true draws an animated line through the pins in order, e.g. a journey or spread; mode "globe" for far-apart places). The narration says the place names.
 - "map" with mode "terrain" (BEST for a distance or "from this place to that place" within about 1000 km, e.g. two villages/cities/districts): a tilted satellite-style terrain map with big region names on the ground, two yellow place tags, an animated arrow between them and the distance written on it; the camera follows each point. Format: "map": {"mode": "terrain", "pins": [{"label_hi": "शरीफपुरा गाँव", "lat": 27.4, "lon": 79.6}, {"label_hi": "बिरपुर गाँव", "lat": 27.3, "lon": 79.5}], "regions": [{"label_hi": "फ़र्रुख़ाबाद", "lat": 27.4, "lon": 79.6}, {"label_hi": "मैनपुरी", "lat": 27.2, "lon": 79.0}]} where regions are the 2-4 districts/states/countries around the two places (centre lat/lon). Use terrain ONLY when exactly two places are named (a start and an end): the distance is computed automatically. When THREE OR MORE places are named in a row use terrain with 3-5 pins in the order named: no distance, just pins and an arrow from each place to the next on the same ground.
+- "sketch": ANIMATED LINE-ART DIAGRAM drawn stroke by stroke on parchment (like a premium explainer film) that makes a MECHANISM visible: how something forms, collides, flows, grows, splits, is built from layers, or how two things differ. Use it for about 20-30% of the scenes (the scenes that explain HOW or WHY; at least two in the video, never scene 1 or the last scene). Fields: "type": "sketch", "headline_hi" (2-5 Hindi words, the key claim, shown big on the left word by word), "sketch_brief_en" (one precise English sentence: exactly what the drawing shows, e.g. "a small planet Theia hitting the young Earth from the left, debris flying out, then the Moon forming from the debris"), "year_hi" (a date / time like "४५० करोड़ साल पहले" ONLY if the narration says one, else ""), narration 18-34 words. The drawing is made later from sketch_brief_en, so describe it concretely.
 - "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook and key insights.
-STYLE TARGET = a real documentary: use type "photo" for at least 80% of ALL scenes, because every photo scene is edited word by word with real pictures, camera keyframes, maps, dates and source cards by the director. Cartoon-style explainer cards (merge, split, steps, compare, bars) look cheap, so use them ONLY if a point truly cannot be shown with real pictures, and then at most one in the whole video. Use "counter" only for one really striking number, "map" whenever places/routes are named (this is the preferred explainer), "kinetic" at most once (the re-hook). Photo scenes should have 22-40 words of narration (several different subjects/details per scene give the director more to show).
+STYLE TARGET = a real documentary: use type "photo" for at least 60% of ALL scenes and "sketch" for the explaining scenes, because every photo scene is edited word by word with real pictures, camera keyframes, maps, dates and source cards by the director. Cartoon-style explainer cards (merge, split, steps, compare, bars) look cheap: use "sketch" scenes instead whenever a point is a mechanism or process. PERMANENT TECHNIQUE RULES (never drop): the engine draws these on the spoken words, so WRITE narration that gives them something to show: (1) say real sizes / lengths / heights / depths / weights with a number and unit (measuring screen); (2) ask the viewer 2-4 real questions during the video ("आखिर ऐसा क्यों?") (question marks); (3) say a 'then vs now' or 'before vs after' of the same thing at least once; (4) compare two things with numbers at least once (comparison panel / chart); (5) tell 3-5 dated events in order at least once (timeline); (6) name two subjects together at least once (split screen, use one "multi" scene) and a journey or distance between two real places at least once (use one "map" scene); (7) say what is a myth and what is a fact at least once (cross / tick); (8) point at a tiny detail ('ध्यान से देखिए') at least once (magnifier); (9) end each scene on a short strong claim sentence (highlight bar). Numbers must always be real, taken from the sources. Use "counter" only for one really striking number, "map" whenever places/routes are named (this is the preferred explainer), "kinetic" at most once (the re-hook). Photo scenes should have 22-40 words of narration (several different subjects/details per scene give the director more to show).
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
 Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in any picture, no real people.
 Every scene also has "grade" (colour grading that fits the scene: warm for fire/desert/sunrise/early Earth, cool for ocean/ice/night/space, cinematic for dramatic reveals, vivid for lively nature and animals, dark for danger and mystery, dread for creepy/scary/dangerous night scenes (cold teal), bwred for shock, fear, anger or a dramatic turning point (black and white with red glow), redwash for violence or emergency, natural for calm facts) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
@@ -1276,7 +1635,7 @@ TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
 def build_script_prompt(topic, cat, style, target_sec, facts, words):
     n_scenes = max(5 if TEST_SEC else 14, round(words / 21))
     test_note = ("\nTEST MODE: this is a very short test video. Use only about 5-6 scenes, a hook of 15-18 words, no long recap. "
-                 "Ignore the minimum counts below. Almost all scenes must be type photo (map or counter allowed once if natural); no merge/split/steps/compare/bars.\n") if TEST_SEC else ""
+                 "Ignore the minimum counts below. Almost all scenes must be type photo; exactly ONE sketch scene (scene 3 or 4) is wanted; map or counter allowed once if natural; no merge/split/steps/compare/bars.\n") if TEST_SEC else ""
     return f"""You are a script writer and film editor for a Hindi nature & science explainer YouTube channel.
 TOPIC: {topic}
 CATEGORY: {cat}
@@ -1284,8 +1643,10 @@ STRUCTURE STYLE: {style[1]}
 TARGET: about {words} Hindi words of narration in total ({target_sec} seconds), around {n_scenes} scenes.{test_note}
 {SCRIPT_RULES}
 
-VERIFIED FACTS TO PREFER (may be empty):
-{facts[:12500]}
+ARTICLE-FIRST RULE: the REAL ARTICLE PASSAGES below are the truth. Build the story from them: every fact, number, name and date in the narration must come from a passage (or from the bullet facts), told in your own simple Hindi but keeping the claim exactly as the article states it. In each scene put the id of the main passage it is based on in "src" (for example "2.3"; empty string when the scene states no article fact). The sentence of the scene that states the fact must be a faithful Hindi version of that passage, so that when the viewer sees the article's English sentence on the screen it says the same thing the narrator says.
+
+VERIFIED FACTS AND ARTICLE PASSAGES TO USE (may be empty):
+{facts[:16000]}
 
 Return ONLY JSON in exactly this shape:
 {{
@@ -1303,7 +1664,7 @@ Return ONLY JSON in exactly this shape:
  "description_hi": "3-4 short Hindi lines telling what the viewer will learn",
  "tags": ["8-12 tags mixing Hindi and English"],
  "scenes": [
-  {{"narration_hi": "...", "type": "photo", "tone": "suspense", "grade": "dark", "transition": "fade", "headline_hi": "",
+  {{"narration_hi": "...", "src": "1.2", "type": "photo", "tone": "suspense", "grade": "dark", "transition": "fade", "headline_hi": "",
     "shots": [{{"text_hi": "first phrase of the narration", "prompt_en": "...", "label_hi": "key word"}}, {{"text_hi": "next phrase, same subject", "prompt_en": "", "focus_x": 0.3, "focus_y": 0.4, "label_hi": ""}}, {{"text_hi": "phrase naming something new", "prompt_en": "...", "query_en": "lion", "label_hi": ""}}]}},
    {{"narration_hi": "...", "type": "multi", "tone": "wonder", "headline_hi": "",
     "items": [{{"label_hi": "name of first thing", "query_en": "real photo search words", "prompt_en": "..."}}, {{"label_hi": "name of second thing", "query_en": "...", "prompt_en": "..."}}]}},
@@ -1408,6 +1769,12 @@ def validate_script(s, verbatim=False, min_scenes=None):
                 else:
                     sc["map"] = {"pins": pins, "route": bool(mp.get("route")) and len(pins) >= 2,
                                  "mode": "globe" if md == "globe" else "flat"}
+            else:
+                typ = "photo"
+        elif typ == "sketch":
+            br = clean_short(sc.get("sketch_brief_en"), 300)
+            if br and idx > 0 and idx != len(s["scenes"]) - 1:
+                sc["sketch_brief_en"], sc["year_hi"] = br, clean_short(sc.get("year_hi"), 24)
             else:
                 typ = "photo"
         elif typ == "kinetic":
@@ -1571,7 +1938,7 @@ Improve this explainer-video script JSON:
 - Replace difficult words with simple ones; make sure a 15-year-old understands everything on first listen.
 - Keep scene 1 a truthful suspense hook (25-30 words, type "photo") that does not reveal the answer.
 - Check that every picture matches the words spoken at that moment (each shot's prompt_en must show exactly what its text_hi says; a merge scene must really show A and B combining into the result named in the narration; counter/bars numbers must be correct and round). Fix types/items/labels/headlines/shots where they do not teach.
-- Keep at least 80% of the scenes as type photo (real-photo documentary scenes); no merge/split/steps/compare/bars/kinetic cards; map or multi (split-screen list of real photos) are welcome; and a grade + transition on every scene. Every shot must show what is spoken at that moment.
+- Keep at least 60% of the scenes as type photo (real-photo documentary scenes) and keep the "sketch" scenes (with their sketch_brief_en, headline_hi, year_hi) where a mechanism is explained; no merge/split/steps/compare/bars/kinetic cards; map or multi (split-screen list of real photos) are welcome; and a grade + transition on every scene. Every shot must show what is spoken at that moment.
 - Keep roughly the same number of scenes (+/-2) and total narration length (+/-10%, now about {word_count(script)} words).
 - Keep numbers in narration written in Hindi words, no English letters in narration, keep every field and the exact JSON shape.
 Return ONLY the improved JSON.
@@ -1853,7 +2220,6 @@ FONT_NAMES = {
     "title": ["Khand-Bold.ttf", "YatraOne-Regular.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
     "thumb": ["Mukta-ExtraBold.ttf", "Hind-Bold.ttf", "Mukta-Bold.ttf"],
     "serif": ["PT_Serif-Web-Bold.ttf", "PTSerif-Bold.ttf"],
-    "display": ["RozhaOne-Regular.ttf", "YatraOne-Regular.ttf", "Khand-Bold.ttf"],
     "type": ["SpecialElite-Regular.ttf"],
     "cond": ["BebasNeue-Regular.ttf", "Anton-Regular.ttf", "Khand-Bold.ttf"],
     "comic": ["Bangers-Regular.ttf"],
@@ -2084,6 +2450,9 @@ def fail_summary():
     return "; ".join(f"{k} x{v}" for k, v in IMG_FAILS.items()) or "no details"
 
 
+NATIVE = {}  # picture path -> real pixel width that survives the 1920x1080 crop (zoom is limited by it so pictures never turn blurry)
+
+
 def fit_image(raw_bytes, out_png, size=(1920, 1080)):
     tmp = Path(str(out_png) + ".tmp")
     tmp.write_bytes(raw_bytes)
@@ -2093,6 +2462,10 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
     tmp.unlink(missing_ok=True)
     if im.width < 400 or im.height < 400:
         raise ValueError("image too small")
+    NATIVE[str(out_png)] = size[0] / max(size[0] / im.width, size[1] / im.height)  # real source pixels across the visible width
+    if im.width < size[0] * 0.9:  # small source: upscale in two steps and sharpen so zooming later stays crisp
+        k = size[0] / im.width
+        im = im.resize((int(im.width * k), int(im.height * k)), Image.LANCZOS).filter(ImageFilter.UnsharpMask(radius=1.6, percent=70, threshold=2))
     try:
         cx, cy = subject_center(im)
         im = ImageOps.fit(im, size, Image.LANCZOS, centering=(min(0.85, max(0.15, cx)), min(0.7, max(0.3, cy))))
@@ -2641,17 +3014,17 @@ def english_search(txt):
     return en
 
 
-def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity="", bg="", ai_only=False):
+def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity="", bg=""):
     query, entity, fallback_query = english_search(query), english_search(entity), english_search(fallback_query)
-    suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB, "obj": STYLE_OBJ, "art": ""}[kind]
+    suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB, "obj": STYLE_OBJ}[kind]
     if kind == "obj" and bg == "green":
         suffix = suffix.replace("plain pure white background", "plain flat bright green background")
     size = (1080, 1080) if kind in ("card", "obj") else (1920, 1080)
     full = f"{prompt}, {suffix}"
-    dims = {"photo": (1024, 576), "thumb": (1024, 576), "card": (512, 512), "obj": (512, 512), "art": (1024, 576)}[kind]
+    dims = {"photo": (1344, 756), "thumb": (1344, 756), "card": (512, 512), "obj": (512, 512)}[kind]
     chain = [("cloudflare", lambda: img_cloudflare(full, out, size, dims))]
     rq = query or fallback_query or query_from_prompt(prompt)
-    if kind in ("photo", "thumb") and rq and os.environ.get("REAL_PHOTOS") != "0" and not ai_only:
+    if kind in ("photo", "thumb") and rq and os.environ.get("REAL_PHOTOS") != "0":
         # REAL free picture of the exact subject first: the named place/animal/thing from Wikipedia & Commons, then stock photos; AI is the last resort
         real = []
         if os.environ.get("REAL_WIKI", "1") != "0" and kind == "photo":
@@ -2663,13 +3036,12 @@ def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity="",
         chain = real + chain
     chain.append(("local-sd", lambda: img_local_sd(prompt.split(", no text")[0] + ", " + {"photo": "cinematic film still, photorealistic, dramatic lighting, highly detailed",
                                                   "thumb": "ultra dramatic hero shot, vivid, highly detailed", "card": "polished digital illustration, vibrant",
-                                                  "obj": "single isolated object on a plain white background, studio photo",
-                                                  "art": "minimal line drawing on parchment, thin ink lines"}[kind], out, size, kind)))
+                                                  "obj": "single isolated object on a plain white background, studio photo"}[kind], out, size, kind)))
     if ALLOW_POLLI:
         chain.append(("pollinations", lambda: img_pollinations(full, out, size)))
-    if PIXABAY_KEY and not ai_only:  # last resort when the AI quota is used up: a real photo of the main thing in the prompt
+    if PIXABAY_KEY:  # last resort when the AI quota is used up: a real photo of the main thing in the prompt
         chain.append(("pixabay-fallback", lambda: pixabay_photo(query or fallback_query or query_from_prompt(prompt), out, size, kind)))
-    if kind in ("photo", "thumb") and not ai_only:
+    if kind in ("photo", "thumb"):
         chain.append(("pexels-photo", lambda: pexels_photo(fallback_query or prompt[:60], out, size)))
     subj = entity or rq
     for name, fn in chain:
@@ -3555,7 +3927,7 @@ def grain_bank():
     if "grain" not in _C:
         np = _np()
         rng = np.random.default_rng(7)
-        _C["grain"] = [(rng.standard_normal((H, W, 1)) * 3.0).astype(np.float32) for _ in range(6)]
+        _C["grain"] = [(rng.standard_normal((H, W, 1)) * 1.1).astype(np.float32) for _ in range(6)]
     return _C["grain"]
 
 
@@ -3689,7 +4061,7 @@ def shot_frame(shot, tl):
         if f_ is not None:
             f2 = apply_grade(f_, shot.get("grade", "natural"))
             z = 1.0 + 0.05 * p  # very slow push so the footage never looks frozen between moves
-            return f2.resize((W, H), Image.BICUBIC, box=((W - W / z) / 2, (H - H / z) / 2, (W + W / z) / 2, (H + H / z) / 2)) if z > 1.003 else f2
+            return f2.resize((W, H), Image.BILINEAR, box=((W - W / z) / 2, (H - H / z) / 2, (W + W / z) / 2, (H + H / z) / 2)) if z > 1.003 else f2
     if shot.get("kfs"):
         z, cx, cy = kf_state(shot, tl)
     elif shot["cam"] == "focus":
@@ -3698,15 +4070,20 @@ def shot_frame(shot, tl):
         z, cx, cy = cam_state(shot["cam"], p, tl)
     if tl < 0.3 and shot["cam"] != "focus" and not shot.get("kfs"):
         z *= 1 + 0.10 * (1 - e_out(tl / 0.3))  # quick punch-in on the beat the word is spoken
+    zc = shot.get("zcap", 2.1)
+    if z > zc:  # never magnify beyond the real pixels of the picture: that is what made pictures slowly turn blurry
+        z = zc
+        m_ = (1 - 1 / z) / 2
+        cx, cy = min(0.5 + m_, max(0.5 - m_, cx)), min(0.5 + m_, max(0.5 - m_, cy))
     fr = src.resize((W, H), Image.BICUBIC, box=crop_box(z, cx, cy))
     if shot.get("par"):
-        fg = src.resize((W, H), Image.BICUBIC, box=crop_box(z * (1 + 0.03 * p), cx, cy))
+        fg = src.resize((W, H), Image.BICUBIC, box=crop_box(min(zc, z * (1 + 0.07 * p)), cx, cy))
         fr = Image.composite(fg, fr, par_mask())
     if shot.get("focus") and tl < 0.8:
         r = (1 - tl / 0.8) * 9
         if r > 0.4:
             fr = fr.filter(ImageFilter.GaussianBlur(r))
-    return fr.filter(ImageFilter.UnsharpMask(radius=1.1, percent=int(30 + 40 * min(1.0, max(0.0, (z - 1.0) / 0.25))), threshold=2))
+    return fr
 
 
 def blend_trans(prev, cur, p, kind):
@@ -3896,12 +4273,15 @@ def graded_image(ctx, path, grade="natural"):
     key = (path, grade)
     if key not in ctx["imgs"]:
         im = Image.open(path).convert("RGB")
-        low = min(im.size) < 900
         im = ImageOps.fit(im, (SW, SH), Image.LANCZOS)
-        if low:  # a small AI / stock picture was enlarged: sharpen it once so the slow zoom does not turn it soft
-            im = im.filter(ImageFilter.UnsharpMask(radius=2.2, percent=60, threshold=3))
         ctx["imgs"][key] = apply_grade(im, grade)
     return ctx["imgs"][key]
+
+
+def zoom_cap(path):
+    """Largest camera zoom at which this picture is still sharp on a 1280-wide frame (at most 1.3x magnification of real pixels)."""
+    nat = NATIVE.get(str(path), 1920.0)
+    return max(1.06, min(2.1, 1.3 * nat / W))
 
 
 def pick_cam(ctx):
@@ -3972,7 +4352,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                 for kf in s_["kf"]:
                     wi = min(nw - 1, max(0, int(kf["w"])))
                     ta = min(sd - 0.2, max(0.45, wt[wi][0] + 0.12 - a))
-                    zz = min(2.1, max(1.15, kf["z"]))
+                    zz = min(zoom_cap(s_["image"]), max(1.08, kf["z"]))
                     m_ = (1 - 1 / zz) / 2
                     tx, ty = min(0.5 + m_, max(0.5 - m_, kf["fx"])), min(0.5 + m_, max(0.5 - m_, kf["fy"]))
                     t_last = kfs[-1][0]
@@ -3991,7 +4371,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                           "pulse": ((rnd.choice([(200, 20, 30), (20, 120, 140), (255, 255, 255)]) if (new_img and shots and rnd.random() < (0.4 if tone in ("suspense", "serious", "excited") else 0.12)) else None)),
                           "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
                           "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
-                          "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4,
+                          "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4, "zcap": zoom_cap(s_["image"]),
                           "ov": (s_.get("ov") if j == 0 else None), "popup": (s_.get("popup_img") if j == 0 else None),
                           "clip": s_.get("clip"), "reader": None, "grade": s_.get("grade") if s_.get("grade") in GRADES else sc.get("grade", "natural"),
                           "pop_side": rnd.choice([-1, 1]),
@@ -4086,19 +4466,25 @@ def ov_sprite(kind, text, mark, pal):
             full.alpha_composite(scrim)
             full.alpha_composite(card, (40, 40))
         sp = full
-    elif kind == "place":  # location tag, bottom-left (big name + small region line)
+    elif kind == "place":  # location tag, bottom-left: dark glass panel, accent bar, outlined text, equal padding on all sides
         main_, _, sub_ = text.partition("|")
-        a1 = text_layer(main_.strip(), load_font(70, "title"), fill=(255, 255, 255), shadow=(0, 4, 8, 0.8))
-        a2 = text_layer(sub_.strip(), load_font(30, "sub"), fill=(235, 220, 200), shadow=(0, 2, 4, 0.8)) if sub_.strip() else None
-        w = max(a1.width, a2.width if a2 else 0) + 40
-        h = a1.height + (a2.height if a2 else 0) + 20
-        sp = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        ImageDraw.Draw(sp).rectangle([0, 8, 8, h - 8], fill=tuple(pal["accent"]) + (255,))
-        sp.alpha_composite(a1, (22, 0))
+        a1 = text_layer(main_.strip(), load_font(64, "title"), fill=(255, 255, 255), stroke=3, stroke_fill=(10, 10, 14), shadow=(0, 4, 8, 0.8))
+        a2 = text_layer(sub_.strip(), load_font(30, "sub"), fill=(240, 226, 205), stroke=2, stroke_fill=(10, 10, 14), shadow=(0, 2, 4, 0.8)) if sub_.strip() else None
+        pad_ = 22
+        tw_, th_ = max(a1.width, a2.width if a2 else 0), a1.height + (a2.height - 10 if a2 else 0)
+        w, h = tw_ + 2 * pad_ + 16, th_ + 2 * pad_
+        sp = Image.new("RGBA", (w + 40, h + 40), (0, 0, 0, 0))
+        pm = Image.new("L", (w + 40, h + 40), 0)
+        ImageDraw.Draw(pm).rounded_rectangle([20, 20, w + 20, h + 20], 18, fill=165)
+        glass = Image.new("RGBA", sp.size, (8, 10, 18, 255))
+        glass.putalpha(pm.filter(ImageFilter.GaussianBlur(1.2)))
+        sp.alpha_composite(glass)
+        ImageDraw.Draw(sp).rounded_rectangle([20, 20, 28, h + 20], 4, fill=tuple(pal["accent"]) + (255,))
+        sp.alpha_composite(a1, (20 + 16 + pad_ - 6, 20 + pad_ - 6))
         if a2:
-            sp.alpha_composite(a2, (22, a1.height - 6))
+            sp.alpha_composite(a2, (20 + 16 + pad_ - 6, 20 + pad_ + a1.height - 16))
     elif kind == "title":  # huge glowing title reveal
-        lay = text_layer(text, load_font(190, "title"), fill=(255, 244, 214), fill2=(255, 140, 50), max_w=int(W * 0.86), shadow=(0, 6, 10, 0.8))
+        lay = text_layer(text, load_font(190, "title"), fill=(255, 244, 214), fill2=(255, 140, 50), max_w=int(W * 0.86), stroke=5, stroke_fill=(30, 8, 4), shadow=(0, 6, 10, 0.8))
         pad_ = 70
         big_ = Image.new("RGBA", (lay.width + 2 * pad_, lay.height + 2 * pad_), (0, 0, 0, 0))
         big_.alpha_composite(lay, (pad_, pad_))
@@ -4109,7 +4495,7 @@ def ov_sprite(kind, text, mark, pal):
         sp.alpha_composite(glow)
         sp.alpha_composite(big_)
     else:  # year / time marker on a timeline
-        lay = text_layer(text, load_font(58, "title"), fill=(255, 255, 255), stroke=0)
+        lay = text_layer(text, load_font(58, "title"), fill=(255, 255, 255), stroke=2, stroke_fill=(90, 8, 18))
         pw, ph = lay.width + 56, lay.height + 22
         w, h = max(1000, pw + 60), ph + 70
         sp = Image.new("RGBA", (w, h), (0, 0, 0, 0))
@@ -4118,9 +4504,12 @@ def ov_sprite(kind, text, mark, pal):
         for x in range(30, w - 20, 70):
             d.line([(x, ph + 28), (x, ph + 44)], fill=(255, 255, 255, 170), width=2)
         pl = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-        col = Image.new("RGBA", (pw, ph), (200, 20, 40, 255))
-        col.putalpha(rounded_mask((pw, ph), 14))
-        pl.alpha_composite(col)
+        edge = Image.new("RGBA", (pw, ph), (255, 255, 255, 255))
+        edge.putalpha(rounded_mask((pw, ph), 14))
+        pl.alpha_composite(edge)
+        col = Image.new("RGBA", (pw - 6, ph - 6), (200, 20, 40, 255))
+        col.putalpha(rounded_mask((pw - 6, ph - 6), 11))
+        pl.alpha_composite(col, (3, 3))
         pl.alpha_composite(lay, ((pw - lay.width) // 2, (ph - lay.height) // 2))
         sp.alpha_composite(pl, ((w - pw) // 2, 0))
         d.polygon([(w // 2 - 10, ph), (w // 2 + 10, ph), (w // 2, ph + 14)], fill=(200, 20, 40, 255))
@@ -4133,8 +4522,10 @@ def ov_sprite(kind, text, mark, pal):
 # round pop-ups with cross / tick, big red stat text.  Every card is drawn from REAL page text only (never written by the bot).
 SRC_STYLES = ["banner", "paper", "dark", "doc", "strip", "box"]
 STYLE_CYCLE = ["strip", "box", "strip", "paper", "strip", "dark", "box", "doc", "banner"]  # small lower-left cards are the most common in the reference
-V2_KINDS = ("quote", "note", "year", "person", "stat", "verdict", "explain", "srclist", "action", "place", "name", "feature")
-OV_MAXT = {"quote": 4.4, "place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0, "name": 4.4, "place": 4.8, "feature": 7.6}
+V2_KINDS = ("quote", "note", "year", "person", "stat", "verdict", "explain", "srclist", "action", "place", "name", "feature",
+            "measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl")
+OV_MAXT = {"quote": 4.4, "place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0, "name": 4.4, "place": 4.8, "feature": 7.6,
+         "measure": 6.0, "qmark": 5.0, "lens": 6.0, "beforeafter": 7.0, "compare": 7.6, "mark": 5.0, "chart": 7.6, "tline": 8.0, "hl": 5.0}
 _BLACK = {}
 
 
@@ -4837,6 +5228,518 @@ def draw_verdict(fr, ps, tl, t0, t1, a, ov):
             put(fr, ll, cx, cy + d_ / 2 + 26, 1.0, a * cl((tl - tk - 0.2) / 0.3))
 
 
+# =========================================================================== TECHNIQUES v4: measuring, question mark, magnifier lens, before/after slider, comparison panel,
+# VOX-style marker annotations, animated charts, multi-event timeline, highlight bar and the Vox paper-collage frame.  (Never remove: see PERMANENT_TECHNIQUES)
+NEW_KINDS = ("measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl")
+VOX_CHART_COLS = [(0, 150, 170), (236, 84, 64), (58, 98, 200), (240, 160, 30), (112, 176, 66), (146, 86, 188)]
+HL_COLS = [((255, 64, 120), (255, 255, 255)), ((0, 190, 220), (10, 14, 24)), ((150, 226, 60), (10, 14, 24)), ((255, 255, 255), (10, 14, 24))]
+_VX = {}
+_VXN = [0]
+
+
+def _vx_text(text, size, role="title", fill=(255, 255, 255), stroke=3, sfill=(8, 8, 14), shadow=True, max_w=None, align="center"):
+    key = ("t", text, size, role, fill, stroke, sfill, shadow, max_w, align)
+    if key not in _VX:
+        _VX[key] = text_layer(text, font_for(text, size, role), fill=fill, stroke=stroke, stroke_fill=sfill, shadow=(0, 3, 5, 0.75) if shadow else None, max_w=max_w, align=align)
+    return _VX[key]
+
+
+def _vx_panel(w, h, r=24, col=(10, 13, 22), alpha=185, border=(255, 255, 255, 70)):
+    key = ("p", w, h, r, col, alpha, border)
+    if key in _VX:
+        return _VX[key]
+    pad = 22
+    sp = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
+    sh_ = Image.new("L", sp.size, 0)
+    ImageDraw.Draw(sh_).rounded_rectangle([pad + 2, pad + 8, pad + w + 2, pad + h + 8], r, fill=130)
+    shadow = Image.new("RGBA", sp.size, (0, 0, 0, 255))
+    shadow.putalpha(sh_.filter(ImageFilter.GaussianBlur(9)))
+    sp.alpha_composite(shadow)
+    ImageDraw.Draw(sp).rounded_rectangle([pad, pad, pad + w, pad + h], r, fill=tuple(col) + (alpha,), outline=border, width=2)
+    _VX[key] = sp
+    return sp
+
+
+def _aa_poly(fr, pts, width, color, alpha=1.0, upto=1.0):
+    """Anti-aliased polyline (first `upto` fraction of it) pasted onto the frame; drawn at 2x inside its bounding box only."""
+    if len(pts) < 2 or alpha <= 0.01 or upto <= 0.001:
+        return
+    segs, tot = [], 0.0
+    for a, b in zip(pts, pts[1:]):
+        l = math.hypot(b[0] - a[0], b[1] - a[1])
+        segs.append((a, b, l))
+        tot += l
+    target, acc, drawn = tot * min(1.0, upto), 0.0, [pts[0]]
+    for a, b, l in segs:
+        if acc + l <= target:
+            drawn.append(b)
+            acc += l
+        else:
+            r = (target - acc) / max(l, 1e-6)
+            drawn.append((a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r))
+            break
+    xs, ys = [p[0] for p in drawn], [p[1] for p in drawn]
+    pad = int(width) + 4
+    x0, y0, x1, y1 = max(0, int(min(xs)) - pad), max(0, int(min(ys)) - pad), min(W, int(max(xs)) + pad), min(H, int(max(ys)) + pad)
+    if x1 - x0 < 2 or y1 - y0 < 2:
+        return
+    big = Image.new("L", ((x1 - x0) * 2, (y1 - y0) * 2), 0)
+    d = ImageDraw.Draw(big)
+    pp = [((x - x0) * 2, (y - y0) * 2) for x, y in drawn]
+    d.line(pp, fill=255, width=int(width * 2), joint="curve")
+    r_ = width
+    for x, y in (pp[0], pp[-1]):
+        d.ellipse([x - r_, y - r_, x + r_, y + r_], fill=255)
+    m = big.resize((x1 - x0, y1 - y0), Image.LANCZOS)
+    if alpha < 0.999:
+        m = m.point(lambda v: int(v * alpha))
+    fr.paste(Image.new("RGB", m.size, tuple(color)), (x0, y0), m)
+
+
+def _subj(sh):
+    try:
+        if "subj" not in sh:
+            sh["subj"] = subject_center(sh["img"]) if sh.get("img") is not None else (0.5, 0.5)
+        return sh["subj"]
+    except Exception:  # noqa
+        return (0.5, 0.5)
+
+
+# ---- measuring screen: dimension line with end caps, ruler ticks and a value label
+def draw_measure(fr, sh, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    label = (it.get("text") or "").strip()
+    if not label:
+        return
+    sx, sy = _subj(sh)
+    vert = it.get("orient") == "v"
+    p = e_out(cl((tl - t0) / 0.8))
+    white, shadow = (255, 255, 255), (0, 0, 0)
+    if vert:
+        x = W * (0.12 if sx > 0.5 else 0.88)
+        y0, y1 = H * 0.16, H * 0.84
+        mid = (y0 + y1) / 2
+        ya, yb = mid - (mid - y0) * p, mid + (y1 - mid) * p
+        for col, wd, off in ((shadow, 9, 3), (white, 5, 0)):
+            _aa_poly(fr, [(x + off, ya), (x + off, yb)], wd, col, a)
+        for yy in (ya, yb):
+            for col, wd, off in ((shadow, 9, 3), (white, 5, 0)):
+                _aa_poly(fr, [(x - 22 + off, yy), (x + 22 + off, yy)], wd, col, a)
+        n = 16
+        for k in range(1, n):
+            yy = y0 + (y1 - y0) * k / n
+            if ya <= yy <= yb:
+                L = 22 if k % 4 == 0 else 11
+                _aa_poly(fr, [(x, yy), (x + L, yy)], 3, white, a * 0.9)
+        cx, cy = x + (130 if x < W / 2 else -130), mid
+    else:
+        y = H * 0.84
+        x0, x1 = W * max(0.06, sx - 0.30), W * min(0.94, sx + 0.30)
+        mid = (x0 + x1) / 2
+        xa, xb = mid - (mid - x0) * p, mid + (x1 - mid) * p
+        for col, wd, off in ((shadow, 9, 3), (white, 5, 0)):
+            _aa_poly(fr, [(xa, y + off), (xb, y + off)], wd, col, a)
+        for xx in (xa, xb):
+            for col, wd, off in ((shadow, 9, 3), (white, 5, 0)):
+                _aa_poly(fr, [(xx + off, y - 22), (xx + off, y + 22)], wd, col, a)
+        n = 24
+        for k in range(1, n):
+            xx = x0 + (x1 - x0) * k / n
+            if xa <= xx <= xb:
+                L = 22 if k % 4 == 0 else 11
+                _aa_poly(fr, [(xx, y), (xx, y - L)], 3, white, a * 0.9)
+        cx, cy = mid, y - 122
+    if p > 0.55:
+        spr = _vx_text(label, 56, "title", stroke=3)
+        pan = _vx_panel(spr.width + 54, spr.height + 18, 18, alpha=205)
+        q = e_back(cl((tl - t0 - 0.45) / 0.4))
+        put(fr, pan, cx, cy, 0.6 + 0.4 * cl(q), a)
+        put(fr, spr, cx, cy, 0.6 + 0.4 * cl(q), a)
+        if it.get("sub"):
+            sb = _vx_text(it["sub"], 30, "sub", fill=(240, 226, 205), stroke=2)
+            put(fr, sb, cx, cy + spr.height / 2 + 26, 1.0, a * cl((tl - t0 - 0.7) / 0.3))
+
+
+# ---- question marks that pop up around the subject
+def draw_qmark(fr, sh, tl, t0, t1, a, ov):
+    sx, sy = _subj(sh)
+    spots = [(0.20, -0.26, 1.0, -9), (-0.22, -0.18, 0.72, 11), (0.30, 0.06, 0.55, -5)]
+    for k, (dx, dy, sc_, rot) in enumerate(spots):
+        tk = t0 + 0.12 + k * 0.28
+        if tl < tk:
+            continue
+        q = e_back(cl((tl - tk) / 0.45))
+        size = int(250 * sc_)
+        key = ("q", size)
+        if key not in _VX:
+            _VX[key] = text_layer("?", font_for("?", size, "title"), fill=(255, 255, 255), stroke=int(size * 0.07), stroke_fill=(214, 28, 44),
+                                  shadow=(0, 8, 12, 0.8), extrude=(max(4, int(size * 0.05)), (110, 10, 20)))
+        spr = _VX[key]
+        ang = rot + 7 * math.sin(tl * 3.2 + k * 1.7)
+        rs = spr.rotate(ang, resample=Image.BICUBIC, expand=True)
+        cx = min(max(sx + dx, 0.08), 0.92) * W
+        cy = min(max(sy + dy, 0.14), 0.86) * H + 7 * math.sin(tl * 2.4 + k)
+        put(fr, rs, cx, cy, 0.3 + 0.7 * cl(q), a)
+
+
+# ---- magnifier lens over the subject
+def _lens_sprite(R):
+    key = ("lens", R)
+    if key in _VX:
+        return _VX[key]
+    S = int(R * 3.0)
+    sp = Image.new("RGBA", (S, S), (0, 0, 0, 0))
+    d = ImageDraw.Draw(sp)
+    c = S // 2 - int(R * 0.35)
+    ang = math.radians(48)
+    hx, hy = c + math.cos(ang) * R * 1.0, c + math.sin(ang) * R * 1.0
+    ex, ey = c + math.cos(ang) * R * 1.95, c + math.sin(ang) * R * 1.95
+    d.line([(hx, hy), (ex, ey)], fill=(30, 22, 18, 255), width=int(R * 0.22))
+    d.line([(hx, hy), (ex, ey)], fill=(120, 84, 52, 255), width=int(R * 0.14))
+    d.ellipse([c - R - 12, c - R - 12, c + R + 12, c + R + 12], fill=(60, 64, 72, 255))
+    d.ellipse([c - R - 5, c - R - 5, c + R + 5, c + R + 5], fill=(205, 210, 220, 255))
+    d.ellipse([c - R + 4, c - R + 4, c + R - 4, c + R - 4], fill=(0, 0, 0, 0))
+    _VX[key] = (sp, c)
+    return _VX[key]
+
+
+def draw_lens(fr, sh, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    sx, sy = _subj(sh)
+    fx, fy = it.get("fx"), it.get("fy")
+    fx = sx if fx is None else fx
+    fy = sy if fy is None else fy
+    R = 168
+    cx = min(max(fx * W + 14 * math.sin(tl * 1.7), R + 20), W - R - 120)
+    cy = min(max(fy * H + 9 * math.cos(tl * 1.3), R + 20), H - R - 90)
+    q = e_back(cl((tl - t0) / 0.5))
+    z = 2.4
+    src = fr.copy()
+    bw = int(2 * R / z)
+    box = (int(cx - bw / 2), int(cy - bw / 2), int(cx + bw / 2), int(cy + bw / 2))
+    zoomed = src.crop(box).resize((2 * R, 2 * R), Image.BICUBIC).filter(ImageFilter.UnsharpMask(radius=1.4, percent=60, threshold=2))
+    m = Image.new("L", (2 * R, 2 * R), 0)
+    ImageDraw.Draw(m).ellipse([0, 0, 2 * R - 1, 2 * R - 1], fill=255)
+    glass = zoomed.convert("RGBA")
+    hi = Image.new("RGBA", glass.size, (0, 0, 0, 0))
+    ImageDraw.Draw(hi).arc([R * 0.22, R * 0.22, R * 1.78, R * 1.78], 200, 280, fill=(255, 255, 255, 120), width=int(R * 0.09))
+    glass.alpha_composite(hi)
+    glass.putalpha(m)
+    sp, c = _lens_sprite(R)
+    lay = sp.copy()
+    lay.alpha_composite(glass, (c - R, c - R))
+    sh_ = Image.new("RGBA", lay.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sh_).ellipse([c - R + 8, c - R + 14, c + R + 8, c + R + 14], fill=(0, 0, 0, 120))
+    base = Image.new("RGBA", fr.size, (0, 0, 0, 0))
+    off = (int(cx - c), int(cy - c))
+    lay_full = Image.new("RGBA", lay.size, (0, 0, 0, 0))
+    lay_full.alpha_composite(sh_.filter(ImageFilter.GaussianBlur(10)))
+    lay_full.alpha_composite(lay)
+    put(fr, lay_full, cx + (lay.width / 2 - c), cy + (lay.height / 2 - c), 0.35 + 0.65 * cl(q), a)
+
+
+# ---- before / after slider (the picture on screen = BEFORE, the second real picture = AFTER)
+def draw_beforeafter(fr, sh, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    im2 = it.get("img2")
+    if im2 is None:
+        return
+    key = ("ba", id(im2))
+    if key not in _VX:
+        _VX[key] = ImageOps.fit(im2.convert("RGB"), (W, H), Image.LANCZOS)
+    after = _VX[key]
+    p = e_io(cl((tl - t0 - 0.35) / 1.3))
+    pos = W * (0.96 - 0.92 * p) + (math.sin(tl * 2.2) * 6 if p >= 1 else 0)
+    pos = int(min(max(pos, 8), W - 8))
+    before = fr.copy()
+    fr.paste(after.crop((pos, 0, W, H)), (pos, 0))
+    d = ImageDraw.Draw(fr)
+    # right part shows AFTER (revealed as the divider moves left); left part stays BEFORE
+    d.line([(pos, 0), (pos, H)], fill=(255, 255, 255), width=6)
+    cy = H // 2
+    d.ellipse([pos - 34, cy - 34, pos + 34, cy + 34], fill=(255, 255, 255), outline=(20, 20, 24), width=3)
+    d.polygon([(pos - 20, cy), (pos - 8, cy - 11), (pos - 8, cy + 11)], fill=(20, 20, 24))
+    d.polygon([(pos + 20, cy), (pos + 8, cy - 11), (pos + 8, cy + 11)], fill=(20, 20, 24))
+    la, lb = it.get("label_a") or "पहले", it.get("label_b") or "बाद में"
+    for txt, x, col in ((la, 60, (214, 28, 44)), (lb, W - 60, (28, 150, 80))):
+        s_ = _vx_text(txt, 46, "title", stroke=2)
+        pan = Image.new("RGBA", (s_.width + 44, s_.height + 14), tuple(col) + (235,))
+        pan.putalpha(rounded_mask(pan.size, 16))
+        pw = pan.width
+        px = x + pw / 2 if x < W / 2 else x - pw / 2
+        if (x < W / 2 and pos > px + pw / 2) or (x > W / 2 and pos < px - pw / 2):
+            put(fr, pan, px, 62, 1.0, a)
+            put(fr, s_, px, 62, 1.0, a)
+    if a < 0.999:
+        fr.paste(Image.blend(before, fr, a))
+
+
+# ---- comparison panel (two things, up to 3 rows with growing bars)
+def draw_compare(fr, sh, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    rows = it.get("rows") or []
+    A, B = it.get("a_hi") or "", it.get("b_hi") or ""
+    if not rows or not A or not B:
+        return
+    n_r = min(3, len(rows))
+    pw, ph = int(W * 0.86), 130 + 92 * n_r
+    pan = _vx_panel(pw, ph, 26, alpha=205)
+    q = e_out(cl((tl - t0) / 0.5))
+    cx, cy = W / 2, H - 34 - ph / 2 + (1 - q) * 160
+    put(fr, pan, cx, cy, 1.0, a)
+    lx, rx = cx - pw * 0.25, cx + pw * 0.25
+    top = cy - ph / 2 + 22
+    ha, hb = _vx_text(A, 52, "title", fill=(255, 120, 100)), _vx_text(B, 52, "title", fill=(110, 200, 255))
+    put(fr, ha, lx, top + 26, 1.0, a * cl((tl - t0 - 0.2) / 0.3))
+    put(fr, hb, rx, top + 26, 1.0, a * cl((tl - t0 - 0.3) / 0.3))
+    vs = _vx_text("VS", 60, "cond", fill=(255, 255, 255), stroke=4, sfill=(200, 24, 40))
+    put(fr, vs, cx, top + 26, 0.7 + 0.3 * e_back(cl((tl - t0 - 0.4) / 0.35)), a)
+    d = ImageDraw.Draw(fr)
+    ry = top + 98
+    rh = (ph - 130) / max(1, n_r) + 0.0
+    for k, r in enumerate(rows[:3]):
+        tk = t0 + 0.55 + k * 0.45
+        if tl < tk:
+            continue
+        g = e_out(cl((tl - tk) / 0.6))
+        lab = _vx_text(r.get("label_hi") or "", 30, "sub", fill=(235, 235, 240), stroke=1)
+        put(fr, lab, cx, ry + rh * k + 4, 1.0, a * g)
+        na, nb = float(r.get("na") or 0), float(r.get("nb") or 0)
+        mx = max(na, nb, 1e-9)
+        for side, n_, col, x0 in ((0, na, (255, 110, 90), lx), (1, nb, (100, 190, 255), rx)):
+            bw_max = pw * 0.36
+            bw = bw_max * (n_ / mx) * g if mx > 0 and (na or nb) else bw_max * 0.5 * g
+            y = ry + rh * k + 30
+            d.rounded_rectangle([x0 - bw_max / 2, y, x0 - bw_max / 2 + max(8, bw), y + 24], 10, fill=col)
+            vt = _vx_text(r.get("a_hi" if side == 0 else "b_hi") or "", 34, "title", stroke=2)
+            put(fr, vt, x0, y + 50, 1.0, a * g)
+
+
+# ---- Vox marker annotation: hand-drawn circle / underline / arrow with a handwritten label
+def _wobble_ellipse(cx, cy, rx, ry, seed, turns=1.12):
+    rnd = random.Random(seed)
+    ph = [rnd.uniform(0, 6.28) for _ in range(3)]
+    pts = []
+    n = 64
+    for k in range(n + 1):
+        th = -0.6 + 2 * math.pi * turns * k / n
+        wob = 1 + 0.035 * math.sin(2 * th + ph[0]) + 0.025 * math.sin(3 * th + ph[1]) + 0.07 * (k / n)
+        pts.append((cx + math.cos(th) * rx * wob, cy + math.sin(th) * ry * wob))
+    return pts
+
+
+def draw_mark(fr, sh, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    sx, sy = _subj(sh)
+    fx = sx if it.get("fx") is None else it["fx"]
+    fy = sy if it.get("fy") is None else it["fy"]
+    rw, rh = (it.get("rw") or 0.14), (it.get("rh") or 0.18)
+    shape = it.get("shape") or "circle"
+    col = (232, 40, 56)
+    p = e_io(cl((tl - t0) / 0.8))
+    cx, cy = fx * W, fy * H
+    seed = int(cx * 7 + cy * 3)
+    if shape == "underline":
+        y = cy + rh * H
+        pts = [(cx - rw * W + k * (2 * rw * W) / 12, y + 5 * math.sin(k * 0.9 + seed)) for k in range(13)]
+        for c_, wd in (((0, 0, 0), 13), (col, 9)):
+            _aa_poly(fr, pts, wd, c_, a * (0.55 if c_ == (0, 0, 0) else 1.0), p)
+        lab_xy = (cx, y + 42)
+    elif shape == "arrow":
+        sx0 = cx + (0.22 * W if fx < 0.5 else -0.22 * W)
+        sy0 = cy - 0.20 * H if fy > 0.35 else cy + 0.2 * H
+        ctrl = ((sx0 + cx) / 2, min(sy0, cy) - 0.08 * H)
+        pts = [((1 - u) ** 2 * sx0 + 2 * (1 - u) * u * ctrl[0] + u * u * cx, (1 - u) ** 2 * sy0 + 2 * (1 - u) * u * ctrl[1] + u * u * cy) for u in [k / 24 for k in range(25)]]
+        for c_, wd in (((0, 0, 0), 12), (col, 8)):
+            _aa_poly(fr, pts, wd, c_, a * (0.55 if c_ == (0, 0, 0) else 1.0), p)
+        if p > 0.95:
+            (x1_, y1_), (x2_, y2_) = pts[-3], pts[-1]
+            ang = math.atan2(y2_ - y1_, x2_ - x1_)
+            head = [(x2_ - 30 * math.cos(ang - 0.5), y2_ - 30 * math.sin(ang - 0.5)), (x2_, y2_), (x2_ - 30 * math.cos(ang + 0.5), y2_ - 30 * math.sin(ang + 0.5))]
+            for c_, wd in (((0, 0, 0), 12), (col, 8)):
+                _aa_poly(fr, head, wd, c_, a * (0.55 if c_ == (0, 0, 0) else 1.0), 1.0)
+        lab_xy = (sx0, sy0 - 44 if sy0 < cy else sy0 + 44)
+    else:
+        pts = _wobble_ellipse(cx, cy, rw * W, rh * H, seed)
+        for c_, wd in (((0, 0, 0), 13), (col, 9)):
+            _aa_poly(fr, pts, wd, c_, a * (0.55 if c_ == (0, 0, 0) else 1.0), p)
+        lab_xy = (cx, cy + rh * H + 44) if cy + rh * H + 80 < H else (cx, cy - rh * H - 44)
+    if it.get("text") and p > 0.6:
+        s_ = _vx_text(it["text"], 48, "head", fill=(255, 255, 255), stroke=3, sfill=(150, 10, 26))
+        q = e_back(cl((p - 0.6) / 0.4))
+        put(fr, s_, min(max(lab_xy[0], s_.width / 2 + 20), W - s_.width / 2 - 20), min(max(lab_xy[1], 40), H - 40), 0.5 + 0.5 * cl(q), a)
+
+
+# ---- animated chart (bars grow / line is drawn); numbers are only those the narrator says
+def draw_chart(fr, sh, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    pts = it.get("pts") or []
+    if len(pts) < 2:
+        return
+    sx, _ = _subj(sh)
+    pw, ph = int(W * 0.37), int(H * 0.62)
+    cx = W * 0.78
+    cy = H * 0.50
+    pan = _vx_panel(pw, ph, 22, col=(250, 248, 242), alpha=246, border=(40, 40, 40, 60))
+    q = e_out(cl((tl - t0) / 0.5))
+    put(fr, pan, cx + (1 - q) * (300 if cx > W / 2 else -300), cy, 1.0, a)
+    if q < 0.9:
+        return
+    ink = (30, 32, 40)
+    ttl = _vx_text(it.get("title") or "", 38, "title", fill=ink, stroke=0, shadow=False, max_w=pw - 50)
+    put(fr, ttl, cx, cy - ph / 2 + 16 + ttl.height / 2, 1.0, a)
+    x0, x1 = cx - pw / 2 + 36, cx + pw / 2 - 36
+    ybase, ytop = cy + ph / 2 - 62, cy - ph / 2 + 24 + ttl.height + 40
+    d = ImageDraw.Draw(fr)
+    d.line([(x0 - 6, ybase), (x1 + 6, ybase)], fill=ink, width=3)
+    n = min(6, len(pts))
+    mx = max(float(p_.get("v") or 0) for p_ in pts[:n]) or 1.0
+    slot = (x1 - x0) / n
+    if it.get("type") == "line":
+        xy = [(x0 + slot * (k + 0.5), ybase - (ybase - ytop) * float(pts[k].get("v") or 0) / mx) for k in range(n)]
+        g = e_out(cl((tl - t0 - 0.5) / 1.4))
+        _aa_poly(fr, xy, 7, VOX_CHART_COLS[0], a, g)
+        for k, (x, y) in enumerate(xy):
+            if g * (n - 1) >= k - 0.05:
+                d.ellipse([x - 10, y - 10, x + 10, y + 10], fill=(255, 255, 255), outline=VOX_CHART_COLS[1], width=5)
+    for k in range(n):
+        p_ = pts[k]
+        g = e_out(cl((tl - t0 - 0.5 - 0.25 * k) / 0.9))
+        xc = x0 + slot * (k + 0.5)
+        v = float(p_.get("v") or 0)
+        if it.get("type") != "line":
+            hgt = (ybase - ytop) * v / mx * g
+            bw = min(slot * 0.62, 90)
+            d.rounded_rectangle([xc - bw / 2, ybase - hgt, xc + bw / 2, ybase], 8, fill=VOX_CHART_COLS[k % 6])
+            ytxt = ybase - hgt - 20
+        else:
+            ytxt = ybase - (ybase - ytop) * v / mx - 28
+        if g > 0.3:
+            vt = _vx_text(str(p_.get("show") or p_.get("v")), 30, "title", fill=ink, stroke=0, shadow=False)
+            put(fr, vt, xc, ytxt, 1.0, a * cl((g - 0.3) / 0.4))
+        lt = _vx_text(p_.get("label") or "", 24, "sub", fill=(70, 72, 80), stroke=0, shadow=False, max_w=int(slot + 10))
+        put(fr, lt, xc, ybase + 14 + lt.height / 2, 1.0, a * cl((tl - t0 - 0.4 - 0.25 * k) / 0.3))
+
+
+# ---- multi-event timeline strip at the bottom
+def draw_tline(fr, sh, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    ev = (it.get("events") or [])[:5]
+    if len(ev) < 2:
+        return
+    y = H * 0.855
+    pan = _vx_panel(int(W * 0.92), 170, 20, alpha=190)
+    put(fr, pan, W / 2, y - 6, 1.0, a * e_out(cl((tl - t0) / 0.4)))
+    x0, x1 = W * 0.09, W * 0.91
+    g = e_out(cl((tl - t0 - 0.2) / 1.0))
+    _aa_poly(fr, [(x0, y), (x1, y)], 5, (255, 255, 255), a, g)
+    n = len(ev)
+    for k, e in enumerate(ev):
+        xk = x0 + (x1 - x0) * k / (n - 1)
+        tk = t0 + 0.5 + k * (max(1.0, (t1 - t0 - 1.2)) / n)
+        if tl < tk:
+            continue
+        q = e_back(cl((tl - tk) / 0.4))
+        d = ImageDraw.Draw(fr)
+        r = int(13 * cl(q))
+        d.ellipse([xk - r, y - r, xk + r, y + r], fill=(232, 40, 56), outline=(255, 255, 255), width=4)
+        wt = _vx_text(e.get("when") or "", 40, "title", fill=(255, 214, 120), stroke=2, max_w=int((x1 - x0) / n))
+        wh = _vx_text(e.get("what") or "", 31, "sub", fill=(255, 255, 255), stroke=2, max_w=int((x1 - x0) / n))
+        put(fr, wt, xk, y - 34 - wt.height / 2, 1.0, a * cl(q))
+        put(fr, wh, xk, y + 22 + wh.height / 2, 1.0, a * cl((tl - tk - 0.15) / 0.3))
+
+
+# ---- highlight bar: the key claim, marker-swiped
+def draw_hl(fr, sh, tl, t0, t1, a, ov):
+    it = ov.get("it") or {}
+    txt = (it.get("text") or "").strip()
+    if not txt:
+        return
+    bg, fg = HL_COLS[it.get("ci", 0) % len(HL_COLS)]
+    spr = _vx_text(txt, 76, "title", fill=fg, stroke=0, shadow=False, max_w=int(W * 0.8))
+    bw, bh = spr.width + 70, spr.height + 30
+    p = e_out(cl((tl - t0) / 0.5))
+    cx, cy = W / 2, H * 0.80
+    bar = Image.new("RGBA", (bw, bh), tuple(bg) + (255,))
+    ImageDraw.Draw(bar).polygon([(0, 0), (22, 0), (0, bh)], fill=(0, 0, 0, 0))
+    cw = max(2, int(bw * p))
+    put(fr, _vx_panel(1, 1, 1, alpha=0, border=(0, 0, 0, 0)), -50, -50, 1.0, 0)
+    sh_ = Image.new("RGBA", (cw + 30, bh + 30), (0, 0, 0, 0))
+    ImageDraw.Draw(sh_).rectangle([15, 21, 15 + cw, 21 + bh], fill=(0, 0, 0, 120))
+    sh_ = sh_.filter(ImageFilter.GaussianBlur(7))
+    put(fr, sh_, cx - bw / 2 + cw / 2, cy, 1.0, a)
+    put(fr, bar.crop((0, 0, cw, bh)), cx - bw / 2 + cw / 2, cy, 1.0, a)
+    if p > 0.45:
+        put(fr, spr, cx, cy, 1.0, a * cl((p - 0.45) / 0.4))
+
+
+# ---- the Vox paper-collage frame: the picture becomes a tilted, taped photo on coloured paper while a chart / timeline / highlight is shown
+COLLAGE_KINDS = ("chart", "tline", "hl")
+VOX_BG = [(236, 196, 92), (84, 184, 190), (240, 120, 96), (126, 164, 220), (246, 232, 206)]
+
+
+def _vox_bg(ci):
+    key = ("vbg", ci)
+    if key in _VX:
+        return _VX[key]
+    base = VOX_BG[ci % len(VOX_BG)]
+    im = Image.new("RGB", (W, H), base)
+    np = _np()
+    rng = np.random.default_rng(ci + 5)
+    a = np.asarray(im, dtype=np.float32)
+    blot = Image.fromarray((rng.random((8, 14)) * 255).astype(np.uint8)).resize((W, H), Image.BICUBIC)
+    a = a + ((np.asarray(blot, dtype=np.float32) / 255 - 0.5) * 22)[..., None]
+    im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
+    d = ImageDraw.Draw(im, "RGBA")
+    dark = tuple(max(0, c - 70) for c in base) + (60,)
+    for yy in range(18, H, 34):  # halftone dots
+        for xx in range(18 + (yy // 34 % 2) * 17, W, 34):
+            d.ellipse([xx - 4, yy - 4, xx + 4, yy + 4], fill=dark)
+    rnd = random.Random(ci)
+    for _ in range(5):  # doodle stars / squiggles
+        x, y = rnd.randint(int(W * 0.62), W - 60), rnd.randint(40, H - 60)
+        d.line([(x - 14, y), (x + 14, y)], fill=dark[:3] + (140,), width=4)
+        d.line([(x, y - 14), (x, y + 14)], fill=dark[:3] + (140,), width=4)
+    _VX[key] = im
+    return im
+
+
+def vox_collage(fr, q, ci, kind="chart"):
+    e = e_out(cl(q))
+    bg = _vox_bg(ci)
+    s = lerp(1.0, 0.50 if kind == "tline" else 0.58, e)
+    cw, ch = int(W * s), int(H * s)
+    card = fr.resize((cw, ch), Image.BICUBIC)
+    border = 12
+    framed = Image.new("RGBA", (cw + 2 * border, ch + 2 * border), (252, 250, 244, 255))
+    framed.paste(card, (border, border))
+    tape = Image.new("RGBA", (96, 30), (240, 232, 190, 200))
+    framed.alpha_composite(tape.rotate(-30, expand=True), (-24, -8))
+    framed.alpha_composite(tape.rotate(30, expand=True), (framed.width - 70, -8))
+    rot = -2.4 * e
+    framed = framed.rotate(rot, resample=Image.BICUBIC, expand=True)
+    sh_ = Image.new("RGBA", framed.size, (0, 0, 0, 0))
+    sh_.putalpha(framed.getchannel("A").filter(ImageFilter.GaussianBlur(12)).point(lambda v: int(v * 0.55)))
+    cx, cy = lerp(W / 2, W * (0.5 if kind == "tline" else 0.31), e), lerp(H / 2, H * (0.36 if kind == "tline" else 0.47), e)
+    base = Image.blend(fr, bg, e) if e < 1 else bg.copy()
+    base = base.convert("RGBA")
+    base.alpha_composite(sh_, (int(cx - framed.width / 2 + 8), int(cy - framed.height / 2 + 14)))
+    base.alpha_composite(framed, (int(cx - framed.width / 2), int(cy - framed.height / 2)))
+    return base.convert("RGB")
+
+
+def draw_new_kind(fr, sh, tl, t0, t1, a, ov):
+    k = ov["kind"]
+    try:
+        {"measure": draw_measure, "qmark": draw_qmark, "lens": draw_lens, "beforeafter": draw_beforeafter, "compare": draw_compare, "mark": draw_mark,
+         "chart": draw_chart, "tline": draw_tline, "hl": draw_hl}[k](fr, sh, tl, t0, t1, a, ov)
+    except Exception as e:  # noqa
+        if not _VX.get("err_" + k):
+            _VX["err_" + k] = 1
+            log(f"technique {k} drawing failed once (video continues): {type(e).__name__} {str(e)[:100]}")
+
+
+
 def draw_v2(fr, sh, tl, ov, pal, t0, t1):
     """Draws the v2 item kinds. Returns True when it handled the item."""
     k = ov["kind"]
@@ -4885,12 +5788,17 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
     if k == "verdict":
         draw_verdict(fr, sh, tl, t0, t1, a, ov)
         return True
+    if k in NEW_KINDS:
+        draw_new_kind(fr, sh, tl, t0, t1, a, ov)
+        return True
     return False
 
 
 # =========================================================================== V3: guaranteed sources, auto word-detector, roll-out paper, keyframe-animated PNG
-ITEM_PRI = {"quote": 3, "note": 6, "srclist": 6, "feature": 6, "verdict": 5, "explain": 5, "action": 5, "name": 3, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2}
-ITEM_MIN = {"quote": 2.4, "year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "verdict": 3.4, "explain": 3.4, "srclist": 3.6, "action": 2.6, "name": 2.4, "feature": 5.0}
+ITEM_PRI = {"quote": 3, "note": 6, "srclist": 6, "feature": 6, "verdict": 5, "explain": 5, "action": 5, "name": 3, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2,
+            "measure": 4, "qmark": 3, "lens": 4, "beforeafter": 6, "compare": 5, "mark": 4, "chart": 6, "tline": 6, "hl": 5}
+ITEM_MIN = {"quote": 2.4, "year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "verdict": 3.4, "explain": 3.4, "srclist": 3.6, "action": 2.6, "name": 2.4, "feature": 5.0,
+            "measure": 3.0, "qmark": 2.2, "lens": 3.4, "beforeafter": 4.2, "compare": 5.0, "mark": 2.8, "chart": 5.0, "tline": 5.0, "hl": 2.8}
 
 
 def item_zones(it):
@@ -5063,8 +5971,8 @@ Return ONLY JSON: {{"matches":[...]}}
             mk = clean_short(r.get("mark_en"), 70)
             if not mk or mk.lower() not in sp_["text"].lower():
                 mk = auto_mark(sp_["text"]) if fit == "direct" else ""
-            cands.append((0 if fit == "direct" else 1, sc, str(r.get("src")).strip(), {"w": w, "kind": "note", "text": sp_["text"], "mark": mk,
-                                                                                    "sub": sp_["title"].replace("|", "-")[:70], "dom": ""}))
+            cands.append((0 if fit == "direct" else 1, sc, str(r.get("src")).strip(), {"w": w, "kind": "note", "text": window_text(sp_["text"], mk), "mark": mk,
+                                                                                    "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))}))
     cands.sort(key=lambda c: c[0])
     added, used_src, used_sc = 0, set(), set()
     for _fit, sc, src, rec in cands:
@@ -5077,6 +5985,49 @@ Return ONLY JSON: {{"matches":[...]}}
         used_sc.add(id(sc))
         added += 1
     log(f"source cards matched to the narration: {added} (had {have}, target {target})")
+    return added
+
+
+def notes_from_declared_src(scenes, topic=""):
+    """The script was written FROM real article passages and every scene names its passage ("src"). Here the source card of that passage is placed at the word where
+    the narrator states the fact, and shows the article's own sentence (word for word) with the key words highlighted."""
+    ph = [sc for sc in _ph_scenes(scenes) if str(sc.get("src") or "").strip() in SRC_PARAS]
+    has = lambda sc: any(isinstance(i, dict) and i.get("kind") == "note" for i in (sc.get("items") or []))
+    todo = [sc for sc in ph if not has(sc)]
+    if not todo or not GEMINI_KEY:
+        return 0
+    added = 0
+    for a in range(0, len(todo), 8):
+        batch = todo[a:a + 8]
+        listing = "\n".join(f'SCENE {k}: {_numbered(sc)}\nPASSAGE [{sc["src"]}]: "{SRC_PARAS[str(sc["src"]).strip()]["text"][:700]}"' for k, sc in enumerate(batch))
+        prompt = f"""Hindi documentary scenes (every word numbered) and, for each, the real English article passage the scene was written from. Topic: {topic}
+For each scene return where the narrator states the fact that the passage states: {{"i": scene number, "w": number of the word where that fact is spoken, "mark_en": "2-8 words copied EXACTLY from the passage that state that fact", "ok": true or false}}.
+ok=false when the narration does not really state what the passage says. Never invent.
+Return ONLY JSON: {{"matches":[...]}}
+{listing}"""
+        try:
+            out = gemini_json_opt(prompt, 0.1)
+        except Exception as e:  # noqa
+            log("declared source matching failed:", str(e)[:100])
+            continue
+        for r in (out.get("matches") or []):
+            try:
+                i, w = int(r.get("i")), int(r.get("w"))
+            except Exception:  # noqa
+                continue
+            if not (0 <= i < len(batch)) or r.get("ok") is False:
+                continue
+            sc = batch[i]
+            sp_ = SRC_PARAS[str(sc["src"]).strip()]
+            if not (0 <= w < len(sc["narration_hi"].split())):
+                continue
+            mk = clean_short(r.get("mark_en"), 70)
+            if not mk or mk.lower() not in sp_["text"].lower():
+                mk = auto_mark(sp_["text"])
+            sc.setdefault("items", []).append({"w": w, "kind": "note", "text": window_text(sp_["text"], mk), "mark": mk,
+                                               "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))})
+            added += 1
+    log(f"source cards from the script's own article passages: {added}")
     return added
 
 
@@ -5682,12 +6633,16 @@ def item_zones(it):
         return {"BR"}
     if k == "bubble":
         return {"T"}
-    if k == "feature":
+    if k in ("feature", "beforeafter", "chart", "tline", "hl"):
         return {"FULL"}
+    if k == "compare":
+        return {"M", "BL", "BR"}
+    if k == "measure":
+        return {"M"} if it.get("orient") == "v" else {"BL", "BR"}
     return {"M"}
 
 
-QUICK_KINDS = {"year", "place", "name", "person", "stat", "bubble", "quote", "verdict", "explain", "action"}
+QUICK_KINDS = {"year", "place", "name", "person", "stat", "bubble", "quote", "verdict", "explain", "action", "qmark", "mark", "lens", "measure"}
 
 
 def schedule_items(items, dur):
@@ -5741,7 +6696,8 @@ def schedule_items(items, dur):
     return placed
 
 
-DRAW_LAYER = {"quote": 1, "action": 0, "explain": 0, "feature": 0, "verdict": 1, "stat": 1, "person": 2, "name": 2, "place": 2, "year": 3, "bubble": 3, "note": 4, "srclist": 4}
+DRAW_LAYER = {"quote": 1, "action": 0, "explain": 0, "feature": 0, "verdict": 1, "stat": 1, "person": 2, "name": 2, "place": 2, "year": 3, "bubble": 3, "note": 4, "srclist": 4,
+              "lens": 0, "beforeafter": 0, "measure": 1, "qmark": 1, "mark": 1, "compare": 2, "chart": 2, "tline": 3, "hl": 3}
 
 
 # ---- year: always at the bottom (slider with ticks when the year is known, else a pill)
@@ -6296,436 +7252,6 @@ Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
     return n_add
 
 
-# =========================================================================== V7: art-explainer scenes, 4-style thumbnails, article-first source hints
-STYLE_ART = ("minimal vintage technical line drawing of ONE subject, thin black ink lines with a few red accent lines, hand-drawn engraving style, "
-             "centered with lots of empty space, plain cream parchment background, no text, no letters, no watermark")
-ART_MAX = [int(os.environ.get("MAX_ART", "4" if TEST_SEC else "14"))]
-_ART_BG = {}
-
-
-def art_ink(path, theme):
-    """Keep ONLY the drawn lines of a generated line-art picture (the paper colour is removed); returns (ink RGBA, glow alpha or None)."""
-    np = _np()
-    im = Image.open(path).convert("RGB")
-    im = ImageOps.fit(im, (1280, 720), Image.LANCZOS)
-    arr = np.asarray(im, dtype=np.float32)
-    ring = np.concatenate([arr[:8].reshape(-1, 3), arr[-8:].reshape(-1, 3), arr[:, :8].reshape(-1, 3), arr[:, -8:].reshape(-1, 3)])
-    paper = np.median(ring, axis=0)
-    pl = float(paper @ np.array([0.299, 0.587, 0.114])) or 200.0
-    lum = arr @ np.array([0.299, 0.587, 0.114], dtype=np.float32)
-    a = np.clip((pl - lum) / (pl * 0.55), 0, 1) ** 0.85
-    yy, xx = np.mgrid[0:720, 0:1280].astype(np.float32)
-    edge = np.clip(np.minimum(np.minimum(xx, 1279 - xx), np.minimum(yy, 719 - yy)) / 60.0, 0, 1)
-    a = a * edge  # no hard border where the generator's paper ended
-    if theme == "dark":
-        rgb = np.stack([np.full_like(a, 255), np.full_like(a, 232), np.full_like(a, 170)], axis=2)
-    else:
-        rgb = np.clip(arr * 0.85, 0, 255)  # keep the ink (and its red accents) as drawn
-    ink = Image.fromarray(np.dstack([rgb, a * 255]).astype(np.uint8), "RGBA")
-    glow = Image.fromarray((a * 255).astype(np.uint8), "L").filter(ImageFilter.GaussianBlur(14)) if theme == "dark" else None
-    return ink, glow
-
-
-def art_bg(theme):
-    if theme in _ART_BG:
-        return _ART_BG[theme]
-    np = _np()
-    if theme == "dark":
-        g = Image.linear_gradient("L").resize((W, H))
-        bg = Image.composite(Image.new("RGB", (W, H), (5, 8, 18)), Image.new("RGB", (W, H), (14, 20, 40)), g)
-        rng = np.random.RandomState(4)
-        d = ImageDraw.Draw(bg)
-        for _ in range(70):
-            x, y = int(rng.rand() * W), int(rng.rand() * H)
-            d.ellipse([x, y, x + 2, y + 2], fill=(120, 130, 160))
-    else:
-        bg = _paper(W, H, base=(232, 217, 186), seed=11, grain=6).convert("RGB")
-    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-    v = 1 - 0.55 * np.clip((np.hypot((xx - W / 2) / (W * 0.62), (yy - H / 2) / (H * 0.66)) - 0.55) / 0.55, 0, 1)
-    arr = np.asarray(bg, dtype=np.float32) * v[..., None]
-    _ART_BG[theme] = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
-    return _ART_BG[theme]
-
-
-def make_art_draw(sc, dur, speech_dur, pal, events):
-    """Reference style: parchment or dark page, big serif words that land one by one with the narrator, a line illustration that is DRAWN onto the page,
-    a small year / topic tag bottom-left and a thin progress line at the bottom."""
-    theme = sc.get("theme") or "parch"
-    dark = theme == "dark"
-    ink, glow = (None, None)
-    if sc.get("art_img"):
-        try:
-            ink, glow = art_ink(sc["art_img"], theme)
-        except Exception as e:  # noqa
-            log("art ink failed:", str(e)[:80])
-    base_c, acc_c = ((245, 240, 228), (255, 206, 90)) if dark else ((34, 26, 20), (176, 28, 32))
-    words = sc["narration_hi"].split()
-    wt = sc.get("wt") if sc.get("wt") and len(sc["wt"]) == len(words) else None
-    tw = sc.get("title_words") or []
-    if not tw:
-        tw = [{"w": 0, "hi": " ".join(words[:3]), "accent": False}]
-    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
-    side = "left" if sc.get("art_side", "right") == "right" else "right"  # text on the side away from the drawing
-    col_w = int(W * (0.40 if ink is not None else 0.8))
-    f = font_for("".join(x["hi"] for x in tw), 92, "display")
-    # lay the words out once; each lands at its own time
-    pos, x, y, lh = [], 0, 0, int(92 * 1.28)
-    sp = probe.textlength(" ", font=f)
-    for it in tw:
-        ww = probe.textlength(it["hi"], font=f)
-        if x and x + ww > col_w:
-            x, y = 0, y + lh
-        pos.append((x, y, ww))
-        x += ww + sp * 1.2
-    th = y + lh
-    x0 = int(W * 0.07) if side == "left" else int(W * 0.93 - col_w)
-    y0 = int(H * 0.5 - th / 2)
-    layers = []
-    for it in tw:
-        c = acc_c if it.get("accent") else base_c
-        layers.append(text_layer(it["hi"], f, fill=c, stroke=0, shadow=(0, 3, 6, 0.35 if not dark else 0.8)))
-    tags = font_for("A", 24, "cond")
-    hud = _ascii(sc.get("hud") or "").upper()[:26]
-    tl_ = _ascii(sc.get("hud_top") or "").upper()[:34]
-
-    np = _np()
-    a_np = np.asarray(ink.getchannel("A"), dtype=np.float32) if ink is not None else None
-    g_np = np.asarray(glow, dtype=np.float32) if glow is not None else None
-
-    def draw(t):
-        fr = art_bg(theme).copy()
-        p_all = cl(t / max(0.1, dur))
-        if ink is not None:
-            prog = e_out(cl((t - 0.3) / 1.9))
-            if prog > 0:
-                w_, h_ = ink.size
-                s_ = min(0.93, 0.74 * H / h_)
-                xs = np.arange(w_, dtype=np.float32)
-                edge = np.clip((prog * (w_ + 160) - xs) / 160.0, 0, 1)[None, :]  # a soft sweep: the lines are drawn from left to right
-                spr = ink.copy()
-                spr.putalpha(Image.fromarray((a_np * edge).astype(np.uint8), "L"))
-                cx, cy = W * (0.73 if side == "left" else 0.27), H * 0.5 + 8 * math.sin(t * 1.3)
-                if g_np is not None:
-                    gl = Image.new("RGBA", glow.size, (255, 190, 80, 255))
-                    gl.putalpha(Image.fromarray((g_np * edge * (0.6 + 0.25 * math.sin(t * 2.0))).astype(np.uint8), "L"))
-                    put(fr, gl, cx, cy, s_, 0.9)
-                put(fr, spr, cx, cy, s_, 1.0)
-        for k, (it, (px, py, ww)) in enumerate(zip(tw, pos)):
-            tk = wt[min(len(wt) - 1, it["w"])][0] - 0.05 if wt else 0.4 + k * 0.5
-            q = e_out(cl((t - tk) / 0.3))
-            if q <= 0:
-                continue
-            lay = layers[k] if q >= 0.99 else _scaled_alpha(layers[k], q)
-            fr.paste(lay, (int(x0 + px), int(y0 + py + (1 - q) * 22)), lay)
-        d = ImageDraw.Draw(fr, "RGBA")
-        bx0, bx1, by = int(W * 0.07), int(W * 0.93), H - 46
-        d.line([(bx0, by), (bx1, by)], fill=base_c + (90,), width=2)
-        d.line([(bx0, by), (bx0 + (bx1 - bx0) * p_all, by)], fill=acc_c + (255,), width=3)
-        for k in range(11):
-            xx = bx0 + (bx1 - bx0) * k / 10
-            d.line([(xx, by - 5), (xx, by + 5)], fill=base_c + (110,), width=1)
-        if hud:
-            d.text((bx0, by - 20), hud, font=tags, fill=acc_c + (255,), anchor="ls")
-        if tl_:
-            d.text((bx1, 40), tl_, font=font_for("A", 19, "cond"), fill=base_c + (140,), anchor="rs")
-        z = 1 + 0.035 * p_all
-        return fr.resize((W, H), Image.BICUBIC, box=((W - W / z) / 2, (H - H / z) / 2, (W + W / z) / 2, (H + H / z) / 2))
-    return draw
-
-
-def _scaled_alpha(lay, q):
-    out = lay.copy()
-    out.putalpha(lay.getchannel("A").point(lambda v: int(v * q)))
-    return out
-
-
-def art_pass(scenes, topic=""):
-    """Turns about every 5th picture scene (ideas, mechanisms, history beats, sizes, time) into an animated line-art explainer page like the reference."""
-    ph = [(i, sc) for i, sc in enumerate(scenes) if i > 0 and sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split()) and len(sc["wt"]) >= 8]
-    if not ph or not GEMINI_KEY:
-        return 0
-    cap = max(2, int(len(ph) * (0.12 if STORY_CTX["on"] else 0.25)))
-    cap = min(cap, ART_MAX[0])
-    listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in ph[:40])
-    prompt = f"""Documentary editor, topic: {topic}. Pick up to {cap} scenes that are BEST explained by an animated line-art explainer page (a big serif sentence landing word by word + a thin ink drawing of ONE object drawn on parchment).
-Good: an idea or mechanism, a historic beat or invention, a size / time / distance comparison, a definition. Bad: real people's emotions, a family scene, a named place that real photos show better.
-For each chosen scene return: "art_en": ONE concrete object to draw (e.g. "Greek temple with columns", "steam engine", "light bulb", "globe with orbit lines", "telescope"); "theme": "parch" (history, science, old things) or "dark" (space, night, energy, future); "hud": a short tag for the bottom-left corner (a year like "AD 1969" or a topic word, English caps); "title": 2-4 chunks of 1-3 Hindi words copied from the narration in order, each with "w" = number of the narration word it starts at and "accent": true for the ONE key chunk.
-Return ONLY JSON: {{"art":[{{"i":3,"art_en":"...","theme":"parch","hud":"AD 1969","title":[{{"w":0,"hi":"...","accent":false}}]}}]}}
-{listing}"""
-    n = 0
-    try:
-        out = gemini_json_opt(prompt, 0.3)
-    except Exception as e:  # noqa
-        log("art pass failed:", str(e)[:100])
-        return 0
-    for r in (out.get("art") or []):
-        try:
-            i = int(r.get("i"))
-        except Exception:  # noqa
-            continue
-        sc = next((x for j, x in ph if j == i), None)
-        art = clean_short(r.get("art_en"), 60)
-        tws = []
-        nwd = len(sc["narration_hi"].split()) if sc else 0
-        for t_ in (r.get("title") or [])[:5]:
-            try:
-                w = int(t_.get("w"))
-            except Exception:  # noqa
-                continue
-            hi = clean_short(t_.get("hi"), 28)
-            if hi and 0 <= w < nwd and (not tws or w > tws[-1]["w"]):
-                tws.append({"w": w, "hi": hi, "accent": bool(t_.get("accent"))})
-        if sc is None or not art or not art.isascii() or len(tws) < 2 or n >= cap:
-            continue
-        sc.update({"type": "art", "art_en": art, "theme": "dark" if r.get("theme") == "dark" else "parch", "hud": clean_short(r.get("hud"), 28),
-                   "hud_top": (topic or "")[:34], "title_words": tws, "art_side": random.choice(["right", "right", "left"])})
-        n += 1
-    log("art explainer scenes:", n)
-    return n
-
-
-def art_image(sc, out):
-    """The ink drawing for an art scene (Cloudflare); None keeps the page as pure kinetic typography."""
-    if ART_MAX[0] <= 0:
-        return None
-    ART_MAX[0] -= 1
-    try:
-        if gen_image(f"{sc['art_en']}, " + STYLE_ART, Path(out), "art", query=sc["art_en"], ai_only=True):
-            return str(out)
-    except Exception as e:  # noqa
-        log("art image failed:", type(e).__name__, str(e)[:80])
-    return None
-
-
-# ---------------------------------------------------------------- article-first script: the paragraphs behind each scene become its source card
-def source_material(max_chars=9000):
-    if not SRC_PARAS:
-        return ""
-    rows, tot = [], 0
-    seen = {}
-    for k, v in SRC_PARAS.items():
-        if seen.get(v["title"], 0) >= 4:
-            continue
-        seen[v["title"]] = seen.get(v["title"], 0) + 1
-        line = f'[{k}] ({v["title"][:50]}) {v["text"][:420]}'
-        tot += len(line)
-        if tot > max_chars:
-            break
-        rows.append(line)
-    return ("\nSOURCE MATERIAL (real article paragraphs, English). Base the facts of the script on THIS material: keep its names, numbers, places and order exactly, "
-            "and decorate the telling beautifully (hook, suspense, simple analogies). For every scene that states a fact from a paragraph add "
-            '"src": [{"id": "<paragraph id>", "mark_en": "3-8 words copied EXACTLY from that paragraph"}] (at most 2; omit when the scene uses no paragraph). '
-            "Do not invent facts that are not in the material or the research above.\n" + "\n".join(rows))
-
-
-def clean_src_hints(script):
-    for sc in script.get("scenes", []):
-        out = []
-        for h in (sc.get("src") or []):
-            if isinstance(h, dict) and str(h.get("id")) in SRC_PARAS:
-                p = SRC_PARAS[str(h["id"])]
-                mk = clean_short(h.get("mark_en"), 70)
-                out.append({"id": str(h["id"]), "mark_en": mk if mk and mk.lower() in p["text"].lower() else ""})
-        sc["src"] = out[:2]
-    return script
-
-
-def notes_from_hints(scenes):
-    """The paragraph the script was written from is the card shown while the narrator says it (same text, so the card never contradicts the story)."""
-    n = 0
-    for sc in scenes:
-        if sc.get("type") != "photo" or not sc.get("src"):
-            continue
-        words = sc["narration_hi"].split()
-        if len(words) < 6:
-            continue
-        have = sc.setdefault("items", [])
-        for k, h in enumerate(sc["src"][:1]):
-            p = SRC_PARAS.get(h["id"])
-            if not p or any(isinstance(x, dict) and x.get("kind") == "note" for x in have):
-                continue
-            mk = h.get("mark_en") or auto_mark(p["text"])
-            have.append({"w": max(0, min(len(words) - 1, int(len(words) * 0.18))), "kind": "note", "text": p["text"], "mark": mk,
-                         "sub": p["title"].replace("|", "-")[:70], "dom": ""})
-            n += 1
-    log("source cards from the script's own articles:", n)
-    return n
-
-
-# ---------------------------------------------------------------- thumbnails: 4 styles (banner + zoom circle, big glow title, side stack, documentary label)
-THUMB_STYLES = ["banner_zoom", "title_glow", "side_stack", "doc_label"]
-TW_, TH_ = 1920, 1080
-
-
-def thumb_plan(script, topic, story=""):
-    f = STATE / "thumb_recent.json"
-    try:
-        recent = json.loads(f.read_text()) if f.exists() else []
-    except Exception:  # noqa
-        recent = []
-    plan = None
-    if GEMINI_KEY:
-        try:
-            plan = gemini_json(f"""You design YouTube thumbnails for a Hindi story / science channel. Story: "{script.get('title_hi') or topic}" (topic: {topic}).
-First scene: {script['scenes'][0]['narration_hi'][:260]}
-{(story or '')[:600]}
-Choose ONE style that suits THIS story (do not use {recent[-2:]} again):
-- banner_zoom: yellow banner on top with a short Hindi hook (one word in red), full-frame hero picture and a round zoom inset of one scary / interesting detail with a pointer line. For mysteries, creatures, secrets.
-- title_glow: giant white Hindi title at the top over a dramatic hero picture. For origins, big science questions.
-- side_stack: hero on the left, 2-3 stacked big Hindi lines on the right (first line yellow) and a small English time / place caption. For history, disasters, events.
-- doc_label: subject on the left, a small English label + big yellow title on the right and a green corner banner bottom-left ("FULL DOCUMENTARY" or similar). For nature, places, documentaries.
-Return ONLY JSON: {{"style":"...","hero_prompt_en":"ONE clear photo of the main subject of the story, dramatic light, no text, 30-45 words, culture-correct","hero_query_en":"2-4 words","inset_prompt_en":"banner_zoom only: close-up of one detail of the subject","text_lines_hi":["1-2 Hindi words","1-2 Hindi words"],"accent_index":0,"kicker_en":"max 4 words English caption or empty","label_en":"max 2 words for the corner banner or empty"}}
-The Hindi text must be at most 5 words in total, gripping, no digits.""", 0.7)
-        except Exception as e:  # noqa
-            log("thumbnail plan failed:", str(e)[:100])
-    if not isinstance(plan, dict) or plan.get("style") not in THUMB_STYLES:
-        plan = {"style": random.choice([s for s in THUMB_STYLES if s not in recent[-2:]] or THUMB_STYLES), "hero_prompt_en": "", "hero_query_en": topic,
-                "text_lines_hi": [(script.get("thumb_text_hi") or script.get("title_hi") or topic)[:30]], "accent_index": 0, "kicker_en": "", "label_en": ""}
-    lines = [clean_short(x, 22) for x in (plan.get("text_lines_hi") or []) if clean_short(x, 22)][:3] or [script.get("title_hi") or topic]
-    plan["text_lines_hi"] = lines
-    try:
-        STATE.mkdir(parents=True, exist_ok=True)
-        f.write_text(json.dumps((recent + [plan["style"]])[-6:]))
-    except Exception:  # noqa
-        pass
-    return plan
-
-
-def _tl(text, size, fill, stroke=None, role="thumb", glow=None):
-    """stroke=None: automatic outline; stroke=0: plain text (for the yellow banner)."""
-    if stroke is None:
-        stroke = max(3, size // 16)
-    lay = text_layer(text, font_for(text, size, role), fill=fill, stroke=stroke, stroke_fill=(0, 0, 0),
-                     shadow=(0, max(4, size // 18), max(6, size // 12), 0.85) if stroke else None)
-    return lay
-
-
-def render_thumb(plan, hero, inset, out):
-    np = _np()
-    base = hero.convert("RGB")
-    cx, cy0 = subject_center(base)
-    sc_ = max(TW_ / base.width, TH_ / base.height)
-    base = base.resize((max(TW_, int(base.width * sc_ + .5)), max(TH_, int(base.height * sc_ + .5))), Image.LANCZOS)
-    left = int(min(base.width - TW_, max(0, cx * base.width - TW_ / 2)))
-    top = (base.height - TH_) // 2
-    cx_pix, cy_pix = cx * base.width - left, cy0 * base.height - top
-    pic = base.crop((left, top, left + TW_, top + TH_))
-    pic = ImageEnhance.Contrast(ImageEnhance.Color(ImageOps.autocontrast(pic, cutoff=0.5)).enhance(1.15)).enhance(1.1)
-    cv = pic.filter(ImageFilter.UnsharpMask(radius=2, percent=70, threshold=3)).convert("RGBA")
-    style, lines, ai = plan["style"], plan["text_lines_hi"], int(plan.get("accent_index") or 0)
-    kick, label = _ascii(plan.get("kicker_en") or "").upper(), _ascii(plan.get("label_en") or "").upper()
-    if style == "banner_zoom":
-        bh = 150
-        ban = Image.new("RGBA", (TW_, bh), (255, 226, 0, 255))
-        parts = [(_tl(t, 108, (205, 18, 22) if k == ai else (22, 20, 20), 0), t) for k, t in enumerate(lines)]
-        tot = sum(l.width for l, _ in parts) + 36 * (len(parts) - 1)
-        s = min(1.0, (TW_ - 80) / max(1, tot))
-        x = (TW_ - tot * s) / 2
-        for l, _t in parts:
-            l2 = l.resize((int(l.width * s), int(l.height * s)), Image.LANCZOS) if s < 1 else l
-            ban.alpha_composite(l2, (int(x), (bh - l2.height) // 2))
-            x += l2.width + 36 * s
-        cv.alpha_composite(ban, (0, 0))
-        src = (inset or hero).convert("RGB")
-        d_ = 560
-        sx, sy = subject_center(src)
-        r = int(min(src.width, src.height) * 0.30)
-        crop = src.crop((int(sx * src.width - r), int(sy * src.height - r * 0.8), int(sx * src.width + r), int(sy * src.height + r * 1.2)))
-        circ = ImageOps.fit(crop, (d_, d_), Image.LANCZOS).convert("RGBA")
-        circ.putalpha(rounded_mask((d_, d_), d_ // 2))
-        ring = Image.new("RGBA", (d_ + 24, d_ + 24), (0, 0, 0, 0))
-        ImageDraw.Draw(ring).ellipse([0, 0, d_ + 23, d_ + 23], fill=(255, 255, 255, 255))
-        ccx, ccy = int(TW_ * 0.76), int(TH_ * 0.55)
-        sh = ring.filter(ImageFilter.GaussianBlur(14))
-        sh.putalpha(sh.getchannel("A").point(lambda v: int(v * 0.6)))
-        cv.alpha_composite(sh, (ccx - d_ // 2 - 12 + 8, ccy - d_ // 2 - 12 + 12))
-        cv.alpha_composite(ring, (ccx - d_ // 2 - 12, ccy - d_ // 2 - 12))
-        cv.alpha_composite(circ, (ccx - d_ // 2, ccy - d_ // 2))
-        px, py = int(min(TW_ - 40, max(40, cx_pix))), int(min(TH_ - 40, max(200, cy_pix)))
-        dr = ImageDraw.Draw(cv)
-        dr.line([(px, py), (ccx - d_ // 2 - 14, ccy - 40)], fill=(255, 255, 255, 255), width=8)
-        dr.ellipse([px - 14, py - 14, px + 14, py + 14], fill=(0, 0, 0, 0), outline=(255, 255, 255, 255), width=8)
-    elif style == "title_glow":
-        vg = Image.linear_gradient("L").resize((TW_, TH_)).point(lambda v: int(max(0, 150 - v * 0.9)))
-        sh_ = Image.new("RGBA", (TW_, TH_), (0, 0, 0, 255))
-        sh_.putalpha(vg)
-        cv.alpha_composite(sh_)
-        y = 70
-        for k, t in enumerate(lines[:2]):
-            lay = _tl(t, 190, (255, 255, 255) if k != ai else (255, 224, 70))
-            big = Image.new("L", (lay.width + 120, lay.height + 120), 0)
-            big.paste(lay.getchannel("A"), (60, 60))
-            g = big.filter(ImageFilter.GaussianBlur(26)).point(lambda v: int(v * 0.7))
-            gl = Image.new("RGBA", big.size, (255, 190, 90, 255))
-            gl.putalpha(g)
-            xx = (TW_ - lay.width) // 2
-            cv.alpha_composite(gl, (max(0, xx - 60), max(0, y - 60)))
-            cv.alpha_composite(lay, (xx, y))
-            y += lay.height - 20
-    elif style == "side_stack":
-        gr = Image.linear_gradient("L").resize((TH_, TW_)).rotate(90, expand=True).resize((TW_, TH_))
-        pn = Image.new("RGBA", (TW_, TH_), (6, 6, 12, 255))
-        pn.putalpha(gr.point(lambda v: int(min(235, max(0, (v - 90) * 1.7)))))
-        cv.alpha_composite(pn)
-        y, x = 150, int(TW_ * 0.56)
-        for k, t in enumerate(lines[:3]):
-            lay = _tl(t, 210 if k == 0 else 190, (255, 205, 20) if k == ai else (255, 255, 255))
-            if lay.width > TW_ - x - 40:
-                lay = lay.resize((TW_ - x - 40, int(lay.height * (TW_ - x - 40) / lay.width)), Image.LANCZOS)
-            cv.alpha_composite(lay, (x, y))
-            y += lay.height - 14
-        if kick:
-            k_ = _tl(kick, 64, (255, 255, 255), None, "cond")
-            cv.alpha_composite(k_, (x + 6, min(TH_ - k_.height - 40, y + 18)))
-    else:  # doc_label
-        blur = cv.convert("RGB").resize((TW_ // 8, TH_ // 8)).filter(ImageFilter.GaussianBlur(3)).resize((TW_, TH_), Image.BICUBIC)
-        dark = Image.blend(blur, Image.new("RGB", (TW_, TH_), (10, 14, 10)), 0.55).convert("RGBA")
-        m = Image.new("L", (TW_, TH_), 0)
-        ImageDraw.Draw(m).polygon([(0, 0), (int(TW_ * 0.60), 0), (int(TW_ * 0.50), TH_), (0, TH_)], fill=255)
-        cv = Image.composite(cv, dark, m.filter(ImageFilter.GaussianBlur(2)))
-        x, y = int(TW_ * 0.60), 250
-        if kick:
-            k_ = _tl(kick, 60, (20, 20, 20), 0, "cond")
-            tag = Image.new("RGBA", (k_.width + 70, k_.height + 24), (255, 255, 255, 255))
-            tag.alpha_composite(k_, (35, 12))
-            cv.alpha_composite(tag, (x + 40, y - 120))
-        for k, t in enumerate(lines[:3]):
-            lay = _tl(t, 200, (255, 205, 20) if k == ai else (255, 255, 255))
-            if lay.width > TW_ - x - 50:
-                lay = lay.resize((TW_ - x - 50, int(lay.height * (TW_ - x - 50) / lay.width)), Image.LANCZOS)
-            cv.alpha_composite(lay, (x, y))
-            y += lay.height - 10
-        gp = Image.new("RGBA", (TW_, TH_), (0, 0, 0, 0))
-        ImageDraw.Draw(gp).polygon([(0, int(TH_ * 0.70)), (int(TW_ * 0.60), TH_), (0, TH_)], fill=(36, 160, 62, 255))
-        cv.alpha_composite(gp)
-        lw = (label or "FULL DOCUMENTARY").split()
-        l1, l2 = (" ".join(lw[:1]), " ".join(lw[1:])) if len(lw) > 1 else (label or "FULL DOCUMENTARY", "")
-        y_ = TH_ - 30
-        for t_ in ([l2, l1] if l2 else [l1]):
-            lay = _tl(t_, 150, (255, 255, 255), 0, "cond")
-            y_ -= lay.height - 20
-            cv.alpha_composite(lay, (36, y_))
-    cv.convert("RGB").save(out, "JPEG", quality=93)
-
-
-def make_thumb_v2(script, topic, story, imgdir, out, fallback_hero):
-    plan = thumb_plan(script, topic, story)
-    hero = inset = None
-    if plan.get("hero_prompt_en"):
-        hp = imgdir / "thumb_hero.png"
-        if gen_image(plan["hero_prompt_en"], hp, "thumb", query=plan.get("hero_query_en") or topic, ai_only=True):
-            hero = Image.open(hp).convert("RGB")
-        if plan["style"] == "banner_zoom" and plan.get("inset_prompt_en"):
-            ip = imgdir / "thumb_inset.png"
-            if gen_image(plan["inset_prompt_en"], ip, "thumb", query=plan.get("hero_query_en") or topic, ai_only=True):
-                inset = Image.open(ip).convert("RGB")
-    if hero is None:
-        hero = Image.open(fallback_hero).convert("RGB")
-    render_thumb(plan, hero, inset, out)
-    log("thumbnail style:", plan["style"], "| text:", " / ".join(plan["text_lines_hi"]))
-    return plan
-
-
 def draw_popup(fr, sh, tl):
     sp = sh.get("popup")
     if sp is None:
@@ -6852,7 +7378,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     if sc.get("items") and wt_:
         rr = ctx["rnd"]
         for k_, it in enumerate(sc["items"]):
-            if it["kind"] not in ITEM_KINDS or (it["kind"] in ("explain", "action", "feature") and it.get("png_img") is None):
+            if it["kind"] not in ITEM_KINDS or (it["kind"] in ("explain", "action", "feature") and it.get("png_img") is None) or (it["kind"] == "beforeafter" and it.get("img2") is None):
                 continue
             w_ = min(it["w"], len(wt_) - 1)
             t0_ = max(0.1, wt_[w_][0] - 0.08)
@@ -6865,7 +7391,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
         items.sort(key=lambda x: DRAW_LAYER.get(x["it"]["kind"], 2))  # pictures under, text cards on top
         for x_ in items:
             x_["ps"]["dur"] = max(0.4, x_["t1"] - x_["t0"])
-            if x_["it"]["kind"] in ("verdict", "explain", "person", "stat", "action", "feature", "name"):
+            if x_["it"]["kind"] in ("verdict", "explain", "person", "stat", "action", "feature", "name", "qmark", "compare", "chart", "hl"):
                 events.append((x_["t0"], "pop", 0.6))
 
     def draw(t):
@@ -6892,6 +7418,15 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             fr.paste(Image.blend(fr, Image.new("RGB", fr.size, pu), 0.34 * (1 - tl / 0.55) ** 1.5))
         draw_popup(fr, sh, tl)
         draw_ov(fr, sh, tl, pal)
+        cg_ = [x_ for x_ in items if x_["it"]["kind"] in COLLAGE_KINDS and x_["t0"] <= t < x_["t1"]]
+        if cg_:  # Vox look: the picture becomes a taped photo on coloured paper while a chart / timeline / highlight is explained
+            try:
+                tt_, du_ = t - cg_[0]["t0"], cg_[0]["t1"] - cg_[0]["t0"]
+                fr = vox_collage(fr, min(cl(tt_ / 0.5), 1 - cl((tt_ - (du_ - 0.45)) / 0.4)), cg_[0]["it"].get("ci", 0), cg_[0]["it"]["kind"])
+            except Exception as e_:  # noqa
+                if not _VX.get("err_collage"):
+                    _VX["err_collage"] = 1
+                    log("vox collage failed once:", type(e_).__name__, str(e_)[:100])
         for x_ in items:
             if x_["t0"] <= t < x_["t1"]:
                 ov_ = x_["ps"].get("ov")
@@ -8100,8 +8635,302 @@ def make_layers_draw(sc, dur, speech_dur, pal, events):
 
 
 
+# --------------------------------------------------------------------------- SKETCH scenes: animated line-art diagrams that EXPLAIN (parchment / dark paper, drawn on stroke by stroke)
+SK_WU, SK_HU = 100.0, 56.25
+SK_THEMES = {
+    "paper": {"top": (236, 224, 200), "bot": (214, 196, 160), "ink": (58, 40, 28), "accent": (188, 34, 34), "soft": (226, 205, 168), "rays": (170, 140, 100), "dark": False},
+    "dark": {"top": (9, 11, 22), "bot": (20, 24, 44), "ink": (240, 204, 124), "accent": (255, 122, 52), "soft": (60, 54, 40), "rays": (120, 100, 60), "dark": True},
+}
+
+
+def sk_theme(sc):
+    dark = sc.get("tone") == "suspense" or sc.get("grade") in ("dark", "dread", "bwred", "redwash")
+    return SK_THEMES["dark" if dark else "paper"]
+
+
+def sk_bg(th):
+    key = ("skbg", th["dark"])
+    if key in _C:
+        return _C[key]
+    np = _np()
+    yy = np.linspace(0, 1, H, dtype=np.float32)[:, None, None]
+    top, bot = np.array(th["top"], dtype=np.float32), np.array(th["bot"], dtype=np.float32)
+    a = top * (1 - yy) + bot * yy
+    a = np.broadcast_to(a, (H, W, 3)).copy()
+    rng = np.random.default_rng(11)
+    blot = Image.fromarray((rng.random((9, 16)) * 255).astype(np.uint8)).resize((W, H), Image.BICUBIC)
+    a += ((np.asarray(blot, dtype=np.float32) / 255.0 - 0.5) * (17 if not th["dark"] else 10))[..., None]
+    a *= vig_mask() * (0.55 if th["dark"] else 0.32) + (0.45 if th["dark"] else 0.68)
+    img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).convert("RGBA")
+    rays = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    rd = ImageDraw.Draw(rays)
+    cx, cy = W * 0.70, H * 0.50
+    for k in range(36):
+        ang = k * math.pi / 18
+        rd.line([(cx, cy), (cx + math.cos(ang) * W, cy + math.sin(ang) * W)], fill=tuple(th["rays"]) + (26,), width=2)
+    img.alpha_composite(rays)
+    _C[key] = img.convert("RGB")
+    return _C[key]
+
+
+def sk_points(pr):
+    t = pr["t"]
+    if t in ("line", "arrow"):
+        pts = [tuple(p) for p in pr["p"]]
+        if t == "arrow" and len(pts) >= 2:
+            (x0, y0), (x1, y1) = pts[-2], pts[-1]
+            ang = math.atan2(y1 - y0, x1 - x0)
+            hl = 2.2
+            pts += [(x1 - hl * math.cos(ang - 0.45), y1 - hl * math.sin(ang - 0.45)), (x1, y1), (x1 - hl * math.cos(ang + 0.45), y1 - hl * math.sin(ang + 0.45))]
+        return pts
+    if t == "rect":
+        x0, y0, x1, y1 = pr["b"]
+        return [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
+    if t == "circle":
+        cx, cy = pr["c"]
+        r = pr["r"]
+        return [(cx + r * math.cos(2 * math.pi * k / 56), cy + r * math.sin(2 * math.pi * k / 56)) for k in range(57)]
+    if t == "arc":
+        cx, cy = pr["c"]
+        r, a0, a1 = pr["r"], math.radians(pr["a0"]), math.radians(pr["a1"])
+        n = max(8, int(abs(a1 - a0) / 0.12))
+        return [(cx + r * math.cos(a0 + (a1 - a0) * k / n), cy + r * math.sin(a0 + (a1 - a0) * k / n)) for k in range(n + 1)]
+    if t == "poly":
+        pts = [tuple(p) for p in pr["p"]]
+        return pts + pts[:1]
+    return []
+
+
+def clean_prims(raw):
+    """Gemini's drawing instructions -> safe, bounded list of strokes (coordinates clamped to the 100 x 56.25 canvas)."""
+    if isinstance(raw, dict):
+        raw = raw.get("strokes") or raw.get("shapes") or raw.get("items") or []
+    out = []
+
+    def num(v, lo, hi):
+        return max(lo, min(hi, float(v)))
+
+    def pt(p):
+        return [num(p[0], 0, SK_WU), num(p[1], 0, SK_HU)]
+
+    for pr in (raw or [])[:48]:
+        try:
+            t = str(pr.get("t") or "").lower()
+            col = pr.get("col") if pr.get("col") in ("ink", "accent") else "ink"
+            fill = pr.get("fill") if pr.get("fill") in ("ink", "accent", "soft") else ""
+            w = num(pr.get("w", 2), 1, 4)
+            if t in ("line", "arrow", "poly"):
+                pts = [pt(p) for p in pr.get("p", [])][:24]
+                if len(pts) >= 2:
+                    out.append({"t": t, "p": pts, "col": col, "w": w, "fill": fill if t == "poly" else ""})
+            elif t == "rect":
+                b = [num(v, 0, SK_WU) for v in pr.get("b", [])][:4]
+                if len(b) == 4 and b[2] > b[0] and b[3] > b[1]:
+                    out.append({"t": t, "b": b, "col": col, "w": w, "fill": fill})
+            elif t == "circle":
+                c = pt(pr.get("c"))
+                out.append({"t": t, "c": c, "r": num(pr.get("r"), 0.6, 30), "col": col, "w": w, "fill": fill})
+            elif t == "arc":
+                out.append({"t": t, "c": pt(pr.get("c")), "r": num(pr.get("r"), 0.6, 40), "a0": num(pr.get("a0", 0), -720, 720), "a1": num(pr.get("a1", 180), -720, 720), "col": col, "w": w, "fill": ""})
+            elif t == "text":
+                s_ = clean_short(pr.get("s"), 26)
+                if s_:
+                    out.append({"t": "text", "p": pt(pr.get("p")), "s": s_, "size": num(pr.get("size", 3), 1.8, 5), "col": col})
+        except Exception:  # noqa
+            continue
+    return out
+
+
+def sketch_prompt(sc, topic):
+    return f"""You are an illustrator for a premium explainer film. Draw ONE clear teaching diagram as animated line-art (like an engineer's sketch / museum diagram), to be drawn stroke by stroke while the narrator speaks.
+VIDEO TOPIC: {topic}
+WHAT TO DRAW: {sc.get('sketch_brief_en')}
+NARRATION (Hindi): {sc['narration_hi']}
+Canvas: x from 0 to 100, y from 0 to 56.25 (y grows downward). The LEFT 38 units are reserved for the headline text: draw ONLY inside x 40..97 and y 5..47 (the bottom strip is for the timeline).
+Return ONLY JSON: {{"strokes": [ ... ]}} with 16-34 strokes in the order they should be drawn (big shapes first, details next, labels last). Stroke types:
+ {{"t":"line","p":[[x,y],[x,y],...],"w":2,"col":"ink"}}   polyline (2-12 points)
+ {{"t":"arrow","p":[[x,y],[x,y]],"w":2,"col":"accent"}}   arrow showing movement / cause
+ {{"t":"circle","c":[x,y],"r":8,"w":2,"col":"ink","fill":"soft"}}   (fill optional: soft, ink or accent)
+ {{"t":"arc","c":[x,y],"r":10,"a0":0,"a1":180,"w":2,"col":"ink"}}   degrees
+ {{"t":"rect","b":[x0,y0,x1,y1],"w":2,"col":"ink","fill":"soft"}}
+ {{"t":"poly","p":[[x,y],...],"w":2,"col":"ink","fill":"soft"}}   closed shape
+ {{"t":"text","p":[x,y],"s":"short label","size":3,"col":"ink"}}   at most 4 labels, each at most 3 words, in simple Hindi (Devanagari) or a proper noun; p is the CENTRE of the label
+Rules: the drawing must show the exact idea of the narration (what collides with what, what flows where, which part is inside which); use "accent" colour only for the key moving / changing element and its arrow; use real proportions (a small moon next to a bigger planet), keep everything inside the allowed area, no overlapping labels, simple clean shapes a child understands."""
+
+
+def build_sketches(scenes, topic=""):
+    """Ask Gemini for the line drawing of every sketch scene; a scene whose drawing fails becomes an ordinary picture scene."""
+    n_ok = 0
+    for sc in scenes:
+        if sc.get("type") != "sketch":
+            continue
+        prims = None
+        if GEMINI_KEY:
+            try:
+                prims = clean_prims(gemini_json(sketch_prompt(sc, topic), 0.5))
+            except Exception as e:  # noqa
+                log("sketch drawing failed:", str(e)[:100])
+        if prims and len(prims) >= 6:
+            sc["strokes"] = prims
+            n_ok += 1
+            continue
+        sc["type"] = "photo"
+        sc["shots"] = [{"text_hi": sc["narration_hi"], "prompt_en": clean_short(sc.get("sketch_brief_en"), 300) or "a dramatic wide nature scene", "label_hi": "",
+                        "query_en": "", "entity_en": "", "motion": False, "clip_en": "", "popup_en": "", "ov": None, "fx": None, "fy": None}]
+    log(f"sketch scenes drawn: {n_ok}")
+
+
+def _sk_stroke_mask(pts, w_px, frac, bbox):
+    """Anti-aliased mask (drawn at 2x) of the first `frac` of a polyline; returns (mask_L_1x, (x0, y0))."""
+    x0, y0, x1, y1 = bbox
+    mw, mh = max(2, x1 - x0), max(2, y1 - y0)
+    big = Image.new("L", (mw * 2, mh * 2), 0)
+    d = ImageDraw.Draw(big)
+    segs, tot = [], 0.0
+    for a, b in zip(pts, pts[1:]):
+        l = math.hypot(b[0] - a[0], b[1] - a[1])
+        segs.append((a, b, l))
+        tot += l
+    target, acc, drawn = tot * frac, 0.0, [pts[0]]
+    for a, b, l in segs:
+        if acc + l <= target:
+            drawn.append(b)
+            acc += l
+        else:
+            r = (target - acc) / max(l, 1e-6)
+            drawn.append((a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r))
+            break
+    pp = [((x - x0) * 2, (y - y0) * 2) for x, y in drawn]
+    if len(pp) >= 2:
+        d.line(pp, fill=255, width=int(w_px * 2), joint="curve")
+        r_ = w_px
+        for x, y in (pp[0], pp[-1]):
+            d.ellipse([x - r_, y - r_, x + r_, y + r_], fill=255)
+    return big.resize((mw, mh), Image.LANCZOS), (x0, y0), drawn[-1]
+
+
+def make_sketch_draw(sc, dur, sp, pal, events):
+    th = sk_theme(sc)
+    ux, uy = W / SK_WU, H / SK_HU
+    strokes = sc["strokes"]
+    # timing: strokes are drawn one after another (longer strokes take longer); labels fade in when reached
+    t_a, t_b = 0.35, max(1.5, min(dur - 0.8, sp * 0.86))
+    lens = []
+    for pr in strokes:
+        if pr["t"] == "text":
+            lens.append(6.0)
+        else:
+            pts = sk_points(pr)
+            lens.append(max(4.0, sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))))
+    tot = sum(lens)
+    plan, acc = [], 0.0
+    for pr, l in zip(strokes, lens):
+        s0 = t_a + (t_b - t_a) * acc / tot
+        acc += l
+        plan.append((s0, t_a + (t_b - t_a) * acc / tot))
+    px = []
+    for pr in strokes:
+        if pr["t"] == "text":
+            px.append(None)
+            continue
+        pts = [(x * ux, y * uy) for x, y in sk_points(pr)]
+        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
+        wpx = pr["w"] * 1.5
+        bb = (max(0, int(min(xs) - wpx - 6)), max(0, int(min(ys) - wpx - 6)), min(W, int(max(xs) + wpx + 6)), min(H, int(max(ys) + wpx + 6)))
+        px.append((pts, wpx, bb))
+    ink, acc_c, soft = tuple(th["ink"]), tuple(th["accent"]), tuple(th["soft"])
+    cols = {"ink": ink, "accent": acc_c, "soft": soft}
+    # headline: words appear one by one at the left, like kinetic type
+    hw = (sc.get("headline_hi") or "").split()
+    big_f = load_font(64, "head")
+    head_sp = []
+    for k in range(1, len(hw) + 1):
+        head_sp.append(text_layer(" ".join(hw[:k]), big_f, fill=ink, max_w=int(W * 0.34), align="left", stroke=0,
+                                  shadow=None if not th["dark"] else (0, 3, 6, 0.7)))
+    h_t = [0.25 + (max(0.8, sp * 0.5)) * k / max(1, len(hw)) for k in range(len(hw))]
+    year = (sc.get("year_hi") or "").strip()
+    year_sp = text_layer(year, load_font(30, "title"), fill=ink, stroke=0) if year else None
+    label_sp = {}
+    for i, pr in enumerate(strokes):
+        if pr["t"] == "text":
+            label_sp[i] = text_layer(pr["s"], load_font(int(pr["size"] * 12), "sub"), fill=cols[pr["col"]], stroke=2 if th["dark"] else 0, stroke_fill=(0, 0, 0))
+    state = {"k": 0, "layer": Image.new("RGBA", (W, H), (0, 0, 0, 0))}
+
+    def commit(i):
+        pr = strokes[i]
+        if pr["t"] == "text":
+            return
+        pts, wpx, bb = px[i]
+        if pr.get("fill") and pr["t"] in ("poly", "rect", "circle"):
+            fl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            fd = ImageDraw.Draw(fl)
+            c_ = cols[pr["fill"]] + (255 if pr["fill"] != "soft" else 235,)
+            if pr["t"] == "circle":
+                fd.polygon(pts, fill=c_)
+            else:
+                fd.polygon(pts, fill=c_)
+            state["layer"].alpha_composite(fl.crop(bb), (bb[0], bb[1]))
+        m, (x0, y0), _tip = _sk_stroke_mask(pts, wpx, 1.0, bb)
+        col = Image.new("RGBA", m.size, cols[pr["col"]] + (255,))
+        col.putalpha(m)
+        state["layer"].alpha_composite(col, (x0, y0))
+
+    def draw(t):
+        fr = sk_bg(th).copy()
+        done = sum(1 for (a, b) in plan if b <= t)
+        if done < state["k"]:
+            state["k"], state["layer"] = 0, Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        while state["k"] < done:
+            commit(state["k"])
+            state["k"] += 1
+        # ground shadow so the drawing lifts off the paper
+        fr.paste(state["layer"], (0, 0), state["layer"])
+        tip = None
+        for i, (a, b) in enumerate(plan):
+            if a <= t < b and strokes[i]["t"] != "text":
+                frac = e_io(cl((t - a) / max(1e-3, b - a)))
+                pts, wpx, bb = px[i]
+                m, (x0, y0), tip = _sk_stroke_mask(pts, wpx, max(0.001, frac), bb)
+                col = Image.new("RGB", m.size, cols[strokes[i]["col"]])
+                fr.paste(col, (x0, y0), m)
+        if tip is not None:
+            r_ = 7
+            ImageDraw.Draw(fr).ellipse([tip[0] - r_, tip[1] - r_, tip[0] + r_, tip[1] + r_], outline=acc_c, width=3)
+        for i, spr in label_sp.items():
+            a, b = plan[i]
+            if t >= a:
+                al = e_out(cl((t - a) / 0.35))
+                pr = strokes[i]
+                put(fr, spr, pr["p"][0] * ux, pr["p"][1] * uy + (1 - al) * 8, 1.0, al)
+        for k, spr in enumerate(head_sp):
+            if t >= h_t[k]:
+                al = e_out(cl((t - h_t[k]) / 0.3))
+                if k == len(head_sp) - 1 or t < h_t[min(k + 1, len(h_t) - 1)]:
+                    put(fr, spr, W * 0.045 + spr.width / 2 + (1 - al) * -14, H * 0.42, 1.0, al)
+        if head_sp and t > h_t[-1] + 0.2:
+            wb = min(W * 0.30, W * 0.30 * e_out(cl((t - h_t[-1] - 0.2) / 0.6)))
+            ImageDraw.Draw(fr).rounded_rectangle([W * 0.05, H * 0.42 + head_sp[-1].height / 2 + 8, W * 0.05 + wb, H * 0.42 + head_sp[-1].height / 2 + 16], 4, fill=acc_c)
+        d_ = ImageDraw.Draw(fr)
+        for (cx_, cy_, sx, sy) in ((26, 20, 1, 1), (W - 26, 20, -1, 1), (26, H - 20, 1, -1), (W - 26, H - 20, -1, -1)):  # HUD corner ticks
+            d_.line([(cx_, cy_), (cx_ + 22 * sx, cy_)], fill=ink, width=2)
+            d_.line([(cx_, cy_), (cx_, cy_ + 22 * sy)], fill=ink, width=2)
+        y_l = H - 30
+        d_.line([(W * 0.22, y_l), (W * 0.92, y_l)], fill=ink, width=1)
+        d_.line([(W * 0.22, y_l), (W * 0.22 + (W * 0.70) * cl(t / max(0.1, dur)), y_l)], fill=acc_c, width=3)
+        for k in range(0, 15):
+            xx = W * 0.22 + W * 0.70 * k / 14
+            d_.line([(xx, y_l - 4), (xx, y_l + 4)], fill=ink, width=1)
+        if year_sp is not None:
+            put(fr, year_sp, 40 + year_sp.width / 2, H - 52, 1.0, e_out(cl(t / 0.5)))
+        return fr
+
+    return draw
+
+
 def _make_draw(sc, dur, sp, pal, ctx, events):
     typ = sc["type"]
+    if typ == "sketch":
+        return make_sketch_draw(sc, dur, sp, pal, events)
     if typ == "multi":
         return make_multi_draw(sc, dur, sp, pal, events)
     if typ in ("merge", "split", "steps", "compare"):
@@ -8114,8 +8943,6 @@ def _make_draw(sc, dur, sp, pal, ctx, events):
         return make_kinetic_draw(sc, dur, sp, ctx, events, pal)
     if typ == "map":
         return make_map_draw(sc, dur, sp, pal, events)
-    if typ == "art":
-        return make_art_draw(sc, dur, sp, pal, events)
     return make_photo_draw(sc, dur, sp, ctx, events, pal)
 
 
@@ -8134,7 +8961,7 @@ def render_scene(i, sc, out, pal, ctx, prev_sc, last):
     n = max(2, int(round((ctx["t0"] + dur) * FPS)) - ctx["frames"])
     ctx["frames"] += n
     cmd = ["ffmpeg", "-y", "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{W}x{H}", "-r", str(FPS), "-i", "-",
-           "-c:v", "libx264", "-preset", "veryfast", "-crf", "18", "-pix_fmt", "yuv420p", str(out)]
+           "-c:v", "libx264", "-preset", "veryfast", "-crf", "15", "-pix_fmt", "yuv420p", str(out)]
     proc = subprocess.Popen(cmd, stdin=subprocess.PIPE, stderr=subprocess.PIPE)
     pre = None
     try:
@@ -8247,22 +9074,21 @@ def mux_final(silent, voice, music, sfx, out, max_mb=None):
           + ("[vst][duck][fx]amix=inputs=3:" if sfx else "[vst][duck]amix=inputs=2:")
           + "duration=first:dropout_transition=0:normalize=0[mix];"
           f"[mix]loudnorm=I=-16:TP=-1.5:LRA=11,aresample=44100,afade=t=out:st={max(0.5, dur - 2.0):.2f}:d=2.0[a]")
-    vopts = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "21"]
-    if max_mb:
-        kbps = int(max(500, min(5000, (max_mb * 8 * 1024) / dur - 136)))
-        vopts = ["-c:v", "libx264", "-preset", "veryfast", "-b:v", f"{kbps}k", "-maxrate", f"{kbps}k",
-                 "-bufsize", f"{2 * kbps}k"]
+    hq = ["-c:v", "libx264", "-preset", "medium", "-crf", "17", "-x264-params", "aq-mode=3:deblock=-1,-1"]
     run(["ffmpeg", "-y", "-i", silent, "-i", voice, "-i", music, *(["-i", sfx] if sfx else []), "-filter_complex", fc,
-         "-map", "0:v", "-map", "[a]", "-vf", f"fade=t=out:st={max(0.5, dur - 1.6):.2f}:d=1.6", *vopts, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "160k",
+         "-map", "0:v", "-map", "[a]", "-vf", f"fade=t=out:st={max(0.5, dur - 1.6):.2f}:d=1.6", *hq, "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "192k",
          "-movflags", "+faststart", "-shortest", out])
+    # the full-quality file stays in out/ (GitHub artifact, 3 days). Telegram only takes 50 MB: a smaller copy is made for it, never by lowering the master.
     if max_mb and Path(out).stat().st_size > max_mb * 1024 * 1024:
-        log("file still large, re-encoding smaller")
-        tmp = Path(str(out) + ".big.mp4")
-        Path(out).rename(tmp)
-        kb2 = int(max(400, (max_mb * 8 * 1024) / dur - 136) * 0.8)
-        run(["ffmpeg", "-y", "-i", tmp, "-c:v", "libx264", "-preset", "veryfast", "-b:v", f"{kb2}k",
-             "-maxrate", f"{kb2}k", "-bufsize", f"{2 * kb2}k", "-c:a", "copy", "-movflags", "+faststart", out])
-        tmp.unlink(missing_ok=True)
+        log("master is bigger than the Telegram limit: making a smaller Telegram copy (master kept in artifacts)")
+        small = Path(str(out).replace("video.mp4", "video_telegram.mp4"))
+        kb = int(max(600, (max_mb * 8 * 1024) / dur - 200))
+        run(["ffmpeg", "-y", "-i", out, "-c:v", "libx264", "-preset", "slow", "-b:v", f"{kb}k", "-maxrate", f"{int(kb * 1.25)}k",
+             "-bufsize", f"{2 * kb}k", "-x264-params", "aq-mode=3", "-c:a", "copy", "-movflags", "+faststart", small])
+        MASTER_NOTE[0] = str(small)
+
+
+MASTER_NOTE = [""]
 
 
 # --------------------------------------------------------------------------- thumbnails
@@ -8635,6 +9461,245 @@ def make_thumb_clean(img, text, out, layout="bottom", accent=None, size=(1920, 1
         q -= 4
 
 
+# --------------------------------------------------------------------------- AI thumbnails: Gemini plans the thumbnail, Cloudflare paints a clear photo of the story's subject, 4 reference styles rotate
+THUMB_STYLES = ["hero_right", "top_title", "banner_zoom", "doc_tag"]
+T_YEL, T_RED, T_WHITE, T_BLK, T_GREEN = (255, 214, 0), (222, 24, 32), (255, 255, 255), (14, 14, 16), (28, 164, 72)
+
+
+def thumb_plan_prompt(script, topic_en, avoid):
+    return f"""You design YouTube thumbnails for a Hindi science / nature documentary channel. Study the story and plan ONE thumbnail picture that makes people curious (curiosity gap, never a lie).
+STORY: {topic_en}
+HINDI TITLE: {script.get('title_hi')}
+STORY HOOK (Hindi): {script['scenes'][0]['narration_hi'][:300]}
+The same picture will be used in the style that fits the story best. The four styles (reference thumbnails of top channels):
+ hero_right  = huge subject on the LEFT, 2-3 big Hindi words stacked on the RIGHT (first line yellow, others white) and a small caption line under them (e.g. "66 MILLION YEARS AGO...") - for dramatic / danger / extinction / disaster stories.
+ top_title   = one clean white title across the TOP, a spectacular subject below - for origin / space / planet / big-picture stories.
+ banner_zoom = a full-width yellow banner on top with a 5-8 word curiosity sentence (key words red), and a round magnified inset of one creepy / surprising DETAIL joined by a line - for mystery / hidden / shocking-detail stories.
+ doc_tag     = small white tag + two huge words (yellow + white) at the right and a green corner banner - for calm nature / wildlife / documentary stories.
+Return ONLY JSON:
+{{"subject_en": "the single real subject the story is about (e.g. Tyrannosaurus rex, Earth, Amazon anaconda)",
+ "photo_prompt_en": "ONE clear ultra-detailed photorealistic image of that subject: a single large sharp subject, dramatic cinematic lighting, a vivid colour scene around it; subject large on the left-centre of the frame with calmer darker space on the right and a little space above; no text, no letters, no watermark, no logo, no person's face",
+ "zoom_x": 0.30, "zoom_y": 0.35,
+ "ranking": ["best style first", "...", "...", "..."],
+ "hero_right": {{"lines": ["1-2 Hindi words", "1-2 Hindi words", "1-2 Hindi words (optional)"], "tag": "short caption 2-5 words, English or Hindi, may contain a year/number"}},
+ "top_title": {{"title": "3-5 Hindi words, a curiosity question or claim"}},
+ "banner_zoom": {{"banner": "5-8 Hindi words, curiosity gap", "red": ["the 1-2 most shocking words of the banner, copied exactly"]}},
+ "doc_tag": {{"lines": ["1-2 Hindi words", "1-2 Hindi words"], "tag": "tiny label 1-2 words", "corner": "2-3 Hindi words like पूरी कहानी"}}}}
+"zoom_x"/"zoom_y" = where in YOUR described picture (0..1, x from left, y from top) the most interesting detail (eye, mouth, claw, crack, surprise) is. ALL text short and punchy: never more than 5 big words in total per style. Vary your wording from earlier videos. Avoid these styles this time if possible: {', '.join(avoid) or 'none'}."""
+
+
+def thumb_plan(script, topic_en, avoid):
+    out = gemini_json(thumb_plan_prompt(script, topic_en, avoid), 0.8)
+    if not isinstance(out, dict):
+        raise ValueError("bad thumbnail plan")
+    base_t = clean_short(script.get("thumb_text_hi") or script.get("title_hi"), 40)
+    w = base_t.split()
+    hr = out.get("hero_right") if isinstance(out.get("hero_right"), dict) else {}
+    tt = out.get("top_title") if isinstance(out.get("top_title"), dict) else {}
+    bz = out.get("banner_zoom") if isinstance(out.get("banner_zoom"), dict) else {}
+    dt = out.get("doc_tag") if isinstance(out.get("doc_tag"), dict) else {}
+    lines = [clean_short(x, 22) for x in (hr.get("lines") or []) if clean_short(x, 22)][:3] or [" ".join(w[:2]), " ".join(w[2:4]) or "कैसे?"]
+    dl = [clean_short(x, 22) for x in (dt.get("lines") or []) if clean_short(x, 22)][:2] or lines[:2]
+    ban = clean_short(bz.get("banner"), 70) or base_t
+    red = [clean_short(x, 24) for x in (bz.get("red") or []) if clean_short(x, 24)][:2]
+    try:
+        zx, zy = min(0.9, max(0.1, float(out.get("zoom_x")))), min(0.85, max(0.15, float(out.get("zoom_y"))))
+    except Exception:  # noqa
+        zx, zy = 0.3, 0.38
+    rank = [x for x in (out.get("ranking") or []) if x in THUMB_STYLES]
+    rank += [x for x in THUMB_STYLES if x not in rank]
+    return {"subject": clean_short(out.get("subject_en"), 70), "prompt": clean_short(out.get("photo_prompt_en"), 600), "zx": zx, "zy": zy, "rank": rank,
+            "hero_right": {"lines": lines, "tag": clean_short(hr.get("tag"), 30)}, "top_title": {"title": clean_short(tt.get("title"), 40) or base_t},
+            "banner_zoom": {"banner": ban, "red": red}, "doc_tag": {"lines": dl, "tag": clean_short(dt.get("tag"), 18), "corner": clean_short(dt.get("corner"), 22) or "पूरी कहानी"}}
+
+
+def _tfit(lines, role, max_w, max_h, start=300, lo=60):
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    size = start
+    while size > lo:
+        f = load_font(size, role)
+        if max(probe.textlength(l, font=f) for l in lines) <= max_w and size * 1.1 * len(lines) <= max_h:
+            return size
+        size -= 6
+    return lo
+
+
+def _tline(text, size, fill, role="thumb", extrude=True):
+    f = load_font(size, role)
+    st = max(3, int(size * 0.07))
+    return text_layer(text, f, fill=fill, stroke=st, stroke_fill=(10, 10, 14), shadow=(0, max(3, int(size * 0.05)), max(3, int(size * 0.06)), 0.85),
+                      extrude=((max(3, int(size * 0.045)), (10, 10, 14)) if extrude else None))
+
+
+def _tshade(pic, where, strength=215, reach=0.62):
+    np = _np()
+    TW, TH = pic.size
+    ys, xs = np.linspace(0, 1, TH)[:, None], np.linspace(0, 1, TW)[None, :]
+    if where == "right":
+        a = np.clip((xs - (1 - reach)) / reach, 0, 1) ** 1.2 * strength * np.ones((TH, 1))
+    elif where == "top":
+        a = np.clip((reach - ys) / reach, 0, 1) ** 1.2 * strength * np.ones((1, TW))
+    else:
+        a = np.clip((ys - (1 - reach)) / reach, 0, 1) ** 1.2 * strength * np.ones((1, TW))
+    sh = np.zeros((TH, TW, 4), np.uint8)
+    sh[..., :3] = (3, 4, 12)
+    sh[..., 3] = a.astype(np.uint8)
+    pic.alpha_composite(Image.fromarray(sh))
+
+
+def _tstack(pic, layers, box, align="center", gap_k=0.14):
+    bx, by, bw, bh = box
+    ov = int(layers[0].height * gap_k)
+    tot = sum(l.height for l in layers) - ov * (len(layers) - 1)
+    y = by + (bh - tot) // 2
+    for l in layers:
+        x = bx + (bw - l.width) // 2 if align == "center" else bx
+        pic.alpha_composite(l, (max(0, x), max(0, y)))
+        y += l.height - ov
+    return y + ov
+
+
+def thumb_style_hero_right(pic, v):
+    TW, TH = pic.size
+    _tshade(pic, "right", 225, 0.60)
+    lines = v["lines"]
+    size = _tfit(lines, "thumb", int(TW * 0.44), int(TH * 0.52), 260)
+    layers = [_tline(l, size, T_YEL if i == 0 else T_WHITE) for i, l in enumerate(lines)]
+    y_end = _tstack(pic, layers, (int(TW * 0.52), int(TH * 0.12), int(TW * 0.45), int(TH * 0.62)))
+    if v.get("tag"):
+        ts = _tfit([v["tag"]], "cond", int(TW * 0.44), int(TH * 0.10), 64, 30)
+        tl = _tline(v["tag"], ts, T_WHITE, "cond", extrude=False)
+        pic.alpha_composite(tl, (int(TW * 0.52) + (int(TW * 0.45) - tl.width) // 2, min(TH - tl.height - 20, y_end + 4)))
+
+
+def thumb_style_top_title(pic, v):
+    TW, TH = pic.size
+    _tshade(pic, "top", 215, 0.42)
+    words = v["title"].split()
+    opts = [[" ".join(words)]] + ([[" ".join(words[:len(words) // 2]), " ".join(words[len(words) // 2:])]] if len(words) > 2 else [])
+    best = None
+    for o in opts:
+        sz = _tfit(o, "thumb", int(TW * 0.92), int(TH * 0.30), 230)
+        if best is None or sz > best[0]:
+            best = (sz, o)
+    f = load_font(best[0], "thumb")
+    layers = [text_layer(l, f, fill=T_WHITE, stroke=0, shadow=(0, 6, 12, 0.9)) for l in best[1]]
+    _tstack(pic, layers, (int(TW * 0.04), int(TH * 0.015), int(TW * 0.92), int(TH * 0.30)), gap_k=0.06)
+
+
+def thumb_style_banner_zoom(pic, v, zx, zy):
+    TW, TH = pic.size
+    bar = int(TH * 0.135)
+    d = ImageDraw.Draw(pic)
+    d.rectangle([0, 0, TW, bar], fill=T_YEL + (255,))
+    d.rectangle([0, bar, TW, bar + 5], fill=(40, 30, 0, 255))
+    words = v["banner"].split()
+    reds = " ".join(v["red"]).split()
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    size = int(bar * 0.82)
+    while size > 40:
+        f = load_font(size, "thumb")
+        if sum(probe.textlength(w, font=f) for w in words) + size * 0.3 * (len(words) - 1) <= TW * 0.95:
+            break
+        size -= 4
+    f = load_font(size, "thumb")
+    tot = sum(probe.textlength(w, font=f) for w in words) + size * 0.3 * (len(words) - 1)
+    x = (TW - tot) / 2
+    for w in words:
+        hit = any(w.strip("?!।,.") == r.strip("?!।,.") for r in reds)
+        lay = text_layer(w, f, fill=T_RED if hit else T_BLK, stroke=0)
+        pic.alpha_composite(lay, (int(x - (lay.width - probe.textlength(w, font=f)) / 2), int(bar / 2 - lay.height / 2 + 2)))
+        x += probe.textlength(w, font=f) + size * 0.3
+    D = int(TH * 0.46)
+    cw = int(TW * 0.20)
+    src = pic.convert("RGB")
+    l0 = int(min(TW - cw, max(0, zx * TW - cw / 2)))
+    t0 = int(min(TH - cw * 9 // 16 * 1.0 - 1, max(0, zy * TH - cw / 2)))
+    crop = src.crop((l0, t0, l0 + cw, t0 + cw)).resize((D, D), Image.LANCZOS)
+    cx, cy = int(TW * 0.745), int(TH * 0.53)
+    ox, oy = int(zx * TW), int(zy * TH)
+    ln = Image.new("RGBA", pic.size, (0, 0, 0, 0))
+    ld = ImageDraw.Draw(ln)
+    ang = math.atan2(cy - oy, cx - ox)
+    ex, ey = cx - math.cos(ang) * D / 2, cy - math.sin(ang) * D / 2
+    ld.line([(ox, oy), (ex, ey)], fill=(255, 255, 255, 255), width=6)
+    ld.ellipse([ox - 11, oy - 11, ox + 11, oy + 11], outline=(255, 255, 255, 255), width=5)
+    sh = Image.new("RGBA", pic.size, (0, 0, 0, 0))
+    ImageDraw.Draw(sh).ellipse([cx - D // 2 + 6, cy - D // 2 + 10, cx + D // 2 + 6, cy + D // 2 + 10], fill=(0, 0, 0, 150))
+    pic.alpha_composite(sh.filter(ImageFilter.GaussianBlur(12)))
+    pic.alpha_composite(ln)
+    m = Image.new("L", (D, D), 0)
+    ImageDraw.Draw(m).ellipse([0, 0, D - 1, D - 1], fill=255)
+    pic.paste(crop, (cx - D // 2, cy - D // 2), m)
+    ImageDraw.Draw(pic).ellipse([cx - D // 2, cy - D // 2, cx + D // 2, cy + D // 2], outline=(255, 255, 255, 255), width=8)
+
+
+def thumb_style_doc_tag(pic, v):
+    TW, TH = pic.size
+    _tshade(pic, "right", 170, 0.55)
+    d = ImageDraw.Draw(pic)
+    if v.get("tag"):
+        tl = text_layer(v["tag"], load_font(64, "thumb"), fill=T_BLK, stroke=0)
+        w, h = tl.width + 60, tl.height + 18
+        x0, y0 = int(TW * 0.58), int(TH * 0.12)
+        d.polygon([(x0 + 16, y0), (x0 + w + 16, y0), (x0 + w, y0 + h), (x0, y0 + h)], fill=(255, 255, 255, 255))
+        pic.alpha_composite(tl, (x0 + 30, y0 + 8))
+    lines = v["lines"]
+    size = _tfit(lines, "thumb", int(TW * 0.42), int(TH * 0.46), 250)
+    layers = [_tline(l, size, T_YEL if i == len(lines) - 1 else T_WHITE) for i, l in enumerate(lines)]
+    _tstack(pic, layers, (int(TW * 0.54), int(TH * 0.26), int(TW * 0.43), int(TH * 0.50)))
+    d.polygon([(0, int(TH * 0.80)), (int(TW * 0.40), int(TH * 0.80)), (int(TW * 0.35), TH), (0, TH)], fill=T_GREEN + (255,))
+    cs = _tfit([v["corner"]], "thumb", int(TW * 0.30), int(TH * 0.15), 120, 40)
+    cl_ = text_layer(v["corner"], load_font(cs, "thumb"), fill=T_WHITE, stroke=0, shadow=(0, 3, 4, 0.5))
+    pic.alpha_composite(cl_, (int(TW * 0.02), int(TH * 0.80 + (TH * 0.20 - cl_.height) / 2)))
+
+
+def render_thumb(style, plan, hero, out):
+    base = Image.open(hero).convert("RGB") if not isinstance(hero, Image.Image) else hero.convert("RGB")
+    base = ImageOps.fit(base, (1920, 1080), Image.LANCZOS)
+    base = ImageEnhance.Contrast(ImageEnhance.Color(base).enhance(1.18)).enhance(1.1).filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
+    pic = base.convert("RGBA")
+    shuffle_thumb_font()
+    if style == "hero_right":
+        thumb_style_hero_right(pic, plan["hero_right"])
+    elif style == "top_title":
+        thumb_style_top_title(pic, plan["top_title"])
+    elif style == "banner_zoom":
+        thumb_style_banner_zoom(pic, plan["banner_zoom"], plan["zx"], plan["zy"])
+    else:
+        thumb_style_doc_tag(pic, plan["doc_tag"])
+    im = pic.convert("RGB")
+    q = 94
+    while True:
+        im.save(out, "JPEG", quality=q, optimize=True, subsampling=0 if q > 90 else 2)
+        if Path(out).stat().st_size <= 1_900_000 or q <= 70:
+            break
+        q -= 4
+
+
+def make_thumbs_ai(script, topic_en, imgdir, outdir):
+    """Returns [(path, caption)]: main thumbnail + an alternative in a different style. Raises when the AI plan or picture is unavailable (caller falls back)."""
+    st = load_json(STATE / "thumb.json", {})
+    recent = st.get("styles", [])[-2:]
+    plan = thumb_plan(script, topic_en, recent)
+    hero = imgdir / "thumb_ai.png"
+    prompt = plan["prompt"] or script.get("thumb_prompt_en") or topic_en
+    ok = img_cloudflare(prompt + ", " + STYLE_THUMB, hero, (1920, 1080), (1344, 756))
+    if not ok:
+        raise RuntimeError("Cloudflare could not paint the thumbnail picture: " + fail_summary())
+    order = [x for x in plan["rank"] if x != (recent[-1] if recent else "")] or plan["rank"]
+    main = order[0]
+    alt = next((x for x in order[1:] if x != main), THUMB_STYLES[0])
+    res = []
+    for k, (sty, cap) in enumerate(((main, "Thumbnail (best: " + main + ")"), (alt, "Thumbnail alternative (" + alt + ")"))):
+        p = outdir / ("thumbnail.jpg" if k == 0 else "thumbnail_alt.jpg")
+        render_thumb(sty, plan, hero, p)
+        res.append((p, cap))
+    save_json(STATE / "thumb.json", {**st, "styles": (st.get("styles", []) + [main])[-6:]})
+    log(f"AI thumbnails: {main} + {alt} (subject: {plan['subject']})")
+    return res
+
+
 def pick_thumb_layout(script, topic):
     """Different layout and accent colour for different stories (and never the same as last time)."""
     st = load_json(STATE / "thumb.json", {})
@@ -8925,10 +9990,6 @@ def make_visuals(scenes, imgdir):
         if el_ > 125 and not LOCAL_SD["dead"]:
             LOCAL_SD["dead"] = True
             log("time guard: slow local AI pictures off")
-        if sc["type"] == "art":
-            if "art_img" not in sc or sc["art_img"] is None:
-                sc["art_img"] = art_image(sc, imgdir / f"{i:03d}_art.png") if elapsed_min() < 120 else None
-            continue
         if sc["type"] == "photo":
             for n_, it in enumerate(sc.get("items") or []):
                 if it["kind"] == "person" and it.get("photo_img") is None:
@@ -8967,6 +10028,14 @@ def make_visuals(scenes, imgdir):
                                 cdef["img"] = Image.open(cp_).convert("RGB")
                         except Exception as e:  # noqa
                             log("verdict picture failed:", type(e).__name__, str(e)[:100])
+                if it["kind"] == "beforeafter" and it.get("img2") is None and it.get("after_en") and VERDICT_MAX[0] > 0:
+                    VERDICT_MAX[0] -= 1
+                    try:
+                        bp_ = imgdir / f"{i:03d}_i{n_}_after.png"
+                        if gen_image("a realistic photo of " + it["after_en"], bp_, "photo", query=it["after_en"]):
+                            it["img2"] = Image.open(bp_).convert("RGB")
+                    except Exception as e:  # noqa
+                        log("before/after picture failed:", type(e).__name__, str(e)[:100])
                 if it["kind"] == "popup" and POPUPS_MAX[0] > 0:
                     POPUPS_MAX[0] -= 1
                     try:
@@ -9109,8 +10178,9 @@ def pipeline():
         ensure_sources(topic_en, own_story)
     except Exception as e:  # noqa
         log("ensure_sources failed:", str(e)[:100])
-    script = own_story_script(own_story, topic_en) if own_story else write_script(topic_en, cat, style, target, (facts or "") + source_material(), wpm)
-    clean_src_hints(script)
+    if not own_story and passages_block():
+        facts = (facts or "") + "\n\n" + passages_block()
+    script = own_story_script(own_story, topic_en) if own_story else write_script(topic_en, cat, style, target, facts, wpm)
     scenes = script["scenes"]
     mood = script["mood"] or MOOD_MAP.get(cat, "wonder")
     kinds = {}
@@ -9136,6 +10206,7 @@ def pipeline():
         except Exception as e:  # noqa
             log("rescale failed, continuing:", e)
     story_context(topic_en, own_story, script)
+    build_sketches(scenes, topic_en)
     director_pass(scenes, topic_en + (("\nSTORY CONTEXT (keep EVERY picture inside it; relatives and neighbours are people of this culture, never animals or objects): " + STORY_CTX["text"]) if STORY_CTX["on"] else ""))
     prov = "gemini" if VOICE_USED[0].startswith("gemini") else "edge"
     wpms[prov] = round(word_count(script) / (total / 60), 1)
@@ -9162,16 +10233,21 @@ def pipeline():
     log(f"final video {fmt_time(ffprobe_dur(final))}, {final.stat().st_size / 1e6:.1f} MB")
 
     any_img = next((sh["image"] for s in scenes for sh in s["shots"] if sh.get("image")), None)
-    hero = real_thumb_image(script, topic_en, imgdir, any_img)
-    thumb = outdir / "thumbnail.jpg"
-    text = script["thumb_text_hi"] or script["title_hi"]
-    try:
-        make_thumb_v2(script, topic_en, own_story, imgdir, thumb, hero)
+    outdir.mkdir(exist_ok=True)
+    thumb, thumb_alt = outdir / "thumbnail.jpg", None
+    try:  # AI thumbnail: Gemini plans it for THIS story, Cloudflare paints a clear photo of the subject, one of 4 reference styles
+        made = make_thumbs_ai(script, topic_en, imgdir, outdir)
+        thumb, thumb_alt = made[0][0], (made[1][0] if len(made) > 1 else None)
     except Exception as e:  # noqa
-        log("thumbnail v2 failed, using the classic one:", type(e).__name__, str(e)[:120])
+        log("AI thumbnail failed, using the classic thumbnail:", type(e).__name__, str(e)[:160])
+        hero = real_thumb_image(script, topic_en, imgdir, any_img)
+        text = script["thumb_text_hi"] or script["title_hi"]
         layout, accent = pick_thumb_layout(script, topic_en)
         log("thumbnail layout:", layout)
         make_thumb_clean(hero, text, thumb, layout, accent)
+    hero = thumb  # (only used by the then/now thumbnail below)
+    hero = real_thumb_image(script, topic_en, imgdir, any_img) if script["thumb_prompt2_en"] else hero
+    text = script["thumb_text_hi"] or script["title_hi"]
     thumb2 = None
     if script["thumb_prompt2_en"]:
         other = imgdir / "thumb2.png"
@@ -9221,8 +10297,10 @@ def pipeline():
 
     if UPLOAD_MODE != "youtube":
         notify("TITLE:\n" + meta["title"] + "\n\nDESCRIPTION:\n" + meta["description"] + "\n\nTAGS:\n" + ", ".join(meta["tags"]))
-        ok = tg_send_file(final, "video", (meta["title"] + "\n" + DIRECTOR_REPORT[0]) if DIRECTOR_REPORT[0] else meta["title"])
+        ok = tg_send_file(Path(MASTER_NOTE[0]) if MASTER_NOTE[0] else final, "video", (meta["title"] + "\n" + DIRECTOR_REPORT[0]) if DIRECTOR_REPORT[0] else meta["title"])
         tg_send_file(thumb, "doc", "Thumbnail 1")
+        if thumb_alt:
+            tg_send_file(thumb_alt, "doc", "Thumbnail 2 (alag style)")
         try:
             for f_, cap_ in zip(write_subtitles(scenes, outdir), ("Subtitles (SRT) - video par nahi dikhte, sirf editor ke liye", "Edit plan - kis time par kya laga hai")):
                 tg_send_file(f_, "doc", cap_)
@@ -9375,6 +10453,12 @@ def selftest():
         {"type": "counter", "tone": "excited", "headline_hi": "पृथ्वी की उम्र",
          "counter": {"from": 0.0, "to": 4.5, "decimals": 1, "unit_hi": "अरब साल पहले"},
          "narration_hi": "पृथ्वी की उम्र लगभग साढ़े चार अरब साल मानी जाती है"},
+        {"type": "sketch", "tone": "calm", "headline_hi": "टक्कर से चाँद बना", "year_hi": "४५० करोड़ साल पहले", "grade": "natural",
+         "strokes": clean_prims([{"t": "circle", "c": [64, 28], "r": 12, "fill": "soft"}, {"t": "circle", "c": [46, 20], "r": 4.5, "col": "accent", "fill": "soft"},
+                                 {"t": "arrow", "p": [[50, 22], [58, 26]], "col": "accent"}, {"t": "arc", "c": [64, 28], "r": 16, "a0": 200, "a1": 330},
+                                 {"t": "line", "p": [[78, 18], [84, 22], [88, 16]]}, {"t": "poly", "p": [[74, 38], [82, 34], [88, 42], [78, 45]], "fill": "soft"},
+                                 {"t": "text", "p": [64, 44], "s": "युवा पृथ्वी"}, {"t": "text", "p": [46, 13], "s": "थिया", "col": "accent"}]),
+         "narration_hi": "लगभग साढ़े चार अरब साल पहले, एक छोटा ग्रह युवा पृथ्वी से टकराया, और उसके मलबे से हमारा चाँद बना"},
         {"type": "split", "tone": "wonder", "headline_hi": "एक से दो हिस्से",
          "items": items([("पुरानी पृथ्वी",) + P, ("पृथ्वी", "planet", (200, 255, 220), (100, 200, 160)), ("मलबा",) + R]),
          "narration_hi": "इस टक्कर के बाद एक बड़ा गोला दो हिस्सों में बँट गया, एक हिस्सा पृथ्वी बना और दूसरा मलबा बना"},
@@ -9463,25 +10547,42 @@ def selftest():
                                 {"w": 8, "kind": "feature", "text": "", "query_en": "lion", "features": feats_, "png_img": feat_st, "span": 6.0},
                                 {"w": 22, "kind": "year", "text": "उन्नीस सौ चौरासी"}],
                       "shots": shots([("गुजरात के अहमदाबाद में सुमित्रा का जन्म हुआ, शेर के तेज़ दाँत, मज़बूत पंजे और घना अयाल उसकी पहचान हैं, यह बात सन उन्नीस सौ चौरासी की है", "rock", (150, 110, 70), (40, 20, 10))])})
-    art_png = t0 / "art_test.png"
-    ai_ = Image.new("RGB", (1024, 576), (236, 222, 192))
-    ad_ = ImageDraw.Draw(ai_)
-    for k_ in range(8):
-        ad_.rectangle([300 + k_ * 56, 220, 330 + k_ * 56, 440], outline=(40, 30, 25), width=3)
-    ad_.polygon([(270, 220), (512, 120), (754, 220)], outline=(40, 30, 25), width=3)
-    ad_.line([(270, 440), (754, 440)], fill=(170, 30, 30), width=4)
-    ai_.save(art_png)
-    ov_scenes.append({"type": "art", "tone": "calm", "headline_hi": "", "narration_hi": "फिर यूनानियों ने बनाया पूर्णता का मंदिर और उसे हज़ारों साल खड़ा रहना था",
-                      "art_img": str(art_png), "art_en": "temple", "theme": "parch", "hud": "AD 432", "hud_top": "कहानी", "art_side": "right",
-                      "title_words": [{"w": 0, "hi": "फिर बनी", "accent": False}, {"w": 4, "hi": "पूर्णता।", "accent": True}, {"w": 8, "hi": "हज़ारों साल", "accent": False}],
-                      "shots": shots([("फिर यूनानियों ने बनाया पूर्णता का मंदिर और उसे हज़ारों साल खड़ा रहना था", "rock", (90, 80, 60), (20, 20, 20))])})
     ov_scenes.append({"type": "multi", "vs": True, "tone": "serious", "headline_hi": "", "narration_hi": "नया तरीका बिल्कुल अलग है और पुराना तरीका बिल्कुल अलग था",
                       "items": [{"label_hi": "नया तरीका", "prompt_en": "x", "image": art(t0 / "vs_a.png", "rock", (150, 110, 70), (60, 30, 20), 1920), "t": 0.0},
                                 {"label_hi": "पुराना तरीका", "prompt_en": "x", "image": art(t0 / "vs_b.png", "planet", (90, 120, 150), (20, 30, 50), 1920), "t": 1.6}]})
+    ba_path = t0 / "ba_after.png"
+    art(ba_path, "planet", (60, 150, 90), (10, 50, 30), 1920)
+    TN = "यह शेर तीस मीटर ऊँची चट्टान पर खड़ा था, आखिर ऐसा क्यों, ध्यान से देखिए, यह सबसे बड़ा राज़ है"
+    def tech_scene(kind_items, k_, nar=TN, tone="calm"):
+        return {"type": "photo", "tone": tone, "headline_hi": "", "narration_hi": nar, "items": kind_items,
+                "shots": shots([(nar, ("rock", "planet", "moon")[k_ % 3], (110 + 15 * k_, 100, 120 - 8 * k_), (25, 30, 45))])}
+    tech_scenes = [
+        tech_scene([{"w": 3, "kind": "measure", "text": "३० मीटर", "orient": "h", "sub": "चट्टान की ऊँचाई"}], 0),
+        tech_scene([{"w": 3, "kind": "measure", "text": "३० मीटर", "orient": "v", "sub": "ऊँचाई"}], 1),
+        tech_scene([{"w": 6, "kind": "qmark", "text": ""}], 2),
+        tech_scene([{"w": 9, "kind": "lens", "text": "", "fx": 0.5, "fy": 0.5}], 3),
+        tech_scene([{"w": 1, "kind": "beforeafter", "text": "", "img2": Image.open(ba_path).convert("RGB"), "label_a": "पहले", "label_b": "बाद में", "span": 5.0}], 4),
+        tech_scene([{"w": 1, "kind": "compare", "text": "", "a_hi": "शेर", "b_hi": "बाघ", "span": 5.6,
+                     "rows": [{"label_hi": "वज़न", "a_hi": "१९० किलो", "b_hi": "२५० किलो", "na": 190, "nb": 250}, {"label_hi": "ऊँचाई", "a_hi": "१ मीटर", "b_hi": "१.१ मीटर", "na": 1.0, "nb": 1.1}]}], 5),
+        tech_scene([{"w": 3, "kind": "mark", "text": "यही", "shape": "circle"}], 6),
+        tech_scene([{"w": 5, "kind": "mark", "text": "ये चट्टान", "shape": "arrow"}, {"w": 11, "kind": "mark", "text": "", "shape": "underline"}], 7),
+        tech_scene([{"w": 1, "kind": "chart", "text": "", "title": "शेरों की गिनती", "type": "bar", "ci": 0, "span": 5.6,
+                     "pts": [{"label": "२०१०", "v": 411, "show": "४११"}, {"label": "२०१५", "v": 523, "show": "५२३"}, {"label": "२०२०", "v": 674, "show": "६७४"}, {"label": "२०२५", "v": 891, "show": "८९१"}]}], 8),
+        tech_scene([{"w": 1, "kind": "chart", "text": "", "title": "गिनती", "type": "line", "ci": 2, "span": 5.6,
+                     "pts": [{"label": "२०१०", "v": 411, "show": "४११"}, {"label": "२०१५", "v": 523, "show": "५२३"}, {"label": "२०२०", "v": 674, "show": "६७४"}]}], 9),
+        tech_scene([{"w": 1, "kind": "tline", "text": "", "ci": 1, "span": 6.2,
+                     "events": [{"when": "१९०७", "what": "पहली गिनती"}, {"when": "१९६५", "what": "अभयारण्य बना"}, {"when": "२०१५", "what": "५२३ शेर"}, {"when": "२०२०", "what": "६७४ शेर"}]}], 10),
+        tech_scene([{"w": 2, "kind": "hl", "text": "सबसे बड़ा राज़", "ci": 0}], 11),
+        tech_scene([{"w": 2, "kind": "hl", "text": "शेर बचेंगे", "ci": 1}, {"w": 12, "kind": "qmark", "text": ""}], 12),
+    ]
+    if os.environ.get("SELFTEST_TECH"):
+        ov_scenes = tech_scenes
+    else:
+        ov_scenes = ov_scenes + tech_scenes
     sc[-1:-1] = ov_scenes
-    if os.environ.get("SELFTEST_KEEP_TYPES"):
-        sc = [x for x in sc if x["type"] in os.environ["SELFTEST_KEEP_TYPES"].split(",")]
-    if os.environ.get("SELFTEST_SCENES"):
+    if os.environ.get("SELFTEST_TECH"):
+        sc = [sc[0]] + ov_scenes + sc[-1:]
+    elif os.environ.get("SELFTEST_SCENES"):
         sc = sc[:int(os.environ["SELFTEST_SCENES"])] + sc[-1:]
 
     for k, sc_ in enumerate(sc):
