@@ -1080,36 +1080,146 @@ def _free_word(have, w, kind, gap=3):
     return not any(isinstance(x, dict) and (x.get("w") == w or (abs(x.get("w", -99) - w) < gap and x.get("kind") == kind)) for x in have)
 
 
+STOP_HI = set("और या कि की के का को में से पर तक ने भी ही तो यह वह ये वो इस उस इन उन एक कुछ सब जो जब तब अब यहाँ वहाँ क्योंकि लेकिन मगर फिर बहुत बस हर कोई किसी अपने अपना अपनी उसके उसकी उनके उनकी इसके इसकी इनके तरह साथ बाद पहले बीच लिए वाला वाली वाले कर करके करना होता होती होते हुआ हुई हुए गया गई गए था थी थे है हैं हो सकता सकती सकते रहा रही रहे जाता जाती जाते आया आई आए लगा लगी लगे दिया दी दिए लिया ली लिए कहा कहते कहती बोला बोली जैसे ऐसे ऐसा ऐसी कैसे क्यों क्या कौन कहाँ कब तभी जहाँ वही यही सिर्फ़ सिर्फ केवल जैसा तक भर ज़रा जरा और्".split())
+VERB_END = ("ता", "ती", "ते", "या", "ये", "ना", "कर", "गा", "गी", "गे", "ेगा", "ेगी", "ेंगे", "ूँ", "ें", "ाओ", "ाई", "ाए", "ाया", "ाते", "ाती", "ाता", "ाना")
+Q_ALL = ("क्यों", "कैसे", "आखिर", "रहस्य", "सवाल", "पहेली", "कौन", "कहाँ", "कहां", "कब", "कितना", "कितने", "कितनी", "सोचिए", "सोचिये", "राज़", "राज", "अजीब", "हैरान", "रहस्यमय")
+LENS_ALL = ("ध्यान", "करीब", "बारीकी", "सूक्ष्म", "माइक्रोस्कोप", "गौर", "बारीक", "नज़दीक", "नजदीक", "देखिए", "देखिये", "दिखता", "दिखती", "दिखते", "छोटा", "छोटी", "छोटे", "नन्हा", "नन्हे", "नन्ही", "आँख", "आँखें", "आंख", "आंखें", "दाँत", "दांत", "पंजे", "पंजा", "त्वचा", "पंख", "सींग", "चोंच", "जीभ", "कोशिका", "परत", "सतह")
+MARK_ALL = ("यहीं", "यही", "इसी", "सबसे", "खास", "ख़ास", "असली", "मुख्य", "मुख्यतः", "ज़रूरी", "जरूरी", "अहम", "महत्वपूर्ण", "सबूत", "वजह", "कारण", "नतीजा", "परिणाम", "खतरा", "ख़तरा", "ताक़त", "ताकत")
+MEAS_ALL = ("लंबा", "लम्बा", "लंबी", "ऊँचा", "ऊंचा", "ऊँची", "ऊंची", "गहरा", "गहरी", "चौड़ा", "चौड़ी", "भारी", "दूरी", "वज़न", "वजन", "लंबाई", "ऊँचाई", "गहराई", "चौड़ाई", "आकार")
+CMP_ALL = ("बनाम", "मुक़ाबले", "मुकाबले", "ज़्यादा", "ज्यादा", "बड़ा", "बड़ी", "छोटा", "तेज़", "तेज", "धीमा", "भारी", "हल्का")
+BA_PRE = ("पहले", "पुराने", "पहले-")
+BA_POST = ("अब", "आज", "आजकल", "आज-कल", "बाद", "फिर", "नया", "नई", "अब-")
+
+
+def _num_val(tok):
+    tok = tok.translate(str.maketrans("०१२३४५६७८९", "0123456789")).replace(",", "")
+    try:
+        return float(tok)
+    except Exception:  # noqa
+        return None
+
+
+def kw_words(wds, k_max=4):
+    """The key words of a scene (nouns / names / numbers), spread over the sentence, each with the index where it is spoken."""
+    cand = []
+    for i, w_ in enumerate(wds):
+        t_ = _tw(w_)
+        if len(t_) < 3 or t_ in STOP_HI or t_ in Q_ALL or t_ in ("सबसे", "बड़ा", "बड़ी", "ऊँची", "ऊँचा", "आगे", "जानिए", "देखिए", "यही", "इसी", "सारी", "सारे", "पूरी", "पूरा", "नहीं", "वाली"):
+            continue
+        if any(t_.endswith(v) for v in VERB_END) and not _num_val(t_):
+            continue
+        cand.append((i, t_))
+    if not cand:
+        return []
+    if len(cand) > k_max:
+        step = len(cand) / k_max
+        cand = [cand[int(j * step)] for j in range(k_max)]
+    return cand
+
+
 def det_techniques(scenes):
-    """Rule-based triggers on Hindi words (always runs, needs no Gemini)."""
+    """Rule-based: EVERY spoken cue gets its technique on its own word (needs no Gemini, always runs)."""
     n = {k: 0 for k in NEW_KINDS}
-    for sc in scenes:
+    for si, sc in enumerate(scenes):
         if sc.get("type") != "photo" or not sc.get("wt"):
             continue
         wds = sc["narration_hi"].split()
         if len(wds) != len(sc["wt"]):
             continue
         have = sc.setdefault("items", [])
+        cnt = {k: 0 for k in NEW_KINDS}
+
+        def add(rec, gap=6):
+            k = rec["kind"]
+            if any(isinstance(x, dict) and x.get("kind") == k and abs(x.get("w", -99) - rec["w"]) < gap for x in have):
+                return False
+            if any(isinstance(x, dict) and x.get("w") == rec["w"] and x.get("kind") in NEW_KINDS for x in have):
+                return False
+            if cnt[k] >= (3 if k in ("qmark", "lens", "mark") else 2):
+                return False
+            have.append(rec)
+            cnt[k] += 1
+            n[k] += 1
+            return True
+
+        nums = []
+        pre_i = post_i = None
         for i, w_ in enumerate(wds):
             t_ = _tw(w_)
             if not t_:
                 continue
-            rec = None
-            if UNIT_RE.fullmatch(t_) and i >= 1 and (NUM_RE.match(_tw(wds[i - 1]) or "x") or _tw(wds[i - 1]) in HI_NUMS):
-                rec = {"w": i, "kind": "measure", "text": f"{_tw(wds[i-1])} {t_}", "orient": "h", "sub": ""}
-            elif t_ in Q_WORDS and (i == 0 or i >= 1) and t_ != "क्या" or (t_ == "क्या" and i == 0):
-                rec = {"w": i, "kind": "qmark", "text": ""}
-            elif any(t_.startswith(x) for x in LENS_WORDS):
-                rec = {"w": i, "kind": "lens", "text": ""}
-            elif t_ in MARK_WORDS:
-                rec = {"w": i, "kind": "mark", "text": "", "shape": ("circle", "arrow", "underline")[n["mark"] % 3]}
-            if rec and _free_word(have, i, rec["kind"], 5) and not any(isinstance(x, dict) and x.get("kind") == rec["kind"] and abs(x.get("w", -99) - i) < 8 for x in have):
-                if sum(1 for x in have if isinstance(x, dict) and x.get("kind") in ("measure", "qmark", "lens", "mark")) >= 3:
-                    continue
-                have.append(rec)
-                n[rec["kind"]] += 1
+            prev = _tw(wds[i - 1]) if i else ""
+            has_num = bool(NUM_RE.match(prev or "x")) or prev in HI_NUMS
+            if has_num and (UNIT_RE.fullmatch(t_) or t_ in MEAS_ALL or t_ in ("लोग", "शेर", "बाघ", "हाथी", "जानवर", "प्रजातियाँ", "प्रजातियां", "गुना", "प्रतिशत", "फीसदी", "सदस्य")):
+                add({"w": i, "kind": "measure", "text": f"{prev} {t_}", "orient": "v" if t_ in ("ऊँचा", "ऊंचा", "ऊँची", "ऊंची", "गहरा", "गहरी", "ऊँचाई", "गहराई") else "h", "sub": ""}, 3)
+            elif t_ in MEAS_ALL and i >= 2 and (_tw(wds[i - 2]) in HI_NUMS or NUM_RE.match(_tw(wds[i - 2]) or "x")) and UNIT_RE.fullmatch(prev):
+                add({"w": i, "kind": "measure", "text": f"{_tw(wds[i-2])} {prev}", "orient": "v" if t_ in ("ऊँचा", "ऊंचा", "गहरा") else "h", "sub": t_}, 3)
+            if t_ in Q_ALL or "?" in w_:
+                add({"w": i, "kind": "qmark", "text": ""}, 7)
+            if t_ in LENS_ALL or any(t_.startswith(x) for x in ("बारीक", "सूक्ष्म", "नज़दीक", "करीब")):
+                add({"w": i, "kind": "lens", "text": ""}, 8)
+            if t_ in MARK_ALL:
+                add({"w": i, "kind": "mark", "text": "", "shape": ("circle", "arrow", "underline")[(si + n["mark"]) % 3]}, 8)
+            if t_ in BA_PRE and pre_i is None:
+                pre_i = i
+            if pre_i is not None and post_i is None and i > pre_i + 2 and t_ in BA_POST:
+                post_i = i
+            nv = _num_val(t_)
+            if nv is not None and nv > 0:
+                nums.append((i, nv, t_, _tw(wds[i + 1]) if i + 1 < len(wds) else ""))
+        # before / after: "पहले ... अब/आज" in one scene, two different pictures
+        shots_ = [x for x in (sc.get("shots") or []) if isinstance(x, dict) and x.get("query_en")]
+        if pre_i is not None and post_i is not None and len({x["query_en"] for x in shots_}) >= 2:
+            add({"w": pre_i, "kind": "beforeafter", "text": "", "after_en": shots_[-1]["query_en"], "label_a": "पहले", "label_b": "आज", "span": 5.2}, 99)
+        # numbers said in the scene -> animated chart (>=2 numbers) / highlighted number
+        if len(nums) >= 2:
+            pts = [{"label": clean_short(x[3], 12), "v": x[1], "show": clean_short(x[2] + " " + x[3], 14)} for x in nums[:5]]
+            add({"w": nums[0][0], "kind": "chart", "text": "", "title": clean_short(sc.get("headline_hi") or "", 28), "type": "bar", "pts": pts, "span": 5.4, "ci": si % len(VOX_BG)}, 99)
+        # years told in order -> timeline
+        yrs = [it for it in have if isinstance(it, dict) and it.get("kind") == "year" and it.get("year_num")]
+        if len(yrs) >= 3:
+            ev = [{"when": clean_short(it["text"], 14), "what": clean_short(it.get("sub") or "", 22) or clean_short(it["text"], 14)} for it in yrs[:5]]
+            add({"w": yrs[0]["w"], "kind": "tline", "text": "", "events": ev, "span": 6.2, "ci": (si + 1) % len(VOX_BG)}, 99)
+        # every scene: the key claim as a highlight bar on its last words, and a marker on the first key word
+        if not cnt["hl"] and len(wds) >= 8:
+            tail = [w_ for w_ in wds[-6:]]
+            while tail and not _tw(tail[0]):
+                tail.pop(0)
+            txt = clean_short(" ".join(_tw(x) if i_ == len(tail) - 1 else x.strip(",") for i_, x in enumerate(tail)), 40)
+            _TECH_SEQ[0] += 1
+            add({"w": max(0, len(wds) - 6), "kind": "hl", "text": txt, "ci": _TECH_SEQ[0] % len(HL_COLS)}, 99)
+        if not cnt["mark"] and not cnt["lens"] and len(wds) >= 8:
+            kk = kw_words(wds, 1)
+            if kk:
+                add({"w": kk[0][0], "kind": "mark", "text": kk[0][1], "shape": ("circle", "underline", "arrow")[si % 3]}, 99)
         have.sort(key=lambda x: x.get("w", 0) if isinstance(x, dict) else 0)
     return n
+
+
+def assign_vox(scenes):
+    """Vox look: most photo scenes become the taped-photo-on-coloured-paper layout, with the key words landing as stickers while the narrator says them."""
+    k_ = 0
+    nph = [i for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt")]
+    for j, i in enumerate(nph):
+        sc = scenes[i]
+        wds = sc["narration_hi"].split()
+        if len(wds) != len(sc["wt"]):
+            continue
+        its = [x.get("kind") for x in sc.get("items", []) if isinstance(x, dict)]
+        heavy = any(x in its for x in ("beforeafter", "feature", "verdict", "action", "srclist"))
+        vox = (j % 3 != 0 or any(x in its for x in ("chart", "tline", "compare"))) and not heavy and j != len(nph) - 1 or any(x in its for x in ("chart", "tline"))
+        if len(nph) <= 3:
+            vox = j != 0 and not heavy
+        if not vox:
+            sc.pop("vox", None)
+            sc.pop("kw", None)
+            continue
+        sc["vox"] = k_ % len(VOX_BG)
+        sc["kw"] = []
+        for n_, (wi, tx) in enumerate(kw_words(wds, 4)):
+            sc["kw"].append({"t": max(0.2, sc["wt"][wi][0] - 0.05), "text": tx, "ci": (k_ + n_) % len(KW_COLS)})
+        k_ += 1
+    return k_
 
 
 def techniques_prompt(topic, listing):
@@ -1139,7 +1249,7 @@ def techniques_gemini(scenes, topic, only=None, per=5):
         if only:
             pr += f"\nUSE ONLY THESE KINDS: {', '.join(only)} - find the best moment for each in these scenes (it is required)."
         try:
-            out = gemini_json_opt(pr, 0.2)
+            out = gemini_json(pr, 0.2)
         except Exception as e:  # noqa
             log("techniques pass failed:", str(e)[:100])
             continue
@@ -1278,7 +1388,7 @@ def finalize_overlays(scenes, topic=""):
     for name, fn in (("declared_sources", lambda: notes_from_declared_src(scenes, topic)), ("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
                      ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)),
                      ("overlays", lambda: overlay_pass(scenes, topic)), ("png_pass", lambda: png_pass(scenes, topic)),
-                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
+                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("vox", lambda: assign_vox(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
                      ("entity_sources", lambda: notes_for_entities(scenes)), ("source_list", lambda: add_source_outro(scenes))):
         try:
             st[name] = fn()
@@ -5627,8 +5737,8 @@ def draw_tline(fr, sh, tl, t0, t1, a, ov):
     ev = (it.get("events") or [])[:5]
     if len(ev) < 2:
         return
-    y = H * 0.855
-    pan = _vx_panel(int(W * 0.92), 170, 20, alpha=190)
+    y = H * 0.885
+    pan = _vx_panel(int(W * 0.92), 150, 20, alpha=190)
     put(fr, pan, W / 2, y - 6, 1.0, a * e_out(cl((tl - t0) / 0.4)))
     x0, x1 = W * 0.09, W * 0.91
     g = e_out(cl((tl - t0 - 0.2) / 1.0))
@@ -5707,7 +5817,7 @@ def _vox_bg(ci):
 def vox_collage(fr, q, ci, kind="chart"):
     e = e_out(cl(q))
     bg = _vox_bg(ci)
-    s = lerp(1.0, 0.50 if kind == "tline" else 0.58, e)
+    s = lerp(1.0, 0.58, e)
     cw, ch = int(W * s), int(H * s)
     card = fr.resize((cw, ch), Image.BICUBIC)
     border = 12
@@ -5720,12 +5830,52 @@ def vox_collage(fr, q, ci, kind="chart"):
     framed = framed.rotate(rot, resample=Image.BICUBIC, expand=True)
     sh_ = Image.new("RGBA", framed.size, (0, 0, 0, 0))
     sh_.putalpha(framed.getchannel("A").filter(ImageFilter.GaussianBlur(12)).point(lambda v: int(v * 0.55)))
-    cx, cy = lerp(W / 2, W * (0.5 if kind == "tline" else 0.31), e), lerp(H / 2, H * (0.36 if kind == "tline" else 0.47), e)
+    cx, cy = lerp(W / 2, W * 0.31, e), lerp(H / 2, H * 0.45, e)
     base = Image.blend(fr, bg, e) if e < 1 else bg.copy()
     base = base.convert("RGBA")
     base.alpha_composite(sh_, (int(cx - framed.width / 2 + 8), int(cy - framed.height / 2 + 14)))
     base.alpha_composite(framed, (int(cx - framed.width / 2), int(cy - framed.height / 2)))
     return base.convert("RGB")
+
+
+ON_PHOTO = {"lens", "beforeafter", "measure", "qmark", "mark", "explain", "action", "feature", "verdict"}
+KW_COLS = [((236, 84, 64), (255, 255, 255)), ((0, 150, 170), (255, 255, 255)), ((58, 98, 200), (255, 255, 255)), ((250, 250, 244), (24, 26, 34)), ((240, 170, 30), (24, 26, 34))]
+
+
+def draw_kw(fr, kws, t, dur, hidden=False):
+    """Vox key-word cards: every important word the narrator says lands as a coloured sticker on the paper, stacked on the right."""
+    for n, k in enumerate(kws):
+        tk = k["t"]
+        if t < tk:
+            continue
+        end_fade = 1 - cl((t - (dur - 0.3)) / 0.3)
+        a = (0.0 if hidden else 1.0) * end_fade
+        if a <= 0.01:
+            continue
+        bg, fg = KW_COLS[k.get("ci", n) % len(KW_COLS)]
+        key = ("kw", k["text"], bg)
+        if key not in _VX:
+            spr = _vx_text(k["text"], 54, "title", fill=fg, stroke=0, shadow=False, max_w=int(W * 0.30))
+            card = Image.new("RGBA", (spr.width + 48, spr.height + 26), tuple(bg) + (255,))
+            card.putalpha(rounded_mask(card.size, 14))
+            card.alpha_composite(spr, ((card.width - spr.width) // 2, (card.height - spr.height) // 2))
+            sh_ = Image.new("RGBA", (card.width + 40, card.height + 40), (0, 0, 0, 0))
+            ImageDraw.Draw(sh_).rounded_rectangle([20 + 3, 20 + 9, 20 + card.width + 3, 20 + card.height + 9], 14, fill=(0, 0, 0, 110))
+            sh_ = sh_.filter(ImageFilter.GaussianBlur(7))
+            sh_.alpha_composite(card, (20, 20))
+            _VX[key] = sh_
+        q = e_back(cl((t - tk) / 0.4))
+        rot = (-2.5, 2.0, -1.5, 2.8)[n % 4]
+        spr = _VX[key].rotate(rot, resample=Image.BICUBIC, expand=True)
+        cy = H * (0.19 + 0.17 * n)
+        cx = W * 0.78 + (1 - cl(q)) * 340
+        put(fr, spr, cx, cy, 0.85 + 0.15 * cl(q), a)
+        if q >= 1.0 and not hidden:  # marker underline sweeps under the new word
+            u = e_out(cl((t - tk - 0.35) / 0.5))
+            if u > 0.02:
+                y = cy + spr.height / 2 - 14
+                x0 = cx - spr.width / 2 + 24
+                _aa_poly(fr, [(x0, y + 2), (x0 + (spr.width - 48) * u, y - 3)], 5, (232, 40, 56), a)
 
 
 def draw_new_kind(fr, sh, tl, t0, t1, a, ov):
@@ -6633,8 +6783,12 @@ def item_zones(it):
         return {"BR"}
     if k == "bubble":
         return {"T"}
-    if k in ("feature", "beforeafter", "chart", "tline", "hl"):
+    if k in ("feature", "beforeafter"):
         return {"FULL"}
+    if k in ("tline", "hl"):
+        return {"BL", "BR"}
+    if k == "chart":
+        return {"M"}
     if k == "compare":
         return {"M", "BL", "BR"}
     if k == "measure":
@@ -7418,26 +7572,39 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             fr.paste(Image.blend(fr, Image.new("RGB", fr.size, pu), 0.34 * (1 - tl / 0.55) ** 1.5))
         draw_popup(fr, sh, tl)
         draw_ov(fr, sh, tl, pal)
+        def _items_pass(post):
+            for x_ in items:
+                if x_["t0"] <= t < x_["t1"] and ((x_["it"]["kind"] in ON_PHOTO) != post):
+                    ov_ = x_["ps"].get("ov")
+                    if x_["ps"].get("_idx") != idx:  # the picture under this item changed: re-measure the subject
+                        x_["ps"]["_idx"] = idx
+                        x_["ps"]["img"] = sh.get("img")
+                        x_["ps"].pop("subj", None)
+                    if ov_ and ov_["kind"] in ("note", "verdict", "explain", "action", "feature") and "side" not in ov_:
+                        ov_["side"] = empty_side(fr)  # keep the text off the person / subject
+                    draw_popup(fr, x_["ps"], t - x_["t0"])
+                    draw_ov(fr, x_["ps"], t - x_["t0"], pal)
+        _items_pass(False)  # everything that lives ON the photo is drawn first ...
         cg_ = [x_ for x_ in items if x_["it"]["kind"] in COLLAGE_KINDS and x_["t0"] <= t < x_["t1"]]
-        if cg_:  # Vox look: the picture becomes a taped photo on coloured paper while a chart / timeline / highlight is explained
+        vox_on = bool(sc.get("vox")) or bool(cg_)
+        if vox_on:  # ... then the photo becomes the Vox taped-photo card on coloured paper, and the explaining cards go on the paper
             try:
-                tt_, du_ = t - cg_[0]["t0"], cg_[0]["t1"] - cg_[0]["t0"]
-                fr = vox_collage(fr, min(cl(tt_ / 0.5), 1 - cl((tt_ - (du_ - 0.45)) / 0.4)), cg_[0]["it"].get("ci", 0), cg_[0]["it"]["kind"])
+                q_v = cl(t / 0.45) if sc.get("vox") else min(cl((t - cg_[0]["t0"]) / 0.5), 1 - cl((t - (cg_[0]["t1"] - 0.45)) / 0.4))
+                ci_v = sc["vox"] if sc.get("vox") else cg_[0]["it"].get("ci", 0)
+                fr = vox_collage(fr, q_v, ci_v if isinstance(ci_v, int) else 0)
             except Exception as e_:  # noqa
                 if not _VX.get("err_collage"):
                     _VX["err_collage"] = 1
                     log("vox collage failed once:", type(e_).__name__, str(e_)[:100])
-        for x_ in items:
-            if x_["t0"] <= t < x_["t1"]:
-                ov_ = x_["ps"].get("ov")
-                if x_["ps"].get("_idx") != idx:  # the picture under this item changed: re-measure the subject
-                    x_["ps"]["_idx"] = idx
-                    x_["ps"]["img"] = sh.get("img")
-                    x_["ps"].pop("subj", None)
-                if ov_ and ov_["kind"] in ("note", "verdict", "explain", "action", "feature") and "side" not in ov_:
-                    ov_["side"] = empty_side(fr)  # keep the text off the person / subject
-                draw_popup(fr, x_["ps"], t - x_["t0"])
-                draw_ov(fr, x_["ps"], t - x_["t0"], pal)
+        _items_pass(True)
+        if sc.get("vox") and sc.get("kw"):
+            busy_ = any(x_["it"]["kind"] in ("chart", "compare", "tline") and x_["t0"] <= t < x_["t1"] for x_ in items)
+            try:
+                draw_kw(fr, sc["kw"], t, dur, busy_)
+            except Exception as e_:  # noqa
+                if not _VX.get("err_kw"):
+                    _VX["err_kw"] = 1
+                    log("vox keyword cards failed once:", type(e_).__name__, str(e_)[:100])
         if lt is not None:
             q = e_back((t - 0.2) / 0.5)
             out = 1 - cl((t - (dur - 0.45)) / 0.35)
@@ -10597,6 +10764,13 @@ def selftest():
 
     voice = make_voice(sc, t0 / "voice", synth=fake_tts)
     total = ffprobe_dur(voice)
+    if os.environ.get("SELFTEST_VOX"):
+        globals()["gemini_json"] = lambda *a_, **k_: {"scenes": []}
+        log("selftest vox: rules", {k: v for k, v in det_techniques(sc).items() if v})
+        techniques_coverage(sc, "test")
+        log("selftest vox scenes:", assign_vox(sc))
+        for i_, s_ in enumerate(sc):
+            log(i_, s_.get("type"), "vox" if s_.get("vox") is not None else "-", [(x["w"], x["kind"]) for x in s_.get("items", []) if isinstance(x, dict) and x.get("kind") in NEW_KINDS], [k["text"] for k in s_.get("kw", [])])
     silent, ev = build_video(sc, t0 / "build", pal)
     music = t0 / "music.wav"
     mood = os.environ.get("MOOD", random.choice(MOOD_NAMES))
