@@ -1196,30 +1196,71 @@ def det_techniques(scenes):
     return n
 
 
+def norm_txt(t):
+    return re.sub(r"[\s।,.!?\"'“”‘’:;()\-–—…]+", "", str(t or ""))
+
+
 def assign_vox(scenes):
-    """Vox look: most photo scenes become the taped-photo-on-coloured-paper layout, with the key words landing as stickers while the narrator says them."""
-    k_ = 0
-    nph = [i for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt")]
+    """Style mix: every point gets key-word stickers; only scenes that EXPLAIN data / sequences / comparisons (or every 4th calm one) use the Vox paper layout, the rest stay cinematic full-screen with the other techniques."""
+    nph = [i for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
+    vox_n, last_vox = 0, -9
+    cap = max(1, int(round(len(nph) * 0.3)))
     for j, i in enumerate(nph):
         sc = scenes[i]
         wds = sc["narration_hi"].split()
-        if len(wds) != len(sc["wt"]):
-            continue
+        sc["kw"] = [{"t": max(0.2, sc["wt"][wi][0] - 0.05), "text": tx, "ci": (j + n_) % len(KW_COLS)} for n_, (wi, tx) in enumerate(kw_words(wds, 4))]
+        sc.pop("vox", None)
         its = [x.get("kind") for x in sc.get("items", []) if isinstance(x, dict)]
-        heavy = any(x in its for x in ("beforeafter", "feature", "verdict", "action", "srclist"))
-        vox = (j % 3 != 0 or any(x in its for x in ("chart", "tline", "compare"))) and not heavy and j != len(nph) - 1 or any(x in its for x in ("chart", "tline"))
-        if len(nph) <= 3:
-            vox = j != 0 and not heavy
-        if not vox:
-            sc.pop("vox", None)
-            sc.pop("kw", None)
+        heavy = any(x in its for x in ("beforeafter", "feature", "verdict", "action", "srclist", "lens", "measure"))
+        want = any(x in its for x in ("compare", "chart", "tline")) or j % 4 == 2
+        if want and not heavy and 0 < j < len(nph) - 1 and j - last_vox > 1 and vox_n < cap:
+            sc["vox"] = vox_n % len(VOX_BG)
+            vox_n += 1
+            last_vox = j
+    return vox_n
+
+
+TXT_PRI = {"person": 9, "name": 9, "place": 8, "title": 8, "year": 7, "stat": 7, "quote": 7, "note": 6, "bubble": 6, "measure": 5, "compare": 5, "chart": 5, "tline": 5, "hl": 4, "mark": 3, "kw": 1}
+
+
+def dedupe_texts(scenes):
+    """No scene shows the same (or a contained) text twice: the lower-priority copy is removed (sticker first, then marker label, highlight bar...)."""
+    removed = 0
+    for sc in scenes:
+        if sc.get("type") != "photo":
             continue
-        sc["vox"] = k_ % len(VOX_BG)
-        sc["kw"] = []
-        for n_, (wi, tx) in enumerate(kw_words(wds, 4)):
-            sc["kw"].append({"t": max(0.2, sc["wt"][wi][0] - 0.05), "text": tx, "ci": (k_ + n_) % len(KW_COLS)})
-        k_ += 1
-    return k_
+        ents = []  # (pri, norm, setter)
+        items = [x for x in sc.get("items", []) if isinstance(x, dict)]
+        for x in items:
+            t_ = norm_txt(x.get("text"))
+            if len(t_) >= 2 and x.get("kind") in TXT_PRI:
+                ents.append((TXT_PRI[x["kind"]], t_, x))
+        for k in sc.get("kw", []):
+            ents.append((1, norm_txt(k["text"]), k))
+        for sh in sc.get("shots", []) or []:
+            if isinstance(sh, dict) and norm_txt(sh.get("label_hi")):
+                ents.append((8, norm_txt(sh["label_hi"]), sh))
+        ents.sort(key=lambda e: -e[0])
+        kept = []
+        for pri, t_, obj in ents:
+            if obj in kept:
+                continue
+            dup = any(t_ == e[1] or (min(pri, e[0]) <= 3 and min(len(t_), len(e[1])) >= 3 and (t_ in e[1] or e[1] in t_)) for e in ents if e[2] in kept)
+            if dup:
+                removed += 1
+                if "t" in obj and "ci" in obj and "w" not in obj:
+                    sc["kw"].remove(obj)
+                elif obj.get("kind") == "mark":
+                    obj["text"] = ""
+                elif "kind" in obj:
+                    items.remove(obj)
+                    sc["items"].remove(obj)
+                else:
+                    obj["label_hi"] = ""
+            else:
+                kept.append(obj)
+    log("duplicate texts removed:", removed)
+    return removed
 
 
 def techniques_prompt(topic, listing):
@@ -1388,7 +1429,7 @@ def finalize_overlays(scenes, topic=""):
     for name, fn in (("declared_sources", lambda: notes_from_declared_src(scenes, topic)), ("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
                      ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)),
                      ("overlays", lambda: overlay_pass(scenes, topic)), ("png_pass", lambda: png_pass(scenes, topic)),
-                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("vox", lambda: assign_vox(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
+                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("vox", lambda: assign_vox(scenes)), ("dedupe", lambda: dedupe_texts(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
                      ("entity_sources", lambda: notes_for_entities(scenes)), ("source_list", lambda: add_source_outro(scenes))):
         try:
             st[name] = fn()
@@ -5769,7 +5810,7 @@ def draw_hl(fr, sh, tl, t0, t1, a, ov):
     spr = _vx_text(txt, 76, "title", fill=fg, stroke=0, shadow=False, max_w=int(W * 0.8))
     bw, bh = spr.width + 70, spr.height + 30
     p = e_out(cl((tl - t0) / 0.5))
-    cx, cy = W / 2, H * 0.80
+    cx, cy = W / 2, H * 0.865
     bar = Image.new("RGBA", (bw, bh), tuple(bg) + (255,))
     ImageDraw.Draw(bar).polygon([(0, 0), (22, 0), (0, bh)], fill=(0, 0, 0, 0))
     cw = max(2, int(bw * p))
@@ -5784,7 +5825,8 @@ def draw_hl(fr, sh, tl, t0, t1, a, ov):
 
 
 # ---- the Vox paper-collage frame: the picture becomes a tilted, taped photo on coloured paper while a chart / timeline / highlight is shown
-COLLAGE_KINDS = ("chart", "tline", "hl")
+COLLAGE_KINDS = ("chart", "tline")
+POST_KINDS = {"hl", "chart", "tline", "compare"}
 VOX_BG = [(236, 196, 92), (84, 184, 190), (240, 120, 96), (126, 164, 220), (246, 232, 206)]
 
 
@@ -5867,7 +5909,7 @@ def draw_kw(fr, kws, t, dur, hidden=False):
         q = e_back(cl((t - tk) / 0.4))
         rot = (-2.5, 2.0, -1.5, 2.8)[n % 4]
         spr = _VX[key].rotate(rot, resample=Image.BICUBIC, expand=True)
-        cy = H * (0.19 + 0.17 * n)
+        cy = H * (0.17 + 0.15 * n)
         cx = W * 0.78 + (1 - cl(q)) * 340
         put(fr, spr, cx, cy, 0.85 + 0.15 * cl(q), a)
         if q >= 1.0 and not hidden:  # marker underline sweeps under the new word
@@ -5876,6 +5918,35 @@ def draw_kw(fr, kws, t, dur, hidden=False):
                 y = cy + spr.height / 2 - 14
                 x0 = cx - spr.width / 2 + 24
                 _aa_poly(fr, [(x0, y + 2), (x0 + (spr.width - 48) * u, y - 3)], 5, (232, 40, 56), a)
+
+
+def draw_kw_corner(fr, kws, t, dur, subj_x, has_label, blocked):
+    """Non-Vox scenes: the key word the narrator just said pops as a small sticker in the top corner away from the subject."""
+    cur = None
+    for k in kws:
+        if k["t"] <= t < k["t"] + 1.8:
+            cur = k
+    if cur is None or blocked:
+        return
+    tt = t - cur["t"]
+    a = cl(tt / 0.2) * (1 - cl((tt - 1.45) / 0.35)) * (1 - cl((t - (dur - 0.3)) / 0.3))
+    bg, fg = KW_COLS[cur.get("ci", 0) % len(KW_COLS)]
+    key = ("kwc", cur["text"], bg)
+    if key not in _VX:
+        spr = _vx_text(cur["text"], 46, "title", fill=fg, stroke=0, shadow=False, max_w=int(W * 0.30))
+        card = Image.new("RGBA", (spr.width + 40, spr.height + 22), tuple(bg) + (255,))
+        card.putalpha(rounded_mask(card.size, 12))
+        card.alpha_composite(spr, ((card.width - spr.width) // 2, (card.height - spr.height) // 2))
+        lay = Image.new("RGBA", (card.width + 36, card.height + 36), (0, 0, 0, 0))
+        ImageDraw.Draw(lay).rounded_rectangle([18 + 3, 18 + 8, 18 + card.width + 3, 18 + card.height + 8], 12, fill=(0, 0, 0, 110))
+        lay = lay.filter(ImageFilter.GaussianBlur(6))
+        lay.alpha_composite(card, (18, 18))
+        _VX[key] = lay
+    left = (subj_x > 0.55) and not has_label
+    q = e_back(cl(tt / 0.35))
+    spr = _VX[key]
+    cx = (W * 0.14 if left else W * 0.86) + (1 - cl(q)) * (-200 if left else 200)
+    put(fr, spr, cx, H * 0.115, 0.85 + 0.15 * cl(q), a)
 
 
 def draw_new_kind(fr, sh, tl, t0, t1, a, ov):
@@ -7562,6 +7633,17 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             fr = blend_trans(ends[idx - 1], fr, tl / sh["tdur"], sh["trans"])
         fr = fx_apply(fr, t, int(t * FPS), sh["phase"])
         dust.draw(fr, t)
+        for k_w in sc.get("kw") or ():  # the picture gives a small punch-in on every key word the narrator says
+            u_ = (t - k_w["t"]) / 0.38
+            if 0 <= u_ < 1:
+                zz_ = 1 + 0.03 * math.sin(math.pi * u_)
+                cw_, ch_ = W / zz_, H / zz_
+                fr = fr.crop((int((W - cw_) / 2), int((H - ch_) / 2), int((W + cw_) / 2), int((H + ch_) / 2))).resize((W, H), Image.BICUBIC)
+                break
+        if lt is not None:
+            q = e_back((t - 0.2) / 0.5)
+            out = 1 - cl((t - (dur - 0.45)) / 0.35)
+            put(fr, lt, 70 + lt.width / 2 - (1 - cl(q)) * 420, 78, 1.0, cl((t - 0.2) * 5) * out)
         if sh.get("lab") is not None and 0.12 < tl < min(sh["dur"] - 0.1, 3.4):
             lq = e_back((tl - 0.2) / 0.45)
             lo = 1 - cl((tl - (min(sh["dur"] - 0.15, 3.2) - 0.3)) / 0.3)
@@ -7574,7 +7656,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
         draw_ov(fr, sh, tl, pal)
         def _items_pass(post):
             for x_ in items:
-                if x_["t0"] <= t < x_["t1"] and ((x_["it"]["kind"] in ON_PHOTO) != post):
+                if x_["t0"] <= t < x_["t1"] and ((x_["it"]["kind"] in POST_KINDS) == post):
                     ov_ = x_["ps"].get("ov")
                     if x_["ps"].get("_idx") != idx:  # the picture under this item changed: re-measure the subject
                         x_["ps"]["_idx"] = idx
@@ -7605,10 +7687,14 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                 if not _VX.get("err_kw"):
                     _VX["err_kw"] = 1
                     log("vox keyword cards failed once:", type(e_).__name__, str(e_)[:100])
-        if lt is not None:
-            q = e_back((t - 0.2) / 0.5)
-            out = 1 - cl((t - (dur - 0.45)) / 0.35)
-            put(fr, lt, 70 + lt.width / 2 - (1 - cl(q)) * 420, 78, 1.0, cl((t - 0.2) * 5) * out)
+        if sc.get("kw") and not sc.get("vox") and not vox_on:
+            try:
+                blocked_ = any(x_["t0"] <= t < x_["t1"] and (item_zones(x_["it"]) & {"T", "FULL"}) for x_ in items)
+                draw_kw_corner(fr, sc["kw"], t, dur, _subj(sh)[0], lt is not None, blocked_)
+            except Exception as e_:  # noqa
+                if not _VX.get("err_kwc"):
+                    _VX["err_kwc"] = 1
+                    log("keyword sticker failed once:", type(e_).__name__, str(e_)[:100])
         return fr
     return draw
 
@@ -10769,6 +10855,7 @@ def selftest():
         log("selftest vox: rules", {k: v for k, v in det_techniques(sc).items() if v})
         techniques_coverage(sc, "test")
         log("selftest vox scenes:", assign_vox(sc))
+        dedupe_texts(sc)
         for i_, s_ in enumerate(sc):
             log(i_, s_.get("type"), "vox" if s_.get("vox") is not None else "-", [(x["w"], x["kind"]) for x in s_.get("items", []) if isinstance(x, dict) and x.get("kind") in NEW_KINDS], [k["text"] for k in s_.get("kw", [])])
     silent, ev = build_video(sc, t0 / "build", pal)
