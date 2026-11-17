@@ -499,6 +499,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-17T04:20:30+00:00",
+   "topic_en": "Why is Mars's volcano Olympus Mons three times taller than Mount Everest?",
+   "title_hi": "मंगल का ज्वालामुखी एवरेस्ट से तीन गुना ऊँचा कैसे बना?",
+   "category": "solar_system",
+   "style": "myth",
+   "theme": "lavender",
+   "mood": "space",
+   "seconds": 32,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
