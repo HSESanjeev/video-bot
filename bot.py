@@ -958,6 +958,13 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 
 
 # =========================================================================== techniques_pass: puts every technique at the moment the narrator calls for it, then guarantees coverage
+# CINEMA_MODE (default on): the calm, Netflix-documentary restraint. One idea on screen at a time, no stickers / paper collage unless a chart or timeline truly needs it,
+# the real picture does the work. Set the variable CINEMA_MODE=0 to bring back the busy "every technique everywhere" look (all technique code is kept).
+CINEMA_MODE = os.environ.get("CINEMA_MODE", "1") != "0"
+CALM_MAX_ITEMS = 3
+CALM_GAP = 2.4
+CALM_PRI = {"note": 10, "srclist": 10, "person": 9, "name": 9, "place": 9, "title": 9, "year": 8, "stat": 8, "verdict": 8, "explain": 7, "action": 7, "feature": 7, "compare": 7, "chart": 7, "tline": 7,
+            "measure": 6, "beforeafter": 6, "lens": 5, "mark": 4, "quote": 4, "bubble": 3, "qmark": 3, "hl": 2}
 PERMANENT_TECHNIQUES = {
     "split": "split screen (multi scene) - two/three subjects named together",
     "terrain": "terrain map - a journey / distance between two places",
@@ -973,8 +980,8 @@ PERMANENT_TECHNIQUES = {
     "tline": "Vox multi-event timeline - 3-5 dated events in order",
     "hl": "Vox highlight bar - the key claim in big text",
 }
-TECH_PER_MIN = {"qmark": 1.2, "lens": 1.0, "mark": 1.6, "hl": 1.6, "measure": 0.8, "compare": 0.5, "beforeafter": 0.4, "chart": 0.6, "tline": 0.4}
-TECH_MIN_ABS = {"qmark": 1, "lens": 1, "mark": 1, "hl": 1, "measure": 1, "compare": 1, "beforeafter": 1, "chart": 1, "tline": 1}
+TECH_PER_MIN = {"qmark": 0.5, "lens": 0.5, "mark": 0.5, "hl": 0.0, "measure": 0.6, "compare": 0.4, "beforeafter": 0.3, "chart": 0.4, "tline": 0.3} if CINEMA_MODE else {"qmark": 1.2, "lens": 1.0, "mark": 1.6, "hl": 1.6, "measure": 0.8, "compare": 0.5, "beforeafter": 0.4, "chart": 0.6, "tline": 0.4}
+TECH_MIN_ABS = {"qmark": 1, "lens": 1, "mark": 1, "hl": 0 if CINEMA_MODE else 1, "measure": 1, "compare": 1, "beforeafter": 1, "chart": 1, "tline": 1}
 TECH_MAX = {"beforeafter": 3}
 UNIT_RE = re.compile(r"(मीटर|किलोमीटर|सेंटीमीटर|सेमी|मिमी|फीट|फुट|इंच|किलोग्राम|किलो|टन|मील|लीटर|घंटे|साल|वर्ष|डिग्री|मीटर्स)")
 NUM_RE = re.compile(r"^[0-9०-९][0-9०-९,.]*$")
@@ -1181,14 +1188,14 @@ def det_techniques(scenes):
             ev = [{"when": clean_short(it["text"], 14), "what": clean_short(it.get("sub") or "", 22) or clean_short(it["text"], 14)} for it in yrs[:5]]
             add({"w": yrs[0]["w"], "kind": "tline", "text": "", "events": ev, "span": 6.2, "ci": (si + 1) % len(VOX_BG)}, 99)
         # every scene: the key claim as a highlight bar on its last words, and a marker on the first key word
-        if not cnt["hl"] and len(wds) >= 8:
+        if not CINEMA_MODE and not cnt["hl"] and len(wds) >= 8:
             tail = [w_ for w_ in wds[-6:]]
             while tail and not _tw(tail[0]):
                 tail.pop(0)
             txt = clean_short(" ".join(_tw(x) if i_ == len(tail) - 1 else x.strip(",") for i_, x in enumerate(tail)), 40)
             _TECH_SEQ[0] += 1
             add({"w": max(0, len(wds) - 6), "kind": "hl", "text": txt, "ci": _TECH_SEQ[0] % len(HL_COLS)}, 99)
-        if not cnt["mark"] and not cnt["lens"] and len(wds) >= 8:
+        if not CINEMA_MODE and not cnt["mark"] and not cnt["lens"] and len(wds) >= 8:
             kk = kw_words(wds, 1)
             if kk:
                 add({"w": kk[0][0], "kind": "mark", "text": kk[0][1], "shape": ("circle", "underline", "arrow")[si % 3]}, 99)
@@ -1210,6 +1217,9 @@ def assign_vox(scenes):
         wds = sc["narration_hi"].split()
         sc["kw"] = [{"t": max(0.2, sc["wt"][wi][0] - 0.05), "text": tx, "ci": (j + n_) % len(KW_COLS)} for n_, (wi, tx) in enumerate(kw_words(wds, 4))]
         sc.pop("vox", None)
+        if CINEMA_MODE:  # calm mode: no key-word stickers, no punch-ins, no paper layout (charts / timelines still use it by themselves)
+            sc["kw"] = []
+            continue
         its = [x.get("kind") for x in sc.get("items", []) if isinstance(x, dict)]
         heavy = any(x in its for x in ("beforeafter", "feature", "verdict", "action", "srclist", "lens", "measure"))
         want = any(x in its for x in ("compare", "chart", "tline")) or j % 4 == 2
@@ -1221,6 +1231,36 @@ def assign_vox(scenes):
 
 
 TXT_PRI = {"person": 9, "name": 9, "place": 8, "title": 8, "year": 7, "stat": 7, "quote": 7, "note": 6, "bubble": 6, "measure": 5, "compare": 5, "chart": 5, "tline": 5, "hl": 4, "mark": 3, "kw": 1}
+
+
+def calm_pass(scenes):
+    """Restraint: at most CALM_MAX_ITEMS overlays per scene and never two starting within CALM_GAP seconds; the most meaningful ones survive."""
+    if not CINEMA_MODE:
+        return 0
+    dropped = 0
+    for sc in scenes:
+        its = sc.get("items")
+        if sc.get("type") != "photo" or not isinstance(its, list) or not sc.get("wt"):
+            continue
+        wt = sc["wt"]
+
+        def t_of(x):
+            try:
+                return float(wt[min(max(0, int(x.get("w", 0))), len(wt) - 1)][0])
+            except Exception:  # noqa
+                return 0.0
+        cand = sorted([x for x in its if isinstance(x, dict)], key=lambda x: -CALM_PRI.get(x.get("kind"), 5))
+        keep = []
+        for x in cand:
+            if len(keep) >= CALM_MAX_ITEMS:
+                break
+            if any(abs(t_of(x) - t_of(k)) < CALM_GAP for k in keep):
+                continue
+            keep.append(x)
+        dropped += len(its) - len(keep)
+        sc["items"] = sorted(keep, key=lambda x: x.get("w", 0))
+    log("calm mode: overlays removed to keep the screen clean:", dropped)
+    return dropped
 
 
 def dedupe_texts(scenes):
@@ -1429,7 +1469,7 @@ def finalize_overlays(scenes, topic=""):
     for name, fn in (("declared_sources", lambda: notes_from_declared_src(scenes, topic)), ("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
                      ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)),
                      ("overlays", lambda: overlay_pass(scenes, topic)), ("png_pass", lambda: png_pass(scenes, topic)),
-                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("vox", lambda: assign_vox(scenes)), ("dedupe", lambda: dedupe_texts(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
+                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("vox", lambda: assign_vox(scenes)), ("dedupe", lambda: dedupe_texts(scenes)), ("calm", lambda: calm_pass(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
                      ("entity_sources", lambda: notes_for_entities(scenes)), ("source_list", lambda: add_source_outro(scenes))):
         try:
             st[name] = fn()
@@ -1769,7 +1809,7 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 - "map" with mode "terrain" (BEST for a distance or "from this place to that place" within about 1000 km, e.g. two villages/cities/districts): a tilted satellite-style terrain map with big region names on the ground, two yellow place tags, an animated arrow between them and the distance written on it; the camera follows each point. Format: "map": {"mode": "terrain", "pins": [{"label_hi": "शरीफपुरा गाँव", "lat": 27.4, "lon": 79.6}, {"label_hi": "बिरपुर गाँव", "lat": 27.3, "lon": 79.5}], "regions": [{"label_hi": "फ़र्रुख़ाबाद", "lat": 27.4, "lon": 79.6}, {"label_hi": "मैनपुरी", "lat": 27.2, "lon": 79.0}]} where regions are the 2-4 districts/states/countries around the two places (centre lat/lon). Use terrain ONLY when exactly two places are named (a start and an end): the distance is computed automatically. When THREE OR MORE places are named in a row use terrain with 3-5 pins in the order named: no distance, just pins and an arrow from each place to the next on the same ground.
 - "sketch": ANIMATED LINE-ART DIAGRAM drawn stroke by stroke on parchment (like a premium explainer film) that makes a MECHANISM visible: how something forms, collides, flows, grows, splits, is built from layers, or how two things differ. Use it for about 20-30% of the scenes (the scenes that explain HOW or WHY; at least two in the video, never scene 1 or the last scene). Fields: "type": "sketch", "headline_hi" (2-5 Hindi words, the key claim, shown big on the left word by word), "sketch_brief_en" (one precise English sentence: exactly what the drawing shows, e.g. "a small planet Theia hitting the young Earth from the left, debris flying out, then the Moon forming from the debris"), "year_hi" (a date / time like "४५० करोड़ साल पहले" ONLY if the narration says one, else ""), narration 18-34 words. The drawing is made later from sketch_brief_en, so describe it concretely.
 - "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook and key insights.
-STYLE TARGET = a real documentary: use type "photo" for at least 60% of ALL scenes and "sketch" for the explaining scenes, because every photo scene is edited word by word with real pictures, camera keyframes, maps, dates and source cards by the director. Cartoon-style explainer cards (merge, split, steps, compare, bars) look cheap: use "sketch" scenes instead whenever a point is a mechanism or process. PERMANENT TECHNIQUE RULES (never drop): the engine draws these on the spoken words, so WRITE narration that gives them something to show: (1) say real sizes / lengths / heights / depths / weights with a number and unit (measuring screen); (2) ask the viewer 2-4 real questions during the video ("आखिर ऐसा क्यों?") (question marks); (3) say a 'then vs now' or 'before vs after' of the same thing at least once; (4) compare two things with numbers at least once (comparison panel / chart); (5) tell 3-5 dated events in order at least once (timeline); (6) name two subjects together at least once (split screen, use one "multi" scene) and a journey or distance between two real places at least once (use one "map" scene); (7) say what is a myth and what is a fact at least once (cross / tick); (8) point at a tiny detail ('ध्यान से देखिए') at least once (magnifier); (9) end each scene on a short strong claim sentence (highlight bar). Numbers must always be real, taken from the sources. Use "counter" only for one really striking number, "map" whenever places/routes are named (this is the preferred explainer), "kinetic" at most once (the re-hook). Photo scenes should have 22-40 words of narration (several different subjects/details per scene give the director more to show).
+STYLE TARGET = a real documentary: use type "photo" for at least 60% of ALL scenes and "sketch" for the explaining scenes, because every photo scene is edited word by word with real pictures, camera keyframes, maps, dates and source cards by the director. Cartoon-style explainer cards (merge, split, steps, compare, bars) look cheap: use "sketch" scenes instead whenever a point is a mechanism or process. STORYTELLING RULES (documentary craft, obey always): open IN THE MIDDLE OF A REAL MOMENT (a specific place, date and person or animal, one concrete image) before explaining anything; never start with "आज हम जानेंगे"/greetings/definitions. Build like a true-story film: a clear subject we care about -> what they wanted or faced -> rising tension with concrete facts -> one turning point (the surprising reveal, placed late) -> consequence -> a quiet, resonant last line (no recap, no moral lecture, no subscribe). Use concrete sensory details and numbers from the sources, short sentences (8-16 words), one idea per sentence, vary the rhythm (a very short sentence after a long one for impact). Calm, restrained, factual tone; no hype words (अद्भुत, ज़बरदस्त, शॉकिंग); never invent anything. PERMANENT TECHNIQUE RULES (never drop): the engine draws these on the spoken words, so WRITE narration that gives them something to show: (1) say real sizes / lengths / heights / depths / weights with a number and unit (measuring screen); (2) ask the viewer 2-4 real questions during the video ("आखिर ऐसा क्यों?") (question marks); (3) say a 'then vs now' or 'before vs after' of the same thing at least once; (4) compare two things with numbers at least once (comparison panel / chart); (5) tell 3-5 dated events in order at least once (timeline); (6) name two subjects together at least once (split screen, use one "multi" scene) and a journey or distance between two real places at least once (use one "map" scene); (7) say what is a myth and what is a fact at least once (cross / tick); (8) point at a tiny detail ('ध्यान से देखिए') at least once (magnifier); (9) end each scene on a short, clear sentence. Numbers must always be real, taken from the sources. Use "counter" only for one really striking number, "map" whenever places/routes are named (this is the preferred explainer), "kinetic" at most once (the re-hook). Photo scenes should have 22-40 words of narration (several different subjects/details per scene give the director more to show).
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
 Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in any picture, no real people.
 Every scene also has "grade" (colour grading that fits the scene: warm for fire/desert/sunrise/early Earth, cool for ocean/ice/night/space, cinematic for dramatic reveals, vivid for lively nature and animals, dark for danger and mystery, dread for creepy/scary/dangerous night scenes (cold teal), bwred for shock, fear, anger or a dramatic turning point (black and white with red glow), redwash for violence or emergency, natural for calm facts) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
@@ -10856,6 +10896,7 @@ def selftest():
         techniques_coverage(sc, "test")
         log("selftest vox scenes:", assign_vox(sc))
         dedupe_texts(sc)
+        calm_pass(sc)
         for i_, s_ in enumerate(sc):
             log(i_, s_.get("type"), "vox" if s_.get("vox") is not None else "-", [(x["w"], x["kind"]) for x in s_.get("items", []) if isinstance(x, dict) and x.get("kind") in NEW_KINDS], [k["text"] for k in s_.get("kw", [])])
     silent, ev = build_video(sc, t0 / "build", pal)
