@@ -3,6 +3,7 @@
  "accent": 0,
  "styles": [
   "banner_zoom",
-  "hero_right"
+  "hero_right",
+  "top_title"
  ]
 }
