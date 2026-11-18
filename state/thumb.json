@@ -2,11 +2,11 @@
  "layout": "side",
  "accent": 0,
  "styles": [
-  "banner_zoom",
   "hero_right",
   "top_title",
   "banner_zoom",
   "hero_right",
-  "top_title"
+  "top_title",
+  "banner_zoom"
  ]
 }
