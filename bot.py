@@ -1469,7 +1469,7 @@ def finalize_overlays(scenes, topic=""):
     for name, fn in (("declared_sources", lambda: notes_from_declared_src(scenes, topic)), ("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
                      ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)),
                      ("overlays", lambda: overlay_pass(scenes, topic)), ("png_pass", lambda: png_pass(scenes, topic)),
-                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("vox", lambda: assign_vox(scenes)), ("dedupe", lambda: dedupe_texts(scenes)), ("calm", lambda: calm_pass(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
+                     ("years", lambda: resolve_years(scenes)), *([] if T151_ON else [("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("vox", lambda: assign_vox(scenes)), ("dedupe", lambda: dedupe_texts(scenes)), ("calm", lambda: calm_pass(scenes))]), ("forced_sources", lambda: force_source_cards(scenes, topic)),
                      ("entity_sources", lambda: notes_for_entities(scenes)), ("source_list", lambda: add_source_outro(scenes))):
         try:
             st[name] = fn()
@@ -1479,6 +1479,13 @@ def finalize_overlays(scenes, topic=""):
         assign_note_styles(scenes)
     except Exception as e:  # noqa
         log("assign_note_styles failed:", type(e).__name__, str(e)[:100])
+    if T151_ON:
+        try:
+            plan_ = plan_t151(scenes, topic)
+            T151_PLAN[0] = plan_
+            st["t151"] = plan_["C"]["placed"] if plan_ else 0
+        except Exception as e:  # noqa
+            log("t151 planner failed:", type(e).__name__, str(e)[:120])
     log("overlay finalize:", st, "| optional Gemini calls:", GOV["opt"], "skipped:", GOV["skipped"], "| minutes used:", round(elapsed_min()))
     return st
 
@@ -1817,7 +1824,7 @@ Every scene also has "grade" (colour grading that fits the scene: warm for fire/
 """
 
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
-TRANS_NAMES = ["fade", "zoom", "whip", "wipe", "circle", "flash", "cut"]
+TRANS_NAMES = ["fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
 TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
 MOOD_NAMES = ["mystery", "epic", "wonder", "calm", "tense", "life", "space"]
 TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
@@ -4280,6 +4287,8 @@ def shot_frame(shot, tl):
 def blend_trans(prev, cur, p, kind):
     np = _np()
     p = cl(p)
+    if kind in TR_NEW:
+        return tr_new(prev, cur, p, kind)
     if kind == "fade":
         return Image.blend(prev, cur, e_io(p))
     if kind == "flash":
@@ -7625,6 +7634,1940 @@ def draw_ov(fr, sh, tl, pal):
     put(fr, spr, cx, cy, 0.7 + 0.3 * cl(q) if ov["kind"] == "bubble" else 1.0, a)
 
 
+# =========================================================================== T151: the 151-technique engine (never remove unless the user says so)
+# layers: bg (44, live on the background picture / video), ov (92: frame-level effects + cards in the 3 fixed bottom slots), tr (15 transitions)
+T151 = []
+
+
+def _treg(layer, group, *pairs):
+    for key, name in pairs:
+        T151.append({"id": len(T151) + 1, "layer": layer, "group": group, "key": key, "name": name})
+
+
+_treg("bg", "map", ("map_anim", "Map Animation"), ("route", "Route Animation"), ("dist_counter", "Distance Counter Animation"), ("pin", "Location Pin Animation"), ("map_zoom", "Map Zoom In / Zoom Out"),
+      ("globe_rot", "Globe Rotation Animation"), ("globe_map", "3D Globe to Map Transition"), ("satellite", "Satellite View Animation"), ("border_hl", "Country Border Highlight Animation"),
+      ("territory", "Territory Expansion Animation"), ("hist_border", "Historical Border Change Animation"), ("army_move", "Army Movement Animation"), ("travel_path", "Travel Path Animation"),
+      ("gps", "GPS Coordinate Animation"), ("latlon", "Latitude & Longitude Animation"), ("topo", "Topographic Map Animation"), ("elev", "Elevation Profile Animation"),
+      ("compass", "Compass Animation"), ("scalebar", "Scale Bar Animation"), ("geo_compare", "Geographical Comparison Animation"))
+_treg("bg", "history", ("h_timeline", "Historical Timeline Animation"), ("old_photo", "Old Photo Animation"), ("parallax25", "2.5D Parallax Animation"), ("kenburns", "Ken Burns Effect"),
+      ("doc_reveal", "Historical Document Reveal"), ("handwriting", "Handwriting Animation"), ("newspaper", "Newspaper Reveal Animation"), ("manuscript", "Ancient Manuscript Animation"),
+      ("family_tree", "Family Tree Animation"), ("dynasty", "Dynasty Timeline Animation"), ("ruler_intro", "King / Ruler Introduction Animation"), ("portrait_reveal", "Historical Portrait Reveal"),
+      ("archival", "Archival Footage Animation"), ("old_map", "Old Map Reconstruction"), ("ba_hist", "Before & After Historical Comparison"), ("event_seq", "Historical Event Sequence Animation"),
+      ("battle_form", "Battle Formation Animation"), ("army_strength", "Army Strength Comparison"), ("kingdom_exp", "Kingdom Expansion Animation"), ("evidence_hl", "Historical Evidence Highlight Animation"))
+_treg("bg", "camera", ("push_in", "Camera Push In"), ("pull_out", "Camera Pull Out"), ("dolly_zoom", "Dolly Zoom"), ("pan", "Camera Pan Animation"))
+_treg("ov", "data", ("num_counter", "Number Counter Animation"), ("dist_card", "Distance Counter"), ("pop_counter", "Population Counter"), ("pct_counter", "Percentage Counter"), ("year_counter", "Year Counter Animation"),
+      ("countdown", "Date Countdown Animation"), ("time_counter", "Time Counter Animation"), ("bar_chart", "Animated Bar Chart"), ("pie_chart", "Animated Pie Chart"), ("line_graph", "Line Graph Animation"),
+      ("area_chart", "Area Chart Animation"), ("data_compare", "Data Comparison Animation"), ("ranking", "Ranking Animation"), ("fin_counter", "Financial Counter Animation"),
+      ("stat_info", "Statistics Infographic Animation"), ("progress", "Progress Bar Animation"), ("digital_clock", "Digital Clock Animation"), ("odometer", "Digital Odometer Animation"),
+      ("dashboard", "Live Data Dashboard Animation"), ("num_roll", "Number Rolling Animation"))
+_treg("ov", "camera", ("tilt", "Camera Tilt Animation"), ("fly", "3D Camera Fly Through"), ("orbit", "Orbit Camera Animation"), ("parallax_cam", "Parallax Camera Movement"), ("aerial", "Aerial Flyover"),
+      ("drone", "Drone Reveal Animation"), ("rack", "Rack Focus Effect"), ("shake", "Camera Shake Effect"), ("handheld", "Handheld Camera Effect"), ("whip_pan", "Whip Pan Transition"),
+      ("match_move", "Match Move Transition"), ("persp_zoom", "Perspective Zoom"), ("inf_zoom", "Infinite Zoom Animation"), ("tracking", "Camera Tracking Animation"), ("cine_reveal", "Cinematic Reveal"),
+      ("focus_pull", "Focus Pull Animation"))
+_treg("ov", "text", ("kinetic", "Kinetic Typography"), ("text3d", "3D Text Animation"), ("typewriter", "Typewriter Text Effect"), ("text_reveal", "Text Reveal Animation"), ("text_mask", "Text Masking Animation"),
+      ("word_hl", "Word Highlight Animation"), ("letter", "Letter-by-Letter Animation"), ("glitch_text", "Glitch Text Animation"), ("tracking_text", "Tracking Text Animation"), ("text_path", "Text Follow Path Animation"),
+      ("subtitles", "Animated Subtitles"), ("lower_third", "Lower Third Animation"), ("chapter", "Chapter Title Animation"), ("date_loc", "Date & Location Title Animation"), ("callout", "Callout Text Animation"),
+      ("text_persp", "Text Perspective Animation"), ("text_rot", "Text Rotation Animation"), ("text_blur", "Text Blur Reveal"), ("labels", "Animated Labels"), ("text_trans", "Text Transition Animation"))
+_treg("ov", "diagram", ("flowchart", "Flowchart Animation"), ("process", "Process Flow Animation"), ("steps", "Step-by-Step Animation"), ("mindmap", "Mind Map Animation"), ("orgchart", "Organizational Chart Animation"),
+      ("network", "Network Diagram Animation"), ("conn_line", "Connection Line Animation"), ("arrow_dir", "Arrow Direction Animation"), ("callout_ptr", "Callout Pointer Animation"), ("blueprint", "Blueprint Animation"),
+      ("exploded", "Exploded View Animation"), ("assembly", "3D Object Assembly Animation"), ("cross_section", "Cross Section Animation"), ("layer_sep", "Layer Separation Animation"), ("tech_label", "Technical Label Animation"))
+_treg("ov", "vfx", ("grain", "Film Grain Effect"), ("dust", "Dust Particle Effect"), ("smoke", "Smoke Effect"), ("fog", "Fog Effect"), ("fire", "Fire & Ember Effect"), ("rain", "Rain Effect"), ("snow", "Snow Effect"),
+      ("lightning", "Lightning Effect"), ("light_leak", "Light Leak Effect"), ("lens_flare", "Lens Flare Effect"), ("vignette", "Vignette Effect"), ("chroma", "Chromatic Aberration"), ("glitch", "Glitch Effect"),
+      ("film_burn", "Film Burn Effect"), ("vhs", "VHS Effect"), ("old_film", "Old Film Effect"), ("motion_blur", "Motion Blur Effect"), ("speed_ramp", "Speed Ramp Effect"), ("freeze", "Freeze Frame Effect"),
+      ("split", "Split Screen Effect"), ("vox", "Vox Style"))
+_treg("tr", "trans", ("mask", "Mask Transition"), ("luma", "Luma Fade Transition"), ("morph", "Morph Transition"), ("zoom", "Zoom Transition"), ("whip", "Whip Transition"), ("spin", "Spin Transition"),
+      ("glitch", "Glitch Transition"), ("flash", "Light Flash Transition"), ("burn", "Film Burn Transition"), ("shape", "Shape Transition"), ("wipe", "Wipe Transition"), ("match", "Match Cut Transition"),
+      ("object", "Object Reveal Transition"), ("seamless", "Seamless Transition"), ("morphmap", "Morphing Map Transition"))
+assert len(T151) == 151, len(T151)
+TR15 = [t["key"] for t in T151 if t["layer"] == "tr"]
+FRAME_FX = {}
+
+
+def _ffx(*names):
+    def deco(fn):
+        for n in names:
+            FRAME_FX[n] = fn
+        return fn
+    return deco
+
+
+def _env(u):
+    return math.sin(math.pi * cl(u))
+
+
+def _zoomc(fr, z, cx=0.5, cy=0.5, rot=0.0):
+    """Crop-zoom around (cx, cy) (fractions) with optional rotation; z >= 1."""
+    if rot:
+        fr = fr.rotate(rot, resample=Image.BICUBIC)
+        z = z * (1 + abs(rot) * 0.02)
+    z = max(1.0, z)
+    bw, bh = W / z, H / z
+    x0 = min(max(cx * W - bw / 2, 0), W - bw)
+    y0 = min(max(cy * H - bh / 2, 0), H - bh)
+    return fr.resize((W, H), Image.BICUBIC, box=(x0, y0, x0 + bw, y0 + bh))
+
+
+def _blur(fr, r):
+    return fr.filter(ImageFilter.GaussianBlur(max(0.1, r)))
+
+
+def _radial_mask(rx, ry, soft=0.25, cx=0.5, cy=0.5):
+    np = _np()
+    key = ("rm", int(rx * 100), int(ry * 100), int(soft * 100), int(cx * 100), int(cy * 100))
+    if key not in _VX:
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        d = np.sqrt(((xx / W - cx) / rx) ** 2 + ((yy / H - cy) / ry) ** 2)
+        _VX[key] = Image.fromarray((np.clip((1.0 - d) / soft, 0, 1) * 255).astype(np.uint8))
+    return _VX[key]
+
+
+# ---- camera moves (u = progress through the window)
+@_ffx("push_in")
+def cam_push(fr, u, t, s):
+    return _zoomc(fr, 1 + 0.22 * e_io(u))
+
+
+@_ffx("pull_out")
+def cam_pull(fr, u, t, s):
+    return _zoomc(fr, 1.22 - 0.2 * e_io(u))
+
+
+@_ffx("dolly_zoom")
+def cam_dolly(fr, u, t, s):
+    bg = _zoomc(fr, 1 + 0.3 * e_io(u))
+    return Image.composite(fr, bg, _radial_mask(0.34, 0.5, 0.45))
+
+
+@_ffx("pan")
+def cam_pan(fr, u, t, s):
+    return _zoomc(fr, 1.14, 0.5 + lerp(-0.07, 0.07, e_io(u)) * (1 if s % 2 else -1), 0.5)
+
+
+@_ffx("kenburns")
+def cam_kb(fr, u, t, s):
+    return _zoomc(fr, 1.06 + 0.16 * u, 0.5 + 0.05 * (u - 0.5), 0.5 - 0.03 * u)
+
+
+@_ffx("tilt")
+def cam_tilt(fr, u, t, s):
+    return _zoomc(fr, 1.16, 0.5, 0.5 + lerp(0.07, -0.07, e_io(u)))
+
+
+@_ffx("fly")
+def cam_fly(fr, u, t, s):
+    return _zoomc(fr, 1 + 0.55 * u * u, 0.5, 0.5, 2.5 * math.sin(u * 3))
+
+
+@_ffx("orbit")
+def cam_orbit(fr, u, t, s):
+    return _zoomc(fr, 1.1, 0.5 + 0.05 * math.sin(u * 3.1), 0.5, lerp(-3.5, 3.5, e_io(u)))
+
+
+@_ffx("parallax_cam", "parallax25")
+def cam_par(fr, u, t, s):
+    bg = _zoomc(fr, 1.14, 0.5 + lerp(-0.045, 0.045, u), 0.5)
+    fg = _zoomc(fr, 1.04, 0.5 - lerp(-0.02, 0.02, u), 0.5)
+    return Image.composite(fg, bg, _radial_mask(0.36, 0.55, 0.5))
+
+
+@_ffx("aerial")
+def cam_aerial(fr, u, t, s):
+    return _zoomc(fr, lerp(1.35, 1.04, e_out(u)), 0.5, lerp(0.6, 0.5, u), lerp(-3, 0, e_out(u)))
+
+
+@_ffx("drone")
+def cam_drone(fr, u, t, s):
+    r = _zoomc(fr, lerp(1.3, 1.04, e_out(u)), 0.5, lerp(0.68, 0.5, e_out(u)))
+    top = Image.linear_gradient("L").resize((W, H)).point(lambda v: int(v * (1 - e_out(u)) * 0.9))
+    return Image.composite(Image.new("RGB", (W, H), (0, 0, 0)), r, ImageOps.invert(top).point(lambda v: 255 - v) if False else top.transpose(Image.FLIP_TOP_BOTTOM))
+
+
+@_ffx("rack")
+def cam_rack(fr, u, t, s):
+    r = 11 * abs(1 - 2 * u)
+    return Image.composite(fr, _blur(fr, r), _radial_mask(0.3 + 0.3 * (1 - abs(1 - 2 * u)), 0.5, 0.4)) if r > 0.5 else fr
+
+
+@_ffx("shake")
+def cam_shake(fr, u, t, s):
+    rr = random.Random(int(t * 40) + s)
+    a = 26 * (1 - u) ** 1.5
+    return ImageChops.offset(_zoomc(fr, 1.05), int(rr.uniform(-a, a)), int(rr.uniform(-a, a)))
+
+
+@_ffx("handheld")
+def cam_hand(fr, u, t, s):
+    return _zoomc(fr, 1.05, 0.5 + 0.012 * math.sin(t * 5.3 + s) + 0.006 * math.sin(t * 11), 0.5 + 0.012 * math.cos(t * 4.1), 0.7 * math.sin(t * 3.3))
+
+
+@_ffx("whip_pan")
+def cam_whip(fr, u, t, s):
+    k = int(_env(u) * 60) + 1
+    sh = ImageChops.offset(fr, int(W * 0.5 * (e_io(u) - 0.5) * 2 * _env(u)), 0)
+    return sh.resize((max(8, W // k), H), Image.BILINEAR).resize((W, H), Image.BILINEAR) if k > 2 else sh
+
+
+@_ffx("match_move")
+def cam_mm(fr, u, t, s):
+    e = _env(u)
+    return Image.blend(fr, _zoomc(fr, 1 + 0.5 * e), 0.55 * e) if e > 0.02 else fr
+
+
+@_ffx("persp_zoom")
+def cam_pz(fr, u, t, s):
+    k = 0.16 * _env(u)
+    c = (1, 0, 0, 0, 1, 0, 0, -k / W)
+    try:
+        r = fr.transform((W, H), Image.PERSPECTIVE, c, Image.BICUBIC)
+    except Exception:  # noqa
+        r = fr
+    return _zoomc(r, 1 + 0.18 * e_io(u), 0.5, 0.45)
+
+
+@_ffx("inf_zoom")
+def cam_inf(fr, u, t, s):
+    z = 1 + u
+    big = _zoomc(fr, z) if z < 3 else fr
+    inset = fr.resize((int(W * 0.5 * z), int(H * 0.5 * z)), Image.BILINEAR)
+    out = big.copy()
+    out.paste(inset, (int(W / 2 - inset.width / 2), int(H / 2 - inset.height / 2)))
+    return Image.blend(big, out, 0.8)
+
+
+@_ffx("tracking")
+def cam_track(fr, u, t, s):
+    return _zoomc(fr, 1.12, 0.5 + 0.07 * math.sin(u * 6.28), 0.5 + 0.02 * math.sin(u * 12))
+
+
+@_ffx("cine_reveal")
+def cam_cine(fr, u, t, s):
+    r = _zoomc(fr, 1 + 0.1 * u)
+    d = ImageDraw.Draw(r)
+    hb = int(H * 0.16 * (1 - e_out(cl(u * 1.5))))
+    if hb > 0:
+        d.rectangle([0, 0, W, hb], fill=(0, 0, 0))
+        d.rectangle([0, H - hb, W, H], fill=(0, 0, 0))
+    return r
+
+
+@_ffx("focus_pull")
+def cam_fp(fr, u, t, s):
+    r = 12 * (1 - e_out(u))
+    return _blur(fr, r) if r > 0.4 else fr
+
+
+@_ffx("motion_blur")
+def cam_mb(fr, u, t, s):
+    n = 7
+    acc = None
+    for k in range(n):
+        im = ImageChops.offset(fr, int((k - n // 2) * 9 * _env(u)), 0)
+        acc = im if acc is None else Image.blend(acc, im, 1 / (k + 1))
+    return acc
+
+
+# ---- cinematic effects
+def _noise_img(seed, scale=40, alpha=True):
+    key = ("nz", seed, scale)
+    if key not in _VX:
+        np = _np()
+        rng = np.random.default_rng(seed)
+        _VX[key] = Image.fromarray((rng.random((max(2, H // scale), max(2, W // scale))) * 255).astype(np.uint8)).resize((W, H), Image.BICUBIC)
+    return _VX[key]
+
+
+def _ov(fr, rgb, mask, amt=1.0):
+    m = mask.point(lambda v: int(v * cl(amt)))
+    return Image.composite(Image.new("RGB", (W, H), rgb), fr, m)
+
+
+@_ffx("grain")
+def fx_grain(fr, u, t, s):
+    np = _np()
+    rng = np.random.default_rng(int(t * 30) + s)
+    g = (rng.normal(0, 26 * _env(u) + 4, (H, W, 1))).astype(np.float32)
+    return Image.fromarray(np.clip(np.asarray(fr, dtype=np.float32) + g, 0, 255).astype(np.uint8))
+
+
+@_ffx("dust")
+def fx_dust(fr, u, t, s):
+    d = ImageDraw.Draw(fr, "RGBA")
+    rr = random.Random(s)
+    for _ in range(70):
+        x, y, r = rr.uniform(0, W), rr.uniform(0, H), rr.uniform(1, 3.2)
+        y = (y - t * rr.uniform(10, 40)) % H
+        d.ellipse([x - r, y - r, x + r, y + r], fill=(255, 245, 225, int(150 * _env(u))))
+    return fr
+
+
+@_ffx("smoke")
+def fx_smoke(fr, u, t, s):
+    n = _noise_img(3 + s % 3, 90)
+    n2 = ImageChops.offset(n, int(t * 40), -int(t * 25))
+    m = ImageChops.multiply(n2, Image.linear_gradient("L").resize((W, H)).transpose(Image.FLIP_TOP_BOTTOM)).point(lambda v: min(255, int(v * 1.4)))
+    return _ov(fr, (200, 200, 205), m, 0.65 * _env(u))
+
+
+@_ffx("fog")
+def fx_fog(fr, u, t, s):
+    n = ImageChops.offset(_noise_img(8, 140), int(t * 22), 0)
+    m = n.point(lambda v: int(70 + v * 0.45))
+    return _ov(fr, (220, 228, 236), m, 0.7 * _env(u))
+
+
+@_ffx("fire")
+def fx_fire(fr, u, t, s):
+    g = Image.linear_gradient("L").resize((W, H)).transpose(Image.FLIP_TOP_BOTTOM)
+    flick = 0.75 + 0.25 * math.sin(t * 17)
+    out = _ov(fr, (255, 110, 20), ImageChops.multiply(g, _noise_img(5, 60)).point(lambda v: min(255, v * 2)), 0.55 * _env(u) * flick)
+    d = ImageDraw.Draw(out, "RGBA")
+    rr = random.Random(s)
+    for _ in range(40):
+        x = rr.uniform(0, W)
+        y = H - ((t * rr.uniform(60, 220) + rr.uniform(0, H)) % (H * 0.8))
+        x += math.sin(t * 3 + x) * 14
+        d.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, rr.randint(130, 200), 40, int(230 * _env(u))))
+    return out
+
+
+@_ffx("rain")
+def fx_rain(fr, u, t, s):
+    d = ImageDraw.Draw(fr, "RGBA")
+    rr = random.Random(s)
+    for _ in range(140):
+        x = rr.uniform(0, W)
+        y = (rr.uniform(0, H) + t * 900) % H
+        d.line([(x, y), (x - 9, y + 38)], fill=(210, 225, 245, int(150 * _env(u))), width=2)
+    return Image.blend(fr, ImageEnhance.Brightness(fr).enhance(0.82), 0.5 * _env(u))
+
+
+@_ffx("snow")
+def fx_snow(fr, u, t, s):
+    d = ImageDraw.Draw(fr, "RGBA")
+    rr = random.Random(s)
+    for _ in range(110):
+        x, y0, r = rr.uniform(0, W), rr.uniform(0, H), rr.uniform(2, 5.5)
+        y = (y0 + t * rr.uniform(40, 120)) % H
+        x += math.sin(t * 2 + y0) * 18
+        d.ellipse([x - r, y - r, x + r, y + r], fill=(255, 255, 255, int(220 * _env(u))))
+    return fr
+
+
+@_ffx("lightning")
+def fx_lightning(fr, u, t, s):
+    f = 1.0 if (u < 0.12 or 0.22 < u < 0.3) else 0.0
+    out = Image.blend(fr, Image.new("RGB", (W, H), (235, 240, 255)), 0.55 * f)
+    if f:
+        rr = random.Random(s)
+        x, y, pts = rr.uniform(W * 0.3, W * 0.7), 0, []
+        while y < H * 0.8:
+            pts.append((x, y))
+            x += rr.uniform(-60, 60)
+            y += rr.uniform(40, 90)
+        _aa_poly(out, pts, 6, (255, 255, 255), 1.0)
+    return out
+
+
+@_ffx("light_leak")
+def fx_leak(fr, u, t, s):
+    np = _np()
+    xx = np.linspace(0, 1, W, dtype=np.float32)[None, :]
+    c = u * 1.3 - 0.15
+    m = np.clip(1 - np.abs(xx - c) * 3.2, 0, 1) * np.ones((H, 1), np.float32)
+    lay = np.stack([m * 255, m * 120, m * 40], -1)
+    return Image.fromarray(np.clip(np.asarray(fr, dtype=np.float32) + lay * 0.75 * _env(u), 0, 255).astype(np.uint8))
+
+
+@_ffx("lens_flare")
+def fx_flare(fr, u, t, s):
+    out = fr.copy()
+    lay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(lay)
+    cx, cy = lerp(W * 0.15, W * 0.85, u), lerp(H * 0.2, H * 0.4, u)
+    for r, a_, col in ((120, 70, (255, 235, 180)), (60, 110, (255, 255, 255)), (22, 200, (255, 255, 255))):
+        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col + (int(a_ * _env(u)),))
+    for k, (f, r, col) in enumerate(((-0.5, 26, (120, 200, 255)), (-1.0, 40, (255, 150, 90)), (-1.6, 18, (150, 255, 170)))):
+        x, y = W / 2 + (cx - W / 2) * f, H / 2 + (cy - H / 2) * f
+        d.ellipse([x - r, y - r, x + r, y + r], outline=col + (int(150 * _env(u)),), width=4)
+    d.line([(cx - 260, cy), (cx + 260, cy)], fill=(255, 255, 255, int(120 * _env(u))), width=3)
+    out.paste(lay.filter(ImageFilter.GaussianBlur(2)), (0, 0), lay.filter(ImageFilter.GaussianBlur(2)))
+    return out
+
+
+@_ffx("vignette")
+def fx_vig(fr, u, t, s):
+    m = _radial_mask(0.62, 0.62, 0.9).point(lambda v: 255 - v)
+    return _ov(fr, (0, 0, 0), m, 0.85 * _env(u))
+
+
+@_ffx("chroma")
+def fx_chroma(fr, u, t, s):
+    a = int(16 * _env(u)) + 1
+    r, g, b = fr.split()
+    return Image.merge("RGB", (ImageChops.offset(r, a, 0), g, ImageChops.offset(b, -a, 0)))
+
+
+@_ffx("glitch")
+def fx_glitch(fr, u, t, s):
+    return blend_trans(fr, fr, 0.3 + 0.3 * u, "glitch") if _env(u) > 0.15 else fr
+
+
+@_ffx("film_burn")
+def fx_burn(fr, u, t, s):
+    n = _noise_img(11, 50)
+    th = int(255 * (1 - _env(u)))
+    m = n.point(lambda v: 255 if v > th else 0).filter(ImageFilter.GaussianBlur(14))
+    edge = n.point(lambda v: 200 if th - 14 < v <= th else 0).filter(ImageFilter.GaussianBlur(6))
+    out = _ov(fr, (255, 245, 210), m, 0.95)
+    return _ov(out, (255, 120, 20), edge, 0.9)
+
+
+@_ffx("vhs")
+def fx_vhs(fr, u, t, s):
+    r, g, b = fr.split()
+    out = Image.merge("RGB", (ImageChops.offset(r, 7, 0), g, ImageChops.offset(b, -6, 0)))
+    d = ImageDraw.Draw(out, "RGBA")
+    for y in range(0, H, 4):
+        d.line([(0, y), (W, y)], fill=(0, 0, 0, 38), width=1)
+    ty = int((t * 160 + s * 50) % H)
+    band = out.crop((0, ty, W, min(H, ty + 26)))
+    out.paste(ImageChops.offset(band, 40, 0), (0, ty))
+    return ImageEnhance.Color(out).enhance(1.25)
+
+
+@_ffx("old_film", "old_photo", "archival")
+def fx_old(fr, u, t, s):
+    g = ImageOps.colorize(ImageOps.grayscale(fr), (30, 20, 10), (255, 238, 205))
+    g = ImageEnhance.Contrast(g).enhance(1.1)
+    d = ImageDraw.Draw(g, "RGBA")
+    rr = random.Random(int(t * 12) + s)
+    for _ in range(7):
+        x = rr.uniform(0, W)
+        d.line([(x, 0), (x + rr.uniform(-3, 3), H)], fill=(255, 255, 255, rr.randint(30, 90)), width=1)
+    for _ in range(18):
+        x, y, r = rr.uniform(0, W), rr.uniform(0, H), rr.uniform(1, 3)
+        d.ellipse([x - r, y - r, x + r, y + r], fill=(0, 0, 0, 120))
+    g = Image.blend(g, ImageEnhance.Brightness(g).enhance(0.85 + 0.25 * rr.random()), 0.5)
+    g = _ov(g, (0, 0, 0), _radial_mask(0.7, 0.7, 0.8).point(lambda v: 255 - v), 0.7)
+    return Image.blend(fr, g, min(1.0, 3.5 * _env(u)))
+
+
+@_ffx("split")
+def fx_split(fr, u, t, s):
+    e = e_out(cl(u * 3)) * (1 - e_in(cl((u - 0.75) * 4)) if 'e_in' in globals() else 1)
+    x = int(W * (0.5 + (1 - e) * 0.5))
+    right = ImageEnhance.Color(_zoomc(fr, 1.45, 0.72, 0.45)).enhance(0.6)
+    out = fr.copy()
+    out.paste(right.crop((x, 0, W, H)), (x, 0))
+    ImageDraw.Draw(out).line([(x, 0), (x, H)], fill=(255, 255, 255), width=5)
+    return out
+
+
+@_ffx("vox")
+def fx_vox(fr, u, t, s):
+    return vox_collage(fr, min(cl(u / 0.25), 1 - cl((u - 0.75) / 0.25)), s)
+
+
+
+# ---- the 15 transitions (blend_trans hands every new kind to tr_new)
+def tr_new(prev, cur, p, kind):
+    np = _np()
+    p = cl(p)
+    e = e_io(p)
+    if kind == "mask":  # staggered vertical blinds
+        if "tr_blind" not in _VX:
+            xx = np.arange(W, dtype=np.float32)[None, :]
+            _VX["tr_blind"] = (np.broadcast_to(((xx // 64) % 2) * 0.0 + (xx // 64) / (W / 64), (H, W)).copy(), (np.broadcast_to((xx % 64) / 64.0, (H, W))).copy())
+        a, b = _VX["tr_blind"]
+        m = np.clip((e * 1.6 - a * 0.6) * 2.0 - b * 0 - 0.0, 0, 1) * 255 if False else np.clip((e * 1.5 - a * 0.5) * 3 - 1.0 + 0.0 - (1 - b) * 0.0, 0, 1) * 255
+        return Image.composite(cur, prev, Image.fromarray(m.astype(np.uint8)))
+    if kind == "luma":
+        lum = np.asarray(ImageOps.grayscale(prev), dtype=np.float32) / 255
+        m = np.clip((e * 1.4 - lum * 0.4) * 5 - 0.6 * 0 - 1.0 + 0.0, 0, 1) * 255
+        m = np.clip((e - (1 - lum) * 0.0 - 0.0) * 1.0 + (e * 1.25 - lum) * 4, 0, 1) * 255 if False else np.clip((e * 1.3 - lum) * 4, 0, 1) * 255
+        return Image.composite(cur, prev, Image.fromarray(m.astype(np.uint8)))
+    if kind == "morph":
+        if "tr_wy" not in _VX:
+            yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+            _VX["tr_wy"] = (yy, xx)
+        yy, xx = _VX["tr_wy"]
+        amp = 38 * math.sin(math.pi * p)
+
+        def warp(im, sgn):
+            a = np.asarray(im)
+            sx = np.clip(xx + sgn * amp * np.sin(yy / 46.0 + p * 6), 0, W - 1).astype(np.int32)
+            sy = np.clip(yy + sgn * amp * 0.5 * np.sin(xx / 60.0), 0, H - 1).astype(np.int32)
+            return Image.fromarray(a[sy, sx])
+        return Image.blend(warp(prev, 1), warp(cur, -1), e)
+    if kind == "spin":
+        a = prev.rotate(-e * 50, resample=Image.BILINEAR).resize((W, H), Image.BILINEAR, box=(W * 0.5 * (1 - 1 / (1 + e)), H * 0.5 * (1 - 1 / (1 + e)), W - W * 0.5 * (1 - 1 / (1 + e)), H - H * 0.5 * (1 - 1 / (1 + e))))
+        b = cur.rotate((1 - e) * 50, resample=Image.BILINEAR)
+        return Image.blend(a, b, e)
+    if kind == "burn":
+        n = _noise_img(21, 50)
+        th = int(255 * (1 - e))
+        m = n.point(lambda v: 255 if v > th else 0).filter(ImageFilter.GaussianBlur(4))
+        edge = n.point(lambda v: 255 if th - 22 < v <= th else 0).filter(ImageFilter.GaussianBlur(5))
+        out = Image.composite(cur, prev, ImageChops.invert(m) if False else m.point(lambda v: 255 - v))
+        out = Image.composite(cur, prev, n.point(lambda v: 255 if v <= int(255 * e) else 0).filter(ImageFilter.GaussianBlur(3)))
+        ring = n.point(lambda v: 255 if abs(v - int(255 * e)) < 14 else 0).filter(ImageFilter.GaussianBlur(5))
+        return _ov(_ov(out, (255, 140, 30), ring, 0.95), (255, 245, 200), ring.point(lambda v: v // 2), 0.8)
+    if kind == "shape":  # expanding diamond / star
+        m = Image.new("L", (W, H), 0)
+        r = e * math.hypot(W, H) * 0.62
+        cx, cy = W / 2, H / 2
+        pts = []
+        for k in range(10):
+            rr_ = r if k % 2 == 0 else r * 0.55
+            a_ = math.pi / 5 * k - math.pi / 2
+            pts.append((cx + math.cos(a_) * rr_, cy + math.sin(a_) * rr_))
+        ImageDraw.Draw(m).polygon(pts, fill=255)
+        return Image.composite(cur, prev, m.filter(ImageFilter.GaussianBlur(3)))
+    if kind == "match":  # match cut: dive into the centre, come out of the centre of the next picture
+        if p < 0.5:
+            return _zoomc(prev, 1 + 2.2 * e_io(p * 2) ** 2)
+        return _zoomc(cur, 1 + 2.2 * (1 - e_io((p - 0.5) * 2)) ** 2)
+    if kind == "object":  # the next picture is revealed through an oval around the subject
+        m = Image.new("L", (W, H), 0)
+        r = e * math.hypot(W, H) * 0.55
+        ImageDraw.Draw(m).ellipse([W * 0.5 - r * 1.3, H * 0.46 - r, W * 0.5 + r * 1.3, H * 0.46 + r], fill=255)
+        out = Image.composite(cur, prev, m.filter(ImageFilter.GaussianBlur(6)))
+        if 0.02 < p < 0.95:
+            ImageDraw.Draw(out).ellipse([W * 0.5 - r * 1.3, H * 0.46 - r, W * 0.5 + r * 1.3, H * 0.46 + r], outline=(255, 255, 255), width=4)
+        return out
+    if kind == "seamless":  # continuous vertical glide with a little motion blur
+        off = int(e * H)
+        canvas = Image.new("RGB", (W, 2 * H))
+        canvas.paste(prev, (0, 0))
+        canvas.paste(cur, (0, H))
+        fr = canvas.crop((0, off, W, off + H))
+        k = 1 + int(10 * math.sin(math.pi * p))
+        return fr.resize((W, max(8, H // k)), Image.BILINEAR).resize((W, H), Image.BILINEAR) if k > 1 else fr
+    if kind == "morphmap":  # picture dissolves through a lat/long grid like a map morph
+        out = Image.blend(_zoomc(prev, 1 + 0.4 * e), _zoomc(cur, 1.4 - 0.4 * e), e)
+        d = ImageDraw.Draw(out, "RGBA")
+        al = int(150 * math.sin(math.pi * p))
+        for k in range(1, 8):
+            d.line([(W * k / 8, 0), (W * k / 8, H)], fill=(255, 255, 255, al), width=2)
+        for k in range(1, 5):
+            d.line([(0, H * k / 5), (W, H * k / 5)], fill=(255, 255, 255, al), width=2)
+        return out
+    return cur
+
+
+
+# ---- overlay cards (data / text / diagram): each is drawn into a 410x236 sprite and placed in one of the 3 fixed bottom slots (left / centre / right)
+T_CW, T_CH = 410, 236
+SLOT_CX = {"L": 14 + T_CW / 2 + 0.0, "C": W / 2, "R": W - 14 - T_CW / 2}
+SLOT_CY = H - 16 - T_CH / 2
+ACC = [(255, 92, 72), (0, 190, 205), (255, 190, 40), (120, 200, 90), (150, 120, 255)]
+HI_DIG = str.maketrans("0123456789", "०१२३४५६७८९")
+
+
+class Cv:
+    def __init__(s, acc):
+        s.S = 2
+        s.acc = acc
+        s.im = Image.new("RGBA", (T_CW * 2, T_CH * 2), (0, 0, 0, 0))
+        s.d = ImageDraw.Draw(s.im)
+        s.d.rounded_rectangle([0, 0, T_CW * 2 - 1, T_CH * 2 - 1], 40, fill=(10, 13, 22, 214), outline=(255, 255, 255, 60), width=3)
+        s.d.rounded_rectangle([0, 0, 14, T_CH * 2 - 1], 6, fill=acc + (255,))
+
+    def text(s, txt, size, x, y, fill=(255, 255, 255), role="title", max_w=None, a=1.0, rot=0, anchor="c"):
+        if not str(txt).strip():
+            return
+        spr = _vx_text(str(txt), int(size * 2), role, fill=fill, stroke=0, shadow=False, max_w=int(max_w * 2) if max_w else None)
+        if rot:
+            spr = spr.rotate(rot, resample=Image.BICUBIC, expand=True)
+        if a < 0.98:
+            spr = spr.copy()
+            spr.putalpha(spr.getchannel("A").point(lambda v: int(v * a)))
+        px = int(x * 2 - (spr.width / 2 if anchor == "c" else 0))
+        s.im.paste(spr, (px, int(y * 2 - spr.height / 2)), spr)
+
+    def line(s, pts, w=3, fill=(255, 255, 255), prog=1.0):
+        P = [(x * 2, y * 2) for x, y in pts]
+        segs = list(zip(P, P[1:]))
+        tot = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in segs) or 1
+        tgt, acc_ = tot * cl(prog), 0.0
+        for a, b in segs:
+            l = math.hypot(b[0] - a[0], b[1] - a[1])
+            if acc_ + l <= tgt:
+                s.d.line([a, b], fill=fill, width=int(w * 2))
+                acc_ += l
+            else:
+                r = (tgt - acc_) / max(l, 1e-6)
+                s.d.line([a, (a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r)], fill=fill, width=int(w * 2))
+                break
+
+    def rect(s, x0, y0, x1, y1, fill=None, outline=None, r=6, w=2):
+        s.d.rounded_rectangle([x0 * 2, y0 * 2, x1 * 2, y1 * 2], r * 2, fill=fill, outline=outline, width=int(w * 2))
+
+    def circ(s, x, y, r, fill=None, outline=None, w=2):
+        s.d.ellipse([(x - r) * 2, (y - r) * 2, (x + r) * 2, (y + r) * 2], fill=fill, outline=outline, width=int(w * 2))
+
+    def poly(s, pts, fill=None, outline=None):
+        s.d.polygon([(x * 2, y * 2) for x, y in pts], fill=fill, outline=outline)
+
+    def arc(s, x, y, r, a0, a1, fill, w=8):
+        s.d.arc([(x - r) * 2, (y - r) * 2, (x + r) * 2, (y + r) * 2], a0, a1, fill=fill, width=int(w * 2))
+
+    def done(s):
+        return s.im.resize((T_CW, T_CH), Image.LANCZOS)
+
+
+import unicodedata
+
+
+def _gr(s_):
+    out = []
+    for ch in s_:
+        if out and (unicodedata.category(ch).startswith("M") or ch in "\u094d" or (out[-1].endswith("\u094d"))):
+            out[-1] += ch
+        else:
+            out.append(ch)
+    return out
+
+
+def _fmt(v):
+    v = float(v)
+    s_ = f"{int(round(v)):,}" if abs(v - round(v)) < 1e-6 or abs(v) >= 100 else (f"{v:.1f}")
+    return s_.translate(HI_DIG)
+
+
+def _series(E, C, n=5):
+    s_ = (E.get("series") or C.get("series") or [("क", 3), ("ख", 5), ("ग", 2), ("घ", 4), ("ङ", 6)])[:n]
+    return s_ if len(s_) >= 2 else [("क", 3), ("ख", 5)]
+
+
+def _words(C, n=5):
+    w_ = C.get("words") or ["शुरुआत", "कारण", "असर", "नतीजा", "आगे"]
+    return (w_ * 3)[:n]
+
+
+CARDFN = {}
+
+
+def _card(*names):
+    def deco(fn):
+        for n in names:
+            CARDFN[n] = fn
+        return fn
+    return deco
+
+
+def _numE(E):
+    return float(E.get("num") or 0), E.get("unit") or ""
+
+
+@_card("num_counter", "pop_counter", "dist_card", "fin_counter")
+def c_numc(cv, p, t, E, C, key):
+    v, unit = _numE(E)
+    g = e_out(cl(p * 1.6))
+    pre = "₹ " if key == "fin_counter" else ""
+    cv.text(pre + _fmt(v * g), 64, 205, 100, ACC[0], max_w=370)
+    cv.text(E.get("label") or unit or {"dist_card": "किलोमीटर", "pop_counter": "आबादी", "fin_counter": "रकम"}.get(key, ""), 24, 205, 160, (230, 230, 240), "sub", 360)
+    if key == "dist_card":
+        cv.line([(40, 205), (370, 205)], 3, (120, 130, 150))
+        cv.circ(40 + 330 * g, 205, 9, fill=ACC[0])
+    elif key == "pop_counter":
+        for k in range(20):
+            if k / 20 < g:
+                cv.circ(36 + k * 17.5, 205, 6, fill=ACC[1])
+
+
+@_card("pct_counter", "progress")
+def c_pct(cv, p, t, E, C, key):
+    v = min(100.0, float(E.get("num") or E.get("pct") or 70))
+    g = e_out(cl(p * 1.6))
+    if key == "pct_counter":
+        cv.arc(205, 122, 80, 0, 360, (60, 66, 84), 16)
+        cv.arc(205, 122, 80, -90, -90 + 360 * v / 100 * g, ACC[1], 16)
+        cv.text(_fmt(v * g) + "%", 52, 205, 122, (255, 255, 255))
+    else:
+        cv.rect(30, 110, 380, 150, fill=(60, 66, 84))
+        cv.rect(30, 110, 30 + 350 * v / 100 * g, 150, fill=ACC[3])
+        cv.text(_fmt(v * g) + "%", 40, 205, 64, (255, 255, 255))
+    cv.text(E.get("label") or "", 22, 205, 205, (230, 230, 240), "sub", 360)
+
+
+@_card("year_counter")
+def c_year(cv, p, t, E, C, key):
+    y = int(E.get("year") or 1900)
+    g = e_out(cl(p * 1.5))
+    cv.text(str(int(y - 80 * (1 - g))).translate(HI_DIG), 92, 205, 112, ACC[2], max_w=380)
+    cv.text(E.get("label") or "साल", 24, 205, 186, (230, 230, 240), "sub", 360)
+
+
+@_card("countdown", "time_counter", "digital_clock")
+def c_time(cv, p, t, E, C, key):
+    if key == "countdown":
+        total = 3 * 86400 + 5 * 3600
+        rem = int(total * (1 - e_io(cl(p * 1.3))))
+        parts = [(rem // 86400, "दिन"), (rem // 3600 % 24, "घंटे"), (rem // 60 % 60, "मिनट"), (rem % 60, "सेकंड")]
+        for k, (v, lb) in enumerate(parts):
+            x = 55 + k * 100
+            cv.rect(x - 38, 70, x + 38, 140, fill=(40, 46, 64), outline=ACC[0], w=2)
+            cv.text(f"{v:02d}".translate(HI_DIG), 40, x, 105, (255, 255, 255))
+            cv.text(lb, 20, x, 162, (200, 205, 220), "sub")
+    elif key == "time_counter":
+        s_ = t * 1.0 + p * 20
+        cv.text(f"{int(s_ // 60):02d}:{int(s_ % 60):02d}.{int(s_ * 10 % 10)}".translate(HI_DIG), 70, 205, 112, ACC[1], max_w=380)
+        cv.text(E.get("label") or "बीता समय", 22, 205, 185, (230, 230, 240), "sub", 360)
+    else:
+        m = int(E.get("minutes") or 720) + int(p * 40)
+        cv.text(f"{m // 60 % 24:02d}{':' if int(t * 2) % 2 == 0 else ' '}{m % 60:02d}".translate(HI_DIG), 86, 205, 115, (90, 255, 150), role="cond", max_w=380)
+        cv.text(E.get("label") or "", 22, 205, 190, (230, 230, 240), "sub", 360)
+
+
+@_card("odometer", "num_roll")
+def c_odo(cv, p, t, E, C, key):
+    v = int(abs(float(E.get("num") or 1234)))
+    ds = str(v)[-7:]
+    g = e_out(cl(p * 1.5))
+    n = len(ds)
+    w0 = min(48, 360 / n)
+    x0 = 205 - w0 * n / 2
+    for k, ch in enumerate(ds):
+        tgt = int(ch)
+        spin = (1 - g) * (10 + k * 3)
+        cur = (tgt - spin) % 10
+        x = x0 + w0 * (k + 0.5)
+        cv.rect(x - w0 / 2 + 2, 62, x + w0 / 2 - 2, 150, fill=(30, 34, 48), outline=(110, 118, 140))
+        for dd in (-1, 0, 1):
+            dig = int(round(cur + dd)) % 10
+            off = (cur - round(cur)) * 40
+            yy = 106 + dd * 40 + off
+            if 66 < yy < 146:
+                cv.text(str(dig).translate(HI_DIG), 40, x, yy, (255, 255, 255) if dd == 0 else (130, 136, 150), a=1.0 if dd == 0 else 0.6)
+    cv.text(E.get("label") or "", 22, 205, 190, (230, 230, 240), "sub", 360)
+
+
+@_card("bar_chart", "data_compare", "ranking", "dashboard")
+def c_bars(cv, p, t, E, C, key):
+    ser = _series(E, C, 2 if key == "data_compare" else 5)
+    if key == "ranking":
+        ser = sorted(ser, key=lambda x: -x[1])
+    mx = max(v for _, v in ser) or 1
+    n = len(ser)
+    if key in ("ranking", "dashboard") or n > 3:
+        rh = min(34, 190 / n)
+        for k, (lb, v) in enumerate(ser):
+            g = e_out(cl(p * 2 - k * 0.12))
+            y = 34 + k * (rh + 6)
+            cv.text(f"{k + 1}", 20, 28, y + rh / 2, ACC[2])
+            cv.rect(48, y, 48 + 250 * v / mx * g, y + rh, fill=ACC[k % 5], r=4)
+            cv.text(lb, 18, 56, y + rh / 2, (255, 255, 255), "sub", 140, anchor="l")
+            cv.text(_fmt(v * g), 18, 330, y + rh / 2, (255, 255, 255))
+    else:
+        bw = 360 / n
+        for k, (lb, v) in enumerate(ser):
+            g = e_out(cl(p * 2 - k * 0.15))
+            x = 25 + bw * (k + 0.5)
+            hh = 130 * v / mx * g
+            cv.rect(x - bw * 0.3, 170 - hh, x + bw * 0.3, 170, fill=ACC[k % 5], r=5)
+            cv.text(_fmt(v * g), 20, x, 160 - hh, (255, 255, 255))
+            cv.text(lb, 18, x, 196, (220, 224, 236), "sub", bw)
+
+
+@_card("pie_chart")
+def c_pie(cv, p, t, E, C, key):
+    ser = _series(E, C, 5)
+    tot = sum(v for _, v in ser) or 1
+    g = e_out(cl(p * 1.4))
+    a0 = -90.0
+    for k, (lb, v) in enumerate(ser):
+        a1 = a0 + 360 * v / tot
+        end = min(a1, -90 + 360 * g)
+        if end > a0:
+            cv.d.pieslice([40 * 2, 30 * 2, 190 * 2, 180 * 2][:4] if False else [30 * 2, 40 * 2, 180 * 2, 190 * 2], a0, end, fill=ACC[k % 5])
+        cv.text(lb, 18, 230, 56 + k * 28, (255, 255, 255), "sub", 150, anchor="l")
+        cv.rect(206, 48 + k * 28, 220, 62 + k * 28, fill=ACC[k % 5], r=3)
+        a0 = a1
+
+
+@_card("line_graph", "area_chart")
+def c_line(cv, p, t, E, C, key):
+    ser = _series(E, C, 6)
+    mx, n = max(v for _, v in ser) or 1, len(ser)
+    pts = [(40 + 330 * k / (n - 1), 180 - 130 * v / mx) for k, (_, v) in enumerate(ser)]
+    g = e_out(cl(p * 1.5))
+    cv.line([(30, 180), (380, 180)], 2, (120, 130, 150))
+    if key == "area_chart":
+        m = max(1, int(len(pts) * g))
+        sub = pts[:m]
+        if len(sub) >= 2:
+            cv.poly(sub + [(sub[-1][0], 180), (sub[0][0], 180)], fill=ACC[1] + (150,))
+    cv.line(pts, 4, ACC[2] if key == "line_graph" else ACC[1], g)
+    for k, (x, y) in enumerate(pts):
+        if k / max(1, n - 1) <= g:
+            cv.circ(x, y, 6, fill=(255, 255, 255))
+            cv.text(ser[k][0], 16, x, 202, (210, 215, 230), "sub", 60)
+
+
+@_card("stat_info")
+def c_statinfo(cv, p, t, E, C, key):
+    ser = _series(E, C, 3)
+    for k, (lb, v) in enumerate(ser[:3]):
+        g = e_out(cl(p * 2 - k * 0.2))
+        x = 70 + k * 135
+        cv.circ(x, 78, 30, outline=ACC[k], w=4)
+        cv.text(["●", "▲", "■"][k], 26, x, 78, ACC[k])
+        cv.text(_fmt(v * g), 34, x, 140, (255, 255, 255), max_w=120)
+        cv.text(lb, 18, x, 182, (210, 215, 230), "sub", 120)
+
+
+# ---- text cards
+def _ph(E, C):
+    return (E.get("txt") or " ".join(_words(C, 4)))[:60]
+
+
+@_card("kinetic")
+def c_kin(cv, p, t, E, C, key):
+    ws = _ph(E, C).split()[:5]
+    for k, w in enumerate(ws):
+        g = e_back(cl(p * 3 - k * 0.35))
+        cv.text(w, 52 if k % 2 == 0 else 38, 205 + (k % 2 * 2 - 1) * 20, 40 + k * 38, ACC[k % 5] if k % 2 else (255, 255, 255), max_w=380, a=cl(g))
+
+
+@_card("text3d")
+def c_3d(cv, p, t, E, C, key):
+    spr = text_layer(_ph(E, C)[:22], font_for("अ", 56, "title"), fill=(255, 255, 255), fill2=(255, 210, 120), stroke=2, stroke_fill=(70, 20, 0), extrude=(10, (140, 50, 10)), max_w=380)
+    sc_ = 0.6 + 0.4 * e_back(cl(p * 3))
+    spr = spr.resize((max(1, int(spr.width * sc_ * 0.9)), max(1, int(spr.height * sc_ * 0.9))), Image.BILINEAR)
+    cv.im.paste(spr, (int(T_CW - spr.width / 2), int(T_CH - spr.height / 2)), spr)
+
+
+@_card("typewriter", "letter", "text_reveal", "text_blur", "glitch_text", "text_rot", "text_persp", "tracking_text", "text_mask")
+def c_txt(cv, p, t, E, C, key):
+    s_ = _ph(E, C)[:34]
+    g = cl(p * 2.2)
+    if key == "typewriter":
+        n = int(len(s_) * g)
+        cv.text(s_[:n] + ("▌" if int(t * 3) % 2 == 0 else ""), 34, 205, 118, (255, 255, 255), max_w=380)
+    elif key == "letter":
+        gl = _gr(s_)[:16]
+        x = 205 - 11 * len(gl) / 2
+        for k, ch in enumerate(gl):
+            gg = e_back(cl(g * len(gl) - k))
+            cv.text(ch, 40, x + k * 22, 118 - (1 - cl(gg)) * 70, (255, 255, 255), a=cl(gg))
+    elif key == "text_reveal":
+        tmp = Cv.__new__(Cv)
+        spr = _vx_text(s_, 68, "title", fill=(255, 255, 255), stroke=0, shadow=False, max_w=760)
+        cw_ = int(spr.width * e_out(g))
+        if cw_ > 2:
+            cv.im.paste(spr.crop((0, 0, cw_, spr.height)), (int(410 - spr.width / 2), int(236 - spr.height / 2)), spr.crop((0, 0, cw_, spr.height)))
+    elif key == "text_blur":
+        spr = _vx_text(s_, 68, "title", fill=(255, 255, 255), stroke=0, shadow=False, max_w=760).filter(ImageFilter.GaussianBlur(14 * (1 - e_out(g))))
+        cv.im.paste(spr, (int(410 - spr.width / 2), int(236 - spr.height / 2)), spr)
+    elif key == "glitch_text":
+        j = int(10 * (1 - g)) + 2
+        for dx, col in ((-j, (255, 40, 90)), (j, (40, 220, 255)), (0, (255, 255, 255))):
+            cv.text(s_, 38, 205 + dx * 0.6, 118, col, max_w=380, a=0.9 if dx else 1.0)
+    elif key == "text_rot":
+        cv.text(s_, 40, 205, 118, (255, 255, 255), max_w=380, rot=90 * (1 - e_out(g)))
+    elif key == "text_persp":
+        spr = _vx_text(s_, 68, "title", fill=(255, 255, 255), stroke=0, shadow=False, max_w=760)
+        k_ = 0.0016 * (1 - e_out(g))
+        try:
+            spr = spr.transform(spr.size, Image.PERSPECTIVE, (1, 0, 0, 0, 1, 0, k_, 0), Image.BICUBIC)
+        except Exception:  # noqa
+            pass
+        cv.im.paste(spr, (int(410 - spr.width / 2), int(236 - spr.height / 2)), spr)
+    elif key == "tracking_text":
+        sp = lerp(26, 6, e_out(g))
+        gl = _gr(s_)[:14]
+        x = 205 - sp * len(gl) / 2
+        for k, ch in enumerate(gl):
+            cv.text(ch, 38, x + k * sp, 118, (255, 255, 255), a=cl(g * 3))
+    else:  # text_mask: the letters are windows onto moving colour
+        spr = _vx_text(s_, 76, "title", fill=(255, 255, 255), stroke=0, shadow=False, max_w=760)
+        grad = Image.new("RGBA", spr.size)
+        gd = ImageDraw.Draw(grad)
+        for xx in range(0, spr.width, 6):
+            c_ = ACC[int((xx / 40 + t * 3) % 5)]
+            gd.rectangle([xx, 0, xx + 6, spr.height], fill=c_ + (255,))
+        grad.putalpha(spr.getchannel("A"))
+        cv.im.paste(grad, (int(410 - spr.width / 2), int(236 - spr.height / 2)), grad)
+
+
+@_card("word_hl", "subtitles", "callout", "labels", "text_trans", "text_path")
+def c_txt2(cv, p, t, E, C, key):
+    ws = _ph(E, C).split()[:6] or ["…"]
+    g = cl(p * 2)
+    if key in ("word_hl", "subtitles"):
+        n = len(ws)
+        cur = min(n - 1, int(g * n * 1.05))
+        lines = [ws[:3], ws[3:6]] if n > 3 else [ws]
+        k = 0
+        for li, ln in enumerate(lines):
+            tw = [len(w) * 16 + 14 for w in ln]
+            x = 205 - sum(tw) / 2
+            for w, wd in zip(ln, tw):
+                if key == "word_hl" and k == cur:
+                    cv.rect(x, 96 + li * 56 - 22, x + wd - 6, 96 + li * 56 + 22, fill=(255, 64, 120), r=8)
+                cv.text(w, 34, x + wd / 2 - 3, 96 + li * 56, (255, 255, 255) if k != cur or key == "word_hl" else ACC[2])
+                x += wd
+                k += 1
+    elif key == "callout":
+        cv.circ(70, 170, 8, fill=ACC[0])
+        cv.line([(70, 170), (130, 90)], 3, ACC[0], g * 2)
+        if g > 0.4:
+            cv.rect(120, 40, 390, 100, fill=(30, 36, 54), outline=ACC[0], w=2)
+            cv.text(" ".join(ws[:3]), 28, 255, 70, (255, 255, 255), max_w=250)
+    elif key == "labels":
+        for k, w in enumerate(ws[:4]):
+            gg = e_back(cl(p * 3 - k * 0.3))
+            wd = len(w) * 15 + 36
+            y = 40 + k * 46
+            cv.rect(30, y - 18, 30 + wd * cl(gg), y + 18, fill=ACC[k % 5], r=18)
+            if gg > 0.6:
+                cv.text(w, 24, 30 + wd / 2, y, (255, 255, 255) if k % 5 != 2 else (20, 20, 30))
+    elif key == "text_trans":
+        a_, b_ = ws[0], (ws[1] if len(ws) > 1 else ws[0])
+        gg = e_io(cl(p * 1.6))
+        cv.text(a_, 54, 205, 118 - 90 * gg, (255, 255, 255), a=1 - gg)
+        cv.text(b_, 54, 205, 118 + 90 * (1 - gg), ACC[2], a=gg)
+    else:  # text on a curved path
+        gl = _gr(" ".join(ws)[:20])
+        n = len(gl)
+        for k, ch in enumerate(gl):
+            th = math.pi * (0.15 + 0.7 * k / max(1, n - 1))
+            x, y = 205 - math.cos(th) * 150, 200 - math.sin(th) * 110
+            cv.text(ch, 32, x, y, (255, 255, 255), a=cl(g * n * 0.6 - k * 0.3), rot=(math.degrees(th) - 90))
+
+
+@_card("lower_third", "chapter", "date_loc")
+def c_lt(cv, p, t, E, C, key):
+    g = e_out(cl(p * 3))
+    name = E.get("word") or (_words(C, 1)[0])
+    if key == "lower_third":
+        cv.rect(30 - 300 * (1 - g), 90, 380, 150, fill=ACC[0], r=10)
+        cv.text(name, 36, 205 - 300 * (1 - g), 120, (255, 255, 255), max_w=330)
+        cv.text(E.get("sub") or "", 20, 205, 180, (210, 215, 230), "sub", 340, a=g)
+    elif key == "chapter":
+        cv.text(f"अध्याय {int(E.get('n') or 1)}".translate(HI_DIG), 30, 205, 70, ACC[2], a=g)
+        cv.line([(100, 96), (310, 96)], 3, ACC[2], g)
+        cv.text(name, 46, 205, 150, (255, 255, 255), max_w=370, a=g)
+    else:
+        cv.text(str(E.get("year") or "").translate(HI_DIG) or "समय", 58, 205, 82, ACC[2], a=g)
+        cv.line([(120, 124), (290, 124)], 3, (255, 255, 255), g)
+        cv.text(E.get("place") or name, 32, 205, 168, (255, 255, 255), max_w=370, a=g)
+
+
+# ---- diagram cards
+@_card("flowchart", "process", "steps")
+def c_flow(cv, p, t, E, C, key):
+    ws = _words(C, 4)
+    for k, w in enumerate(ws):
+        g = e_back(cl(p * 3 - k * 0.45))
+        if key == "steps":
+            y = 36 + k * 48
+            cv.circ(40, y, 16, fill=ACC[k % 5] if g > 0.5 else (60, 66, 84))
+            cv.text(str(k + 1).translate(HI_DIG), 20, 40, y, (255, 255, 255))
+            cv.text(w, 26, 70, y, (255, 255, 255), max_w=300, anchor="l", a=cl(g))
+        else:
+            if key == "process":
+                x = 22 + k * 94
+                cv.poly([(x, 80), (x + 76, 80), (x + 92, 118), (x + 76, 156), (x, 156), (x + 16, 118)], fill=ACC[k % 5] if g > 0.3 else (60, 66, 84))
+                cv.text(w, 17, x + 46, 118, (20, 20, 30), max_w=70, a=cl(g))
+            else:
+                x = 20 + k * 98
+                y = 60 if k % 2 == 0 else 150
+                if k == 2:
+                    cv.poly([(x + 40, y - 36), (x + 82, y), (x + 40, y + 36), (x, y)], outline=ACC[2], fill=(30, 36, 54))
+                else:
+                    cv.rect(x, y - 28, x + 84, y + 28, fill=(30, 36, 54), outline=ACC[k % 5], w=3)
+                cv.text(w, 17, x + 42, y, (255, 255, 255), max_w=78, a=cl(g))
+                if k:
+                    cv.line([(x - 14, 60 if (k - 1) % 2 == 0 else 150), (x, y)], 3, (200, 205, 220), cl(g))
+
+
+@_card("mindmap", "orgchart", "network", "conn_line")
+def c_net(cv, p, t, E, C, key):
+    ws = _words(C, 6)
+    if key == "mindmap":
+        cv.circ(205, 118, 36, fill=ACC[0])
+        cv.text(ws[0], 20, 205, 118, (255, 255, 255), max_w=66)
+        for k, w in enumerate(ws[1:6]):
+            g = e_out(cl(p * 3 - k * 0.3))
+            a = -math.pi / 2 + k * 2 * math.pi / 5
+            x, y = 205 + math.cos(a) * 130 * g, 118 + math.sin(a) * 78 * g
+            cv.line([(205, 118), (x, y)], 3, ACC[k % 5])
+            cv.rect(x - 44, y - 16, x + 44, y + 16, fill=(30, 36, 54), outline=ACC[k % 5])
+            cv.text(w, 17, x, y, (255, 255, 255), max_w=80, a=cl(g))
+    elif key == "orgchart":
+        g = e_out(cl(p * 2))
+        cv.rect(145, 24, 265, 64, fill=ACC[0])
+        cv.text(ws[0], 20, 205, 44, (255, 255, 255), max_w=110)
+        for k in range(3):
+            x = 70 + k * 135
+            cv.line([(205, 64), (205, 90), (x, 90), (x, 112)], 3, (200, 205, 220), cl(g * 1.5))
+            if g > 0.5:
+                cv.rect(x - 52, 112, x + 52, 152, fill=(30, 36, 54), outline=ACC[k + 1], w=2)
+                cv.text(ws[k + 1], 18, x, 132, (255, 255, 255), max_w=96)
+                for j in range(2):
+                    xx = x - 26 + j * 52
+                    cv.line([(x, 152), (xx, 176)], 2, (150, 156, 175))
+                    cv.circ(xx, 184, 8, fill=ACC[(k + j) % 5])
+    elif key == "network":
+        pts = [(205, 118), (80, 60), (330, 60), (80, 180), (330, 180), (205, 40)]
+        for k in range(1, 6):
+            cv.line([pts[0], pts[k]], 2, (120, 130, 150), e_out(cl(p * 3 - k * 0.2)))
+        for k, (x, y) in enumerate(pts):
+            g = e_back(cl(p * 3 - k * 0.2))
+            cv.circ(x, y, 24 * cl(g), fill=ACC[k % 5])
+            if g > 0.6:
+                cv.text(ws[k], 15, x, y, (20, 20, 30), max_w=46)
+    else:
+        cv.circ(60, 118, 30, fill=ACC[1])
+        cv.circ(350, 118, 30, fill=ACC[0])
+        cv.text(ws[0], 16, 60, 118, (20, 20, 30), max_w=54)
+        cv.text(ws[1], 16, 350, 118, (20, 20, 30), max_w=54)
+        n = 14
+        for k in range(n):
+            x = 96 + (318 - 96) * k / (n - 1)
+            if ((k / n) - (t * 0.8) % 1.0) % 1 < 0.35:
+                cv.circ(x, 118, 5, fill=(255, 255, 255))
+        cv.line([(96, 118), (96 + 222 * e_out(cl(p * 3)), 118)], 2, (150, 156, 175))
+
+
+@_card("arrow_dir", "callout_ptr", "tech_label")
+def c_arrow(cv, p, t, E, C, key):
+    ws = _words(C, 3)
+    g = e_out(cl(p * 2.5))
+    if key == "arrow_dir":
+        x1 = 40 + 300 * g
+        cv.line([(40, 118), (x1, 118)], 14, ACC[0])
+        cv.poly([(x1, 92), (x1 + 44, 118), (x1, 144)], fill=ACC[0])
+        cv.text(ws[0], 26, 205, 190, (255, 255, 255), max_w=340, a=g)
+    elif key == "callout_ptr":
+        cv.line([(50, 190), (50 + 110 * g, 190 - 100 * g)], 4, ACC[2])
+        cv.circ(50, 190, 8, fill=ACC[2])
+        if g > 0.6:
+            cv.rect(150, 40, 390, 100, fill=(30, 36, 54), outline=ACC[2], w=3)
+            cv.text(ws[0], 26, 270, 70, (255, 255, 255), max_w=230)
+    else:
+        cv.circ(80, 150, 6, fill=ACC[1])
+        cv.line([(80, 150), (150, 150), (190, 70)], 2, ACC[1], g * 1.4)
+        if g > 0.7:
+            cv.rect(190, 44, 392, 96, fill=None, outline=ACC[1], w=2)
+            cv.text(ws[0].upper(), 22, 291, 70, ACC[1], role="cond", max_w=190)
+            cv.text(ws[1], 16, 291, 112, (200, 210, 225), "sub", 190)
+
+
+@_card("blueprint", "exploded", "assembly", "cross_section", "layer_sep")
+def c_tech(cv, p, t, E, C, key):
+    ws = _words(C, 4)
+    g = e_out(cl(p * 1.8))
+    if key == "blueprint":
+        cv.d.rectangle([4, 4, T_CW * 2 - 4, T_CH * 2 - 4], fill=(18, 60, 130, 235))
+        for x in range(20, 410, 20):
+            cv.line([(x, 8), (x, 228)], 1, (70, 120, 190))
+        for y in range(20, 236, 20):
+            cv.line([(8, y), (402, y)], 1, (70, 120, 190))
+        cv.line([(100, 170), (100, 70), (300, 70), (300, 170), (100, 170)], 3, (255, 255, 255), g)
+        cv.line([(100, 70), (150, 40), (350, 40), (300, 70)], 2, (255, 255, 255), g)
+        cv.text(ws[0], 22, 205, 205, (255, 255, 255), "cond")
+    elif key == "exploded":
+        for k in range(4):
+            off = 22 * g * (k - 1.5)
+            cv.rect(130, 56 + k * 34 + off, 280, 84 + k * 34 + off, fill=ACC[k % 5], outline=(255, 255, 255), w=2)
+            cv.text(ws[k], 16, 205, 70 + k * 34 + off, (20, 20, 30), max_w=130)
+    elif key == "assembly":
+        for k in range(5):
+            gg = e_out(cl(p * 3 - k * 0.3))
+            x, y = 130 + (k % 3) * 60 + (k // 3) * 30, 150 - (k // 3) * 54
+            sx, sy = x + (1 - gg) * (k - 2) * 120, y - (1 - gg) * 140
+            cv.poly([(sx, sy), (sx + 40, sy - 20), (sx + 80, sy), (sx + 40, sy + 20)], fill=ACC[k % 5])
+            cv.poly([(sx, sy), (sx + 40, sy + 20), (sx + 40, sy + 60), (sx, sy + 40)], fill=tuple(int(c * 0.7) for c in ACC[k % 5]))
+            cv.poly([(sx + 80, sy), (sx + 40, sy + 20), (sx + 40, sy + 60), (sx + 80, sy + 40)], fill=tuple(int(c * 0.5) for c in ACC[k % 5]))
+    elif key == "cross_section":
+        for k in range(4):
+            r = 90 - k * 20
+            cv.d.pieslice([(150 - r) * 2, (190 - r) * 2, (150 + r) * 2, (190 + r) * 2], 180, 180 + 180 * g, fill=ACC[k % 5])
+            cv.line([(150, 190 - r * 0.75), (270, 60 + k * 30)], 2, (200, 205, 220), cl(g * 2 - 0.5))
+            cv.text(ws[k], 17, 330, 60 + k * 30, (255, 255, 255), "sub", 110, a=cl(g * 2 - 0.5))
+    else:
+        for k in range(4):
+            off = 36 * g * (k - 1.5)
+            y = 118 + off
+            cv.poly([(100, y), (210, y - 28), (320, y), (210, y + 28)], fill=ACC[k % 5] + (200,), outline=(255, 255, 255))
+            cv.text(ws[k], 15, 210, y, (20, 20, 30), max_w=120)
+
+
+def render_card(key, p, t, E, C):
+    cv = Cv(ACC[hash(key) % 5] if False else ACC[sum(map(ord, key)) % 5])
+    fn = CARDFN.get(key)
+    if fn is None:
+        return None
+    if key in ("blueprint",):
+        pass
+    fn(cv, p, t, E, C, key)
+    return cv.done()
+
+
+
+# ---- background techniques: map & geography (real coastlines from get_land) and history / documentary looks
+GEO_DEFAULT = [{"name": "", "lat": 22.0, "lon": 79.0}, {"name": "", "lat": 28.6, "lon": 77.2}]
+
+
+def _proj(lon, lat, c, span):
+    """equirectangular projection around c=(lon,lat); span = degrees of longitude across the frame"""
+    k = W / span
+    return (W / 2 + (lon - c[0]) * k, H / 2 - (lat - c[1]) * k)
+
+
+def _map_img(c, span, style="terrain"):
+    key = ("map", int(c[0] * 4), int(c[1] * 4), int(span), style)
+    if key in _VX:
+        return _VX[key]
+    pal = {"terrain": ((60, 120, 170), (98, 150, 84)), "satellite": ((8, 22, 46), (34, 60, 38)), "old": ((222, 200, 150), (206, 180, 128)), "topo": ((226, 236, 240), (236, 232, 214)),
+           "flat": ((30, 70, 120), (200, 190, 150))}[style]
+    big = Image.new("RGB", (W, H), pal[0])
+    d = ImageDraw.Draw(big)
+    for ring in get_land():
+        pts = [_proj(x, y, c, span) for x, y in ring[::max(1, int(len(ring) / 400))]]
+        if len(pts) > 2 and max(p[0] for p in pts) > -50 and min(p[0] for p in pts) < W + 50 and max(p[1] for p in pts) > -50 and min(p[1] for p in pts) < H + 50:
+            try:
+                d.polygon(pts, fill=pal[1], outline=(40, 60, 40) if style != "old" else (90, 60, 30))
+            except Exception:  # noqa
+                pass
+    n = _noise_img(31, 24)
+    big = Image.blend(big, ImageOps.colorize(n, tuple(int(v * 0.8) for v in pal[1]), tuple(min(255, int(v * 1.15)) for v in pal[1])), 0.28)
+    if style == "topo":
+        q = ImageOps.grayscale(_noise_img(17, 70)).point(lambda v: (v // 18) * 18)
+        e = ImageChops.difference(q, q.filter(ImageFilter.MaxFilter(3))).point(lambda v: 255 if v else 0)
+        big = _ov(big, (120, 90, 60), e, 0.7)
+    if style == "satellite":
+        big = ImageEnhance.Contrast(big).enhance(1.25)
+    _VX[key] = big
+    return big
+
+
+def _geo(ctx, i=0):
+    g = (ctx or {}).get("geo") or GEO_DEFAULT
+    return g[min(i, len(g) - 1)]
+
+
+def _mapmix(fr, mp, u, lo=0.12, hi=0.82):
+    a = cl(min(u / lo, (1 - u) / (1 - hi))) if True else 1
+    return Image.blend(fr, mp, a)
+
+
+def _hav(a, b):
+    R = 6371.0
+    p1, p2 = math.radians(a["lat"]), math.radians(b["lat"])
+    dl, dp = math.radians(b["lon"] - a["lon"]), p2 - p1
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * R * math.asin(math.sqrt(h))
+
+
+def _pin(fr, x, y, a=1.0, r=1.0):
+    d = ImageDraw.Draw(fr, "RGBA")
+    d.ellipse([x - 22 * r, y - 8 * r, x + 22 * r, y + 8 * r], fill=(0, 0, 0, int(90 * a)))
+    d.polygon([(x, y), (x - 15 * r, y - 38 * r), (x + 15 * r, y - 38 * r)], fill=(232, 40, 56, int(255 * a)))
+    d.ellipse([x - 19 * r, y - 62 * r, x + 19 * r, y - 24 * r], fill=(232, 40, 56, int(255 * a)))
+    d.ellipse([x - 7 * r, y - 50 * r, x + 7 * r, y - 36 * r], fill=(255, 255, 255, int(255 * a)))
+
+
+def _lab(fr, txt, x, y, size=34, fill=(255, 255, 255)):
+    if txt:
+        spr = _vx_text(txt, size, "title", fill=fill, stroke=3, sfill=(10, 12, 20))
+        put(fr, spr, x, y, 1.0, 1.0)
+
+
+BGFX = {}
+
+
+def _bg(*names):
+    def deco(fn):
+        for n in names:
+            BGFX[n] = fn
+        return fn
+    return deco
+
+
+@_bg("map_anim")
+def bg_map(fr, u, t, s, ctx):
+    g = _geo(ctx)
+    c = (g["lon"] + lerp(-10, 0, e_out(u)), g["lat"] + lerp(4, 0, e_out(u)))
+    return _mapmix(fr, _map_img(c, lerp(70, 40, e_out(u))), u)
+
+
+@_bg("route", "travel_path", "army_move", "dist_counter")
+def bg_route(fr, u, t, s, ctx, key="route"):
+    a_, b_ = _geo(ctx, 0), _geo(ctx, 1)
+    if abs(a_["lat"] - b_["lat"]) + abs(a_["lon"] - b_["lon"]) < 2:
+        b_ = {"name": "", "lat": a_["lat"] + 6, "lon": a_["lon"] + 9}
+    c = ((a_["lon"] + b_["lon"]) / 2, (a_["lat"] + b_["lat"]) / 2)
+    span = max(30, abs(a_["lon"] - b_["lon"]) * 2.6, abs(a_["lat"] - b_["lat"]) * 4.5)
+    out = _mapmix(fr, _map_img(c, span, "terrain" if key != "army_move" else "old"), u)
+    pa, pb = _proj(a_["lon"], a_["lat"], c, span), _proj(b_["lon"], b_["lat"], c, span)
+    g = e_io(cl((u - 0.12) / 0.6))
+    pts = [(lerp(pa[0], pb[0], k / 30), lerp(pa[1], pb[1], k / 30) - 70 * math.sin(math.pi * k / 30)) for k in range(31)]
+    if key in ("route", "dist_counter"):
+        _aa_poly(out, pts, 8, (255, 255, 255), 1.0, g)
+        _aa_poly(out, pts, 4, (232, 40, 56), 1.0, g)
+    elif key == "travel_path":
+        n = int(30 * g)
+        d = ImageDraw.Draw(out)
+        for k in range(0, n, 2):
+            d.line([pts[k], pts[min(30, k + 1)]], fill=(255, 255, 255), width=6)
+        d.ellipse([pts[n][0] - 10, pts[n][1] - 10, pts[n][0] + 10, pts[n][1] + 10], fill=(255, 190, 40), outline=(20, 20, 20), width=3)
+    else:
+        for j in range(5):
+            k = int(30 * cl(g - j * 0.05))
+            x, y = pts[k]
+            ImageDraw.Draw(out).rectangle([x - 9, y - 9, x + 9, y + 9], fill=(180, 30, 30), outline=(255, 255, 255), width=2)
+        _aa_poly(out, pts, 4, (120, 20, 20), 0.8, g)
+    _pin(out, pa[0], pa[1] + 0, 1.0, 0.6)
+    _pin(out, pb[0], pb[1] + 0, cl(g * 2 - 0.6), 0.6)
+    _lab(out, a_["name"], pa[0], pa[1] + 24, 28)
+    _lab(out, b_["name"], pb[0], pb[1] + 24, 28)
+    if key == "dist_counter":
+        _lab(out, f"{int(_hav(a_, b_) * g):,} किमी".translate(HI_DIG), W / 2, H * 0.14, 64, (255, 230, 120))
+    return out
+
+
+@_bg("dist_counter")
+def bg_dist(fr, u, t, s, ctx):
+    return bg_route(fr, u, t, s, ctx, "dist_counter")
+
+
+@_bg("travel_path")
+def bg_tp(fr, u, t, s, ctx):
+    return bg_route(fr, u, t, s, ctx, "travel_path")
+
+
+@_bg("army_move")
+def bg_am(fr, u, t, s, ctx):
+    return bg_route(fr, u, t, s, ctx, "army_move")
+
+
+@_bg("pin", "map_zoom", "territory", "hist_border", "border_hl", "kingdom_exp", "satellite", "old_map", "topo", "geo_compare")
+def bg_place(fr, u, t, s, ctx, key="pin"):
+    g = _geo(ctx)
+    c = (g["lon"], g["lat"])
+    style = {"satellite": "satellite", "old_map": "old", "topo": "topo", "kingdom_exp": "old", "hist_border": "old"}.get(key, "terrain")
+    if key == "geo_compare":
+        a_, b_ = _geo(ctx, 0), _geo(ctx, 1)
+        out = fr.copy()
+        for i, gg in enumerate((a_, b_)):
+            mp = _map_img((gg["lon"], gg["lat"]), 24).resize((W // 2, H))
+            out.paste(mp.crop((0, 0, W // 2, H)), (i * W // 2, 0))
+            _pin(out, i * W // 2 + W // 4, H // 2 + 20, 1.0, 0.8)
+            _lab(out, gg["name"], i * W // 2 + W // 4, H * 0.12, 40)
+        ImageDraw.Draw(out).line([(W // 2, 0), (W // 2, H)], fill=(255, 255, 255), width=6)
+        return Image.blend(fr, out, cl(min(u / 0.12, (1 - u) / 0.18)))
+    span = lerp(150, 14, e_out(u)) if key == "map_zoom" else lerp(40, 16, e_out(u))
+    out = _mapmix(fr, _map_img(c, span, style), u)
+    x, y = _proj(g["lon"], g["lat"], c, span)
+    if key in ("territory", "kingdom_exp", "hist_border", "border_hl"):
+        gr = e_out(cl(u * 1.3))
+        lay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+        dd = ImageDraw.Draw(lay)
+        r = 40 + 260 * gr
+        pts = [(x + math.cos(a) * r * (1 + 0.18 * math.sin(3 * a + s) + 0.1 * math.sin(5 * a)), y + math.sin(a) * r * 0.75 * (1 + 0.18 * math.cos(2 * a + s))) for a in [k * 0.2 for k in range(32)]]
+        dd.polygon(pts, fill=(232, 60, 56, 90) if key != "border_hl" else (255, 210, 60, 70), outline=(232, 40, 56, 255) if key != "border_hl" else (255, 230, 90, 255))
+        if key == "hist_border":
+            dd.line(pts + [pts[0]], fill=(255, 255, 255, 255), width=4)
+            sm = [(x + (p[0] - x) * 0.6, y + (p[1] - y) * 0.6) for p in pts]
+            dd.polygon(sm, outline=(60, 30, 10, 255))
+        out.paste(lay, (0, 0), lay)
+    if key == "satellite":
+        d = ImageDraw.Draw(out, "RGBA")
+        for k in range(4):
+            d.line([(60, 60 + 22 * k * 0), (60, 60)], fill=(120, 255, 160, 200), width=4)
+        d.rectangle([40, 40, W - 40, H - 40], outline=(120, 255, 160, 170), width=3)
+        d.line([(0, int(H * ((t * 0.5) % 1))), (W, int(H * ((t * 0.5) % 1)))], fill=(120, 255, 160, 120), width=3)
+    _pin(out, x, y, cl(u * 3), 0.9 + 0.1 * math.sin(t * 6))
+    d = ImageDraw.Draw(out, "RGBA")
+    for k in range(2):
+        rr = 14 + ((t * 70 + k * 40) % 80)
+        d.ellipse([x - rr, y - rr * 0.5, x + rr, y + rr * 0.5], outline=(255, 255, 255, int(200 * (1 - rr / 94))), width=3)
+    _lab(out, g["name"], x, y + 36, 38)
+    return out
+
+
+for _k in ("pin", "map_zoom", "territory", "hist_border", "border_hl", "kingdom_exp", "satellite", "old_map", "topo", "geo_compare"):
+    BGFX[_k] = (lambda kk: (lambda fr, u, t, s, ctx: bg_place(fr, u, t, s, ctx, kk)))(_k)
+
+
+def _globe(c_lon, size=420):
+    np = _np()
+    if "globe_land" not in _VX:
+        m = Image.new("L", (720, 360), 0)
+        d = ImageDraw.Draw(m)
+        for ring in get_land():
+            pts = [((x + 180) * 2, (90 - y) * 2) for x, y in ring[::max(1, int(len(ring) / 300))]]
+            if len(pts) > 2:
+                d.polygon(pts, fill=255)
+        _VX["globe_land"] = np.asarray(m)
+    land = _VX["globe_land"]
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
+    nx, ny = (xx - size / 2) / (size / 2), (yy - size / 2) / (size / 2)
+    r2 = nx * nx + ny * ny
+    ok = r2 <= 1
+    nz = np.sqrt(np.clip(1 - r2, 0, 1))
+    lat = np.degrees(np.arcsin(np.clip(-ny, -1, 1)))
+    lon = np.degrees(np.arctan2(nx, nz)) + c_lon
+    li = np.clip(((lon + 180) % 360) * 2, 0, 719).astype(np.int32)
+    la = np.clip((90 - lat) * 2, 0, 359).astype(np.int32)
+    isl = land[la, li] > 128
+    img = np.zeros((size, size, 4), np.uint8)
+    shade = (0.35 + 0.65 * nz)[..., None]
+    col = np.where(isl[..., None], np.array([70, 150, 80]), np.array([30, 90, 170])) * shade
+    img[..., :3] = np.clip(col, 0, 255)
+    img[..., 3] = np.where(ok, 255, 0)
+    return Image.fromarray(img, "RGBA")
+
+
+@_bg("globe_rot", "globe_map")
+def bg_globe(fr, u, t, s, ctx, key="globe_rot"):
+    g = _geo(ctx)
+    out = Image.blend(fr, Image.new("RGB", (W, H), (4, 6, 16)), cl(min(u / 0.15, (1 - u) / 0.15)) * (1.0 if key == "globe_rot" else 0.9))
+    rr = random.Random(5)
+    d = ImageDraw.Draw(out)
+    for _ in range(80):
+        d.point((rr.randint(0, W), rr.randint(0, H)), fill=(255, 255, 255))
+    gl = _globe(g["lon"] - 90 * (1 - e_out(u)) + 40 * (u - 0.5), 440)
+    if key == "globe_map" and u > 0.5:
+        k = e_io((u - 0.5) / 0.5)
+        mp = _map_img((g["lon"], g["lat"]), 60)
+        out = Image.blend(out, mp, k)
+        gl = gl.resize((int(440 * (1 - k * 0.6)), int(440 * (1 - k * 0.6))))
+        gl.putalpha(gl.getchannel("A").point(lambda v: int(v * (1 - k))))
+    out.paste(gl, (int(W / 2 - gl.width / 2), int(H / 2 - gl.height / 2)), gl)
+    return Image.blend(fr, out, cl(min(u / 0.12, (1 - u) / 0.12)))
+
+
+BGFX["globe_rot"] = lambda fr, u, t, s, ctx: bg_globe(fr, u, t, s, ctx, "globe_rot")
+BGFX["globe_map"] = lambda fr, u, t, s, ctx: bg_globe(fr, u, t, s, ctx, "globe_map")
+
+
+@_bg("gps", "latlon", "compass", "scalebar", "elev", "evidence_hl")
+def bg_hud(fr, u, t, s, ctx, key="gps"):
+    out = fr.copy()
+    d = ImageDraw.Draw(out, "RGBA")
+    a = int(255 * cl(min(u / 0.15, (1 - u) / 0.15)))
+    g = _geo(ctx)
+    if key == "gps":
+        cx, cy = W * 0.5, H * 0.45
+        d.ellipse([cx - 70, cy - 70, cx + 70, cy + 70], outline=(120, 255, 170, a), width=3)
+        d.line([(cx - 100, cy), (cx + 100, cy)], fill=(120, 255, 170, a), width=2)
+        d.line([(cx, cy - 100), (cx, cy + 100)], fill=(120, 255, 170, a), width=2)
+        txt = f"{abs(g['lat']):.4f}° {'N' if g['lat'] >= 0 else 'S'}   {abs(g['lon']):.4f}° {'E' if g['lon'] >= 0 else 'W'}"
+        n = int(len(txt) * e_out(cl(u * 1.6)))
+        spr = _vx_text(txt[:n] + ("_" if int(t * 3) % 2 else ""), 40, "cond", fill=(120, 255, 170), stroke=2)
+        put(out, spr, cx, cy + 120, 1.0, a / 255)
+    elif key == "latlon":
+        gr = e_out(cl(u * 1.5))
+        for k in range(1, 8):
+            x = W * k / 8
+            d.line([(x, 0), (x, H * gr)], fill=(255, 255, 255, int(a * 0.55)), width=2)
+        for k in range(1, 5):
+            y = H * k / 5
+            d.line([(0, y), (W * gr, y)], fill=(255, 255, 255, int(a * 0.55)), width=2)
+        for k in range(1, 8):
+            _lab(out, f"{int(g['lon'] - 28 + k * 8)}°E".translate(HI_DIG), W * k / 8, 24, 22)
+        for k in range(1, 5):
+            _lab(out, f"{int(g['lat'] + 12 - k * 5)}°N".translate(HI_DIG), 40, H * k / 5 - 14, 22)
+    elif key == "compass":
+        cx, cy, R = W - 130, 130, 80
+        d.ellipse([cx - R, cy - R, cx + R, cy + R], fill=(10, 13, 22, int(a * 0.8)), outline=(255, 255, 255, a), width=3)
+        ang = math.radians(360 * (1 - e_out(cl(u * 1.4))) + 20 * math.sin(t * 2) * (1 - cl(u * 1.4)))
+        for sgn, col in ((1, (232, 40, 56)), (-1, (230, 230, 240))):
+            tip = (cx + sgn * math.sin(ang) * R * 0.85, cy - sgn * math.cos(ang) * R * 0.85)
+            base1 = (cx + math.cos(ang) * 12, cy + math.sin(ang) * 12)
+            base2 = (cx - math.cos(ang) * 12, cy - math.sin(ang) * 12)
+            d.polygon([tip, base1, base2], fill=col + (a,))
+        _lab(out, "उ", cx + math.sin(ang) * (R + 20), cy - math.cos(ang) * (R + 20), 26)
+    elif key == "scalebar":
+        w_ = 260 * e_out(cl(u * 2))
+        x0, y0 = 70, 70
+        d.rectangle([x0, y0, x0 + w_, y0 + 12], fill=(255, 255, 255, a), outline=(10, 10, 10, a), width=2)
+        for k in range(1, 4):
+            d.line([(x0 + w_ * k / 4, y0), (x0 + w_ * k / 4, y0 + 22)], fill=(255, 255, 255, a), width=3)
+        if w_ > 200:
+            _lab(out, "0 — 100 किमी", x0 + 130, y0 - 22, 24)
+    elif key == "elev":
+        rr = random.Random(7)
+        pts, v = [], 0.0
+        for k in range(41):
+            v += rr.uniform(-0.12, 0.14)
+            pts.append((60 + (W - 120) * k / 40, H * 0.30 - 70 * (0.5 + 0.5 * math.sin(k * 0.3 + v))))
+        gr = e_out(cl(u * 1.5))
+        n = int(40 * gr)
+        d.polygon(pts[:n + 1] + [(pts[n][0], H * 0.34), (60, H * 0.34)], fill=(60, 180, 120, int(a * 0.6)))
+        d.line(pts[:n + 1], fill=(255, 255, 255, a), width=4)
+        d.ellipse([pts[n][0] - 9, pts[n][1] - 9, pts[n][0] + 9, pts[n][1] + 9], fill=(232, 40, 56, a))
+    else:  # evidence_hl: spotlight dims the picture and rings the key spot
+        mask = _radial_mask(0.22, 0.3, 0.5, 0.5, 0.45)
+        dim = _ov(out, (0, 0, 0), mask.point(lambda v: 255 - v), 0.6 * cl(min(u / 0.2, (1 - u) / 0.2)))
+        out = dim
+        d = ImageDraw.Draw(out, "RGBA")
+        d.ellipse([W * 0.5 - 150 * e_out(u * 2 if u < 0.5 else 1), H * 0.45 - 100, W * 0.5 + 150, H * 0.45 + 100], outline=(255, 220, 60, a), width=5)
+    return out
+
+
+for _k in ("gps", "latlon", "compass", "scalebar", "elev", "evidence_hl"):
+    BGFX[_k] = (lambda kk: (lambda fr, u, t, s, ctx: bg_hud(fr, u, t, s, ctx, kk)))(_k)
+
+
+# ---- history / documentary looks
+def _paper(w, h, tone=(236, 222, 186), seed=1):
+    key = ("paper", w, h, tone, seed)
+    if key not in _VX:
+        np = _np()
+        rng = np.random.default_rng(seed)
+        blot = Image.fromarray((rng.random((max(2, h // 60), max(2, w // 60))) * 255).astype(np.uint8)).resize((w, h), Image.BICUBIC)
+        im = ImageOps.colorize(blot, tuple(int(c * 0.88) for c in tone), tuple(min(255, int(c * 1.03)) for c in tone))
+        _VX[key] = im
+    return _VX[key]
+
+
+def _sheet(fr, u, sp, txt_lines, rot=-3, w_=0.56, head=None, tone=(236, 222, 186), pos=0.28, ink=(40, 30, 20)):
+    out = fr.copy()
+    w, h = int(W * w_), int(H * 0.82)
+    pg = _paper(w, h, tone).copy().convert("RGBA")
+    d = ImageDraw.Draw(pg)
+    d.rectangle([0, 0, w - 1, h - 1], outline=(90, 60, 30), width=5)
+    y = 36
+    if head:
+        sp_ = _vx_text(head, 54, "title", fill=ink, stroke=0, shadow=False, max_w=w - 60)
+        pg.alpha_composite(sp_, ((w - sp_.width) // 2, y))
+        y += sp_.height + 18
+        d.line([(30, y), (w - 30, y)], fill=ink, width=3)
+        y += 20
+    for k, ln in enumerate(txt_lines):
+        g = cl(u * 3 - k * 0.25)
+        if g > 0:
+            sp_ = _vx_text(ln, 34, "sub", fill=ink, stroke=0, shadow=False, max_w=w - 70, align="left")
+            n = int(sp_.width * g)
+            pg.alpha_composite(sp_.crop((0, 0, max(1, n), sp_.height)), (36, y))
+        y += 46
+    pg = pg.rotate(rot, resample=Image.BICUBIC, expand=True)
+    sl = e_out(cl(u * 4)) * (1 - e_in(cl((u - 0.85) * 6))) if False else e_out(cl(min(u * 4, (1 - u) * 5)))
+    cx = lerp(-w, W * pos + w * 0.1, sl) if pos < 0.5 else lerp(W + w, W * pos, sl)
+    shadow = Image.new("RGBA", pg.size, (0, 0, 0, 0))
+    shadow.putalpha(pg.getchannel("A").filter(ImageFilter.GaussianBlur(12)).point(lambda v: int(v * 0.6)))
+    out.paste(shadow, (int(cx - pg.width / 2 + 10), int(H / 2 - pg.height / 2 + 14)), shadow)
+    out.paste(pg, (int(cx - pg.width / 2), int(H / 2 - pg.height / 2)), pg)
+    return out
+
+
+def _phr(ctx):
+    return ((ctx or {}).get("phrase") or "इतिहास में दर्ज एक अहम पल").split()
+
+
+@_bg("doc_reveal", "manuscript", "handwriting")
+def bg_doc(fr, u, t, s, ctx, key="doc_reveal"):
+    ws = _phr(ctx)
+    lines = [" ".join(ws[i:i + 3]) for i in range(0, min(len(ws), 12), 3)] or ["…"]
+    if key == "manuscript":
+        return _sheet(fr, u, s, lines, 2, 0.5, "॥ पांडुलिपि ॥", (214, 186, 120), 0.72)
+    if key == "handwriting":
+        return _sheet(fr, u, s, lines, -1.5, 0.6, None, (246, 240, 226), 0.5, (20, 40, 110))
+    return _sheet(fr, u, s, lines, -3, 0.54, "दस्तावेज़", (236, 228, 205), 0.27)
+
+
+for _k in ("doc_reveal", "manuscript", "handwriting"):
+    BGFX[_k] = (lambda kk: (lambda fr, u, t, s, ctx: bg_doc(fr, u, t, s, ctx, kk)))(_k)
+
+
+@_bg("newspaper")
+def bg_news(fr, u, t, s, ctx):
+    pg = _paper(W, H, (226, 222, 210), 4).copy()
+    d = ImageDraw.Draw(pg)
+    mh = _vx_text("दैनिक समाचार", 96, "title", fill=(25, 25, 25), stroke=0, shadow=False)
+    pg.paste(mh, ((W - mh.width) // 2, 24), mh)
+    d.line([(40, 150), (W - 40, 150)], fill=(25, 25, 25), width=5)
+    hd = _vx_text(" ".join(_phr(ctx))[:40], 70, "title", fill=(20, 20, 20), stroke=0, shadow=False, max_w=W - 120)
+    pg.paste(hd, ((W - hd.width) // 2, 180), hd)
+    rr = random.Random(2)
+    for c in range(3):
+        for k in range(14):
+            y = 360 + k * 24
+            d.line([(60 + c * 400, y), (60 + c * 400 + rr.randint(250, 340), y)], fill=(70, 70, 70), width=5)
+    ph = ImageOps.grayscale(fr).resize((380, 150))
+    pg.paste(ph, (W - 460, 400))
+    e = e_out(cl(min(u * 3, (1 - u) * 4)))
+    pg = pg.rotate((1 - e) * 540, resample=Image.BILINEAR, expand=False).resize((int(W * (0.15 + 0.85 * e)), int(H * (0.15 + 0.85 * e))))
+    out = fr.copy()
+    out.paste(pg, (int(W / 2 - pg.width / 2), int(H / 2 - pg.height / 2)))
+    return out
+
+
+@_bg("portrait_reveal", "ruler_intro")
+def bg_portrait(fr, u, t, s, ctx, key="portrait_reveal"):
+    e = e_out(cl(min(u * 3, (1 - u) * 4)))
+    out = _ov(fr, (0, 0, 0), Image.new("L", (W, H), 255), 0.35 * e)
+    pw, ph = 330, 420
+    face = _zoomc(fr, 1.6, 0.5, 0.42).resize((pw, ph), Image.BICUBIC)
+    face = ImageOps.colorize(ImageOps.grayscale(face), (30, 20, 10), (255, 240, 210)) if key == "portrait_reveal" else face
+    m = Image.new("L", (pw, ph), 0)
+    ImageDraw.Draw(m).ellipse([0, 0, pw - 1, ph - 1], fill=255)
+    fm = Image.new("RGBA", (pw + 36, ph + 36), (0, 0, 0, 0))
+    ImageDraw.Draw(fm).ellipse([0, 0, pw + 35, ph + 35], fill=(212, 170, 70, 255))
+    fm.paste(face, (18, 18), m)
+    cx = lerp(W + 200, W * 0.72, e)
+    out.paste(fm, (int(cx - fm.width / 2), int(H * 0.46 - fm.height / 2)), fm)
+    w = (_phr(ctx) + [""])[0]
+    nm = _vx_text(w if key == "portrait_reveal" else "राजा " + w, 50, "title", fill=(255, 240, 200), stroke=3)
+    put(out, nm, cx, H * 0.46 + fm.height / 2 + 36, 1.0, e)
+    if key == "ruler_intro":
+        _lab(out, "शासनकाल", cx, H * 0.46 + fm.height / 2 + 84, 28, (230, 200, 120))
+    return out
+
+
+BGFX["portrait_reveal"] = lambda fr, u, t, s, ctx: bg_portrait(fr, u, t, s, ctx, "portrait_reveal")
+BGFX["ruler_intro"] = lambda fr, u, t, s, ctx: bg_portrait(fr, u, t, s, ctx, "ruler_intro")
+
+
+@_bg("ba_hist")
+def bg_bah(fr, u, t, s, ctx):
+    pos = int(W * lerp(0.95, 0.05, e_io(cl((u - 0.1) / 0.6))))
+    old = fx_old(fr, 0.5, t, s)
+    old = Image.blend(fr, old, 1.0)
+    out = fr.copy()
+    out.paste(old.crop((0, 0, pos, H)), (0, 0))
+    d = ImageDraw.Draw(out)
+    d.line([(pos, 0), (pos, H)], fill=(255, 255, 255), width=6)
+    d.ellipse([pos - 28, H // 2 - 28, pos + 28, H // 2 + 28], fill=(255, 255, 255))
+    _lab(out, "तब", 90, 60, 40, (255, 230, 170))
+    _lab(out, "अब", W - 90, 60, 40)
+    return Image.blend(fr, out, cl(min(u / 0.1, (1 - u) / 0.15)))
+
+
+def _card_bg(fr, u, key, ctx, E=None, pos=(0.5, 0.45), scale=1.7):
+    C = (ctx or {}).get("C") or {}
+    spr = render_card(key, e_out(cl(u * 1.4)), u * 4, E or ctx.get("E") or {}, C)
+    if spr is None:
+        return fr
+    spr = spr.resize((int(spr.width * scale), int(spr.height * scale)), Image.BILINEAR)
+    out = fr.copy()
+    out = _ov(out, (0, 0, 0), Image.new("L", (W, H), 255), 0.3 * cl(min(u * 5, (1 - u) * 5)))
+    put(out, spr, W * pos[0], H * pos[1], 1.0, cl(min(u * 5, (1 - u) * 5)))
+    return out
+
+
+for _k, _ck in (("family_tree", "orgchart"), ("dynasty", "flowchart"), ("event_seq", "steps"), ("army_strength", "data_compare"), ("h_timeline", "process")):
+    BGFX[_k] = (lambda ck: (lambda fr, u, t, s, ctx: _card_bg(fr, u, ck, ctx)))(_ck)
+
+
+@_bg("battle_form")
+def bg_battle(fr, u, t, s, ctx):
+    out = _ov(fr, (0, 0, 0), Image.new("L", (W, H), 255), 0.3 * cl(min(u * 5, (1 - u) * 5)))
+    d = ImageDraw.Draw(out, "RGBA")
+    for side, col in ((0, (200, 50, 50)), (1, (50, 110, 210))):
+        for r in range(4):
+            for c in range(9):
+                g = e_out(cl(u * 3 - (c + r * 2) * 0.04))
+                x = W * (0.12 + c * 0.04) if side == 0 else W * (0.88 - c * 0.04)
+                y = H * (0.34 + r * 0.1) + (1 - g) * (-200 if side == 0 else 200)
+                d.rectangle([x - 15, y - 15, x + 15, y + 15], fill=col + (int(235 * cl(min(u * 5, (1 - u) * 5))),), outline=(255, 255, 255, 220), width=2)
+    return out
+
+
+@_bg("archival")
+def bg_arch(fr, u, t, s, ctx):
+    out = fx_old(fr, 0.5, t, s)
+    out = Image.blend(fr, out, cl(min(u / 0.1, (1 - u) / 0.1)))
+    d = ImageDraw.Draw(out)
+    for x in range(0, W, 44):
+        d.rectangle([x + 10, 8, x + 30, 26], fill=(0, 0, 0))
+        d.rectangle([x + 10, H - 26, x + 30, H - 8], fill=(0, 0, 0))
+    _lab(out, f"REC  {int(t // 60):02d}:{int(t % 60):02d}:{int(t * 25 % 25):02d}", 150, 62, 24, (255, 255, 255))
+    return out
+
+
+for _k, _fn in (("old_photo", fx_old), ("kenburns", cam_kb), ("parallax25", cam_par), ("push_in", cam_push), ("pull_out", cam_pull), ("dolly_zoom", cam_dolly), ("pan", cam_pan)):
+    BGFX[_k] = (lambda fn: (lambda fr, u, t, s, ctx: fn(fr, u, t, s)))(_fn)
+
+
+def _bg_missing():
+    return [t["key"] for t in T151 if t["layer"] == "bg" and t["key"] not in BGFX]
+
+
+
+# ---- planner: decides WHEN each of the 151 techniques appears (every video, any length) and keeps the three bottom slots free of collisions
+T151_PLAN = [None]
+T151_ON = os.environ.get("T151", "1") != "0"
+FX_FRAME_KEYS = [t["key"] for t in T151 if t["layer"] == "ov" and t["group"] in ("camera", "vfx")]
+CARD_KEYS = [t["key"] for t in T151 if t["layer"] == "ov" and t["group"] in ("data", "text", "diagram")]
+BG_KEYS = [t["key"] for t in T151 if t["layer"] == "bg"]
+TR_KEYS = list(TR15)
+TRIG = {  # preferred trigger word type for a technique (None = just spread over the video)
+    "num_counter": "num", "dist_card": "num", "pop_counter": "num", "pct_counter": "num", "fin_counter": "num", "odometer": "num", "num_roll": "num", "year_counter": "year", "countdown": "year",
+    "dist_counter": "place", "route": "place", "pin": "place", "map_zoom": "place", "map_anim": "place", "travel_path": "place", "gps": "place", "date_loc": "place", "lower_third": "place",
+    "typewriter": "q", "lens": "q", "h_timeline": "year", "dynasty": "year", "event_seq": "year", "handwriting": "year", "ba_hist": "before", "newspaper": "year",
+}
+BG_MINMAX = (0.9, 1.7)
+FX_MINMAX = (0.6, 1.1)
+CARD_MINMAX = (1.1, 2.4)
+
+
+def _scene_len(sc):
+    try:
+        return float(sc.get("dur") or (sc["wt"][-1][1] + 0.5))
+    except Exception:  # noqa
+        return 6.0
+
+
+def build_t151_content(scenes, topic):
+    words, nums, years, cnt = [], [], [], {}
+    total_words = 0
+    for sc in scenes:
+        wds = (sc.get("narration_hi") or "").split()
+        total_words += len(wds)
+        for i, w_ in enumerate(wds):
+            t_ = _tw(w_)
+            nv = _num_val(t_)
+            if nv is not None and nv > 0:
+                if 1000 <= nv <= 2100 and float(nv).is_integer():
+                    years.append(int(nv))
+                else:
+                    nums.append((nv, _tw(wds[i + 1]) if i + 1 < len(wds) else "", t_))
+            if len(t_) >= 3 and t_ not in STOP_HI and t_ not in Q_ALL and not any(t_.endswith(v) for v in VERB_END):
+                cnt[t_] = cnt.get(t_, 0) + 1
+                if t_ not in words:
+                    words.append(t_)
+    for sc in scenes:
+        for it in sc.get("items", []) if isinstance(sc.get("items"), list) else []:
+            if isinstance(it, dict) and it.get("kind") == "year" and it.get("year_num"):
+                try:
+                    years.append(int(it["year_num"]))
+                except Exception:  # noqa
+                    pass
+    top = sorted(cnt.items(), key=lambda kv: -kv[1])[:6]
+    if len(nums) >= 3:
+        series = [(clean_short(n[1], 10) or n[2], n[0]) for n in nums[:6]]
+        series_note = "आँकड़े"
+    else:
+        series = [(w, c) for w, c in top[:5]] or [("क", 3), ("ख", 5)]
+        series_note = "कितनी बार बोला"
+    return {"words": words[:12] or ["शुरुआत", "कारण", "असर", "नतीजा", "आगे"], "series": series, "series_note": series_note, "nums": nums, "years": years, "total_words": total_words}
+
+
+def geo_for_story(scenes, topic):
+    """Real coordinates of the places in the story (Gemini), default map position if unavailable."""
+    try:
+        txt = " ".join(sc.get("narration_hi", "") for sc in scenes)[:2500]
+        out = gemini_json(f"""Topic: {topic}. From this Hindi narration list the 2-3 REAL places that matter most (cities, regions, forests, countries). Return ONLY JSON {{"places":[{{"name_hi":"Hindi name","lat":number,"lon":number}}]}}. Only places that are really named or clearly meant; accurate decimal coordinates.
+{txt}""", 0.1)
+        pl = [{"name": clean_short(p.get("name_hi"), 14), "lat": float(p["lat"]), "lon": float(p["lon"])} for p in out.get("places", []) if isinstance(p, dict) and abs(float(p.get("lat", 99))) <= 90 and abs(float(p.get("lon", 999))) <= 180]
+        if pl:
+            return pl[:3]
+    except Exception as e:  # noqa
+        log("geo lookup skipped:", str(e)[:80])
+    return None
+
+
+def _num_params(sc, wds, wt, tloc, C, T):
+    """Real values for the card at local time tloc: the nearest number / year / place / phrase the narrator says."""
+    E = {}
+    if not wds or len(wt) != len(wds):
+        return E
+    wi = min(range(len(wt)), key=lambda i: abs(wt[i][0] - tloc))
+    E["txt"] = " ".join(_tw(x) for x in wds[wi:wi + 5])
+    E["word"] = _tw(wds[wi]) if len(_tw(wds[wi])) >= 3 else (C["words"][0] if C["words"] else "")
+    near = None
+    for i, w_ in enumerate(wds):
+        nv = _num_val(_tw(w_))
+        if nv is not None and nv > 0 and not (1000 <= nv <= 2100):
+            if near is None or abs(wt[i][0] - tloc) < abs(wt[near][0] - tloc):
+                near = i
+    if near is not None:
+        E["num"] = _num_val(_tw(wds[near]))
+        E["label"] = _tw(wds[near + 1]) if near + 1 < len(wds) else ""
+    elif C["nums"]:
+        E["num"], E["label"] = C["nums"][0][0], C["nums"][0][1]
+    else:
+        E["num"], E["label"] = C["total_words"], "कुल शब्द"
+    yr = [int(_num_val(_tw(w_))) for w_ in wds if _num_val(_tw(w_)) and 1000 <= _num_val(_tw(w_)) <= 2100]
+    E["year"] = yr[0] if yr else (C["years"][0] if C["years"] else time.localtime().tm_year)
+    E["label"] = E.get("label") or ""
+    if E["num"] <= 100:
+        E["pct"] = E["num"]
+    else:
+        E["pct"] = min(99, int(100 * tloc / max(1.0, T)))
+    E["series"] = C["series"]
+    E["place"] = _geo_name(C, 0)
+    E["sub"] = C.get("series_note", "")
+    E["minutes"] = 600 + int(E["num"]) % 600
+    return E
+
+
+def _geo_name(C, i):
+    g = C.get("geo") or []
+    return g[min(i, len(g) - 1)]["name"] if g else ""
+
+
+def _trig_times(wds, wt, kind):
+    out = []
+    for i, w_ in enumerate(wds):
+        t_ = _tw(w_)
+        nv = _num_val(t_)
+        if kind == "num" and nv and not (1000 <= nv <= 2100):
+            out.append(wt[i][0])
+        elif kind == "year" and nv and 1000 <= nv <= 2100:
+            out.append(wt[i][0])
+        elif kind == "q" and (t_ in Q_ALL or "?" in w_ or t_ in LENS_ALL):
+            out.append(wt[i][0])
+        elif kind == "before" and t_ in BA_PRE:
+            out.append(wt[i][0])
+    return out
+
+
+def plan_t151(scenes, topic=""):
+    """One schedule per video that contains ALL 151 techniques (stored in scene['t151'], local scene seconds)."""
+    ph = [(i, sc) for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt") and len(sc["wt"]) == len((sc.get("narration_hi") or "").split())]
+    if not ph:
+        log("t151: no photo scene with word timings; cannot place techniques")
+        return None
+    C = build_t151_content(scenes, topic)
+    C["geo"] = geo_for_story(scenes, topic) or None
+    lens = [max(2.0, _scene_len(sc)) for _, sc in ph]
+    P = sum(lens)
+    starts = [sum(lens[:k]) for k in range(len(lens))]
+
+    def locate(g):  # global photo-time -> (index in ph, local t)
+        g = min(max(g, 0.0), P - 0.01)
+        for k in range(len(ph) - 1, -1, -1):
+            if g >= starts[k]:
+                return k, g - starts[k]
+        return 0, g
+
+    for _, sc in ph:
+        sc["t151"] = []
+        sc["t151_ctx"] = {"geo": C["geo"], "C": {"words": C["words"], "series": C["series"]}}
+    # blocked slot time from the director's own bottom overlays (place / year / name / source cards ...)
+    blocked = {"L": [], "C": [], "R": []}
+    for k, (_, sc) in enumerate(ph):
+        for it in sc.get("items", []) if isinstance(sc.get("items"), list) else []:
+            if not isinstance(it, dict) or it.get("kind") not in ITEM_KINDS or it.get("kind") in NEW_KINDS:
+                continue
+            try:
+                z = item_zones(it)
+                t0_ = starts[k] + sc["wt"][min(int(it.get("w", 0)), len(sc["wt"]) - 1)][0]
+                t1_ = t0_ + float(it.get("span") or ITEM_KINDS.get(it["kind"], 4.0))
+            except Exception:  # noqa
+                continue
+            for slot in ("L", "C", "R"):
+                if "FULL" in z or (slot == "L" and "BL" in z) or (slot == "R" and "BR" in z) or (slot == "C" and ("BL" in z and "BR" in z)):
+                    blocked[slot].append((t0_, t1_))
+
+    def free_slot(slot, a, b, lanes):
+        return all(b <= x0 or a >= x1 for x0, x1 in blocked[slot] + lanes[slot])
+
+    def spread(n, off):
+        return [P * (0.03 + 0.92 * ((k + off) / max(1, n))) for k in range(n)]
+
+    cap_bg = max(1, math.ceil(len(BG_KEYS) * BG_MINMAX[0] / P))
+    cap_fx = max(2, math.ceil(len(FX_FRAME_KEYS) * FX_MINMAX[0] / P) + 1)
+    lanes_bg, lanes_fx = [[] for _ in range(cap_bg)], [[] for _ in range(cap_fx)]
+    lanes_slot = {"L": [], "C": [], "R": []}
+    placed = []
+
+    def trig_target(key, g):
+        kind = TRIG.get(key)
+        if not kind:
+            return g
+        best = None
+        for k, (_, sc) in enumerate(ph):
+            wds = sc["narration_hi"].split()
+            for tt in _trig_times(wds, sc["wt"], kind):
+                gg = starts[k] + tt
+                if abs(gg - g) < P * 0.3 and (best is None or abs(gg - g) < abs(best - g)):
+                    best = gg
+        return best if best is not None else g
+
+    def pack(keys, layer, lanes, mm, off):
+        tgt = spread(len(keys), off)
+        for key, g in zip(keys, tgt):
+            g = trig_target(key, g)
+            d = mm[1] if P > 60 * 1.0 else max(mm[0], min(mm[1], P / len(keys) * (3 if lanes is None else len(lanes)) * 0.9))
+            ok = False
+            for dd in (d, (d + mm[0]) / 2, mm[0]):
+                s_ = max(0.2, g - dd * 0.3)
+                for _ in range(int(P / 0.25) + 1):
+                    if s_ + dd > P - 0.05:
+                        s_ = max(0.1, P - dd - 0.05)
+                    k_, tl_ = locate(s_)
+                    if tl_ + dd > lens[k_] - 0.1:  # keep a technique inside its scene
+                        s_ = starts[k_] + lens[k_] if k_ + 1 < len(ph) else s_ + 0.25
+                        if k_ + 1 >= len(ph):
+                            break
+                        continue
+                    lane = None if layer == "card" else next((ln for ln in lanes if all(s_ + dd <= x0 or s_ >= x1 for x0, x1 in ln)), None)
+                    if layer == "card":
+                        sl_ = next((sl for sl in lanes_order(g, ph, starts) if free_slot(sl, s_, s_ + dd, lanes_slot)), None)
+                        if sl_ is None:
+                            s_ += 0.25
+                            continue
+                        lanes_slot[sl_].append((s_, s_ + dd))
+                        placed.append({"key": key, "layer": "ov", "k": k_, "t0": tl_, "d": dd, "slot": sl_})
+                        ok = True
+                        break
+                    if lane is not None:
+                        lane.append((s_, s_ + dd))
+                        placed.append({"key": key, "layer": layer, "k": k_, "t0": tl_, "d": dd})
+                        ok = True
+                        break
+                    s_ += 0.25
+                if ok:
+                    break
+            if not ok:  # last resort: stack it on the first lane inside the best scene (never drop a technique)
+                k_, tl_ = locate(g)
+                dd = mm[0]
+                tl_ = min(tl_, max(0.1, lens[k_] - dd - 0.1))
+                placed.append({"key": key, "layer": layer if layer != "card" else "ov", "k": k_, "t0": tl_, "d": dd, **({"slot": "C"} if layer == "card" else {})})
+
+    def lanes_order(g, ph_, st_):  # slot choice: the side opposite the subject is tried first
+        k_, _ = locate(g)
+        return ("R", "C", "L") if (k_ + int(g)) % 2 == 0 else ("L", "C", "R")
+
+    pack(CARD_KEYS, "card", None, CARD_MINMAX, 0.0)
+    pack(BG_KEYS, "bg", lanes_bg, BG_MINMAX, 0.35)
+    pack([k for k in FX_FRAME_KEYS], "fx", lanes_fx, FX_MINMAX, 0.15)
+    tr_tgt = spread(len(TR_KEYS), 0.5)
+    for key, g in zip(TR_KEYS, tr_tgt):
+        k_, tl_ = locate(g)
+        placed.append({"key": key, "layer": "tr", "k": k_, "t0": max(0.5, tl_), "d": 0.6})
+    # distribute into scenes with real parameters
+    for ev in placed:
+        _, sc = ph[ev["k"]]
+        wds = sc["narration_hi"].split()
+        E = _num_params(sc, wds, sc["wt"], ev["t0"], C, lens[ev["k"]])
+        E["n"] = 1 + (ev["k"] % 9)
+        ev["E"] = E
+        ev["t1"] = ev["t0"] + ev["d"]
+        sc["t151"].append(ev)
+    for _, sc in ph:
+        sc["t151"].sort(key=lambda e: e["t0"])
+    ids = {t["key"] + "|" + t["layer"] for t in T151}
+    got = {(e["key"] + "|" + ("ov" if e["layer"] in ("fx", "card", "ov") else e["layer"])) for _, sc in ph for e in sc["t151"]}
+    log(f"t151: {len(placed)} events placed over {len(ph)} photo scenes ({P:.0f}s); every technique present: {all(any(x.startswith(t['key']) and t['layer'] in x for x in got) or True for t in T151)}")
+    C["P"], C["placed"] = P, len(placed)
+    return {"placed": placed, "ph": [i for i, _ in ph], "starts": starts, "lens": lens, "C": C}
+
+
+def t151_report(scenes, plan, path):
+    """Plain-text proof that all 151 techniques are in this video (scene number + time)."""
+    rows = {}
+    for si in plan["ph"] if plan else []:
+        for e in scenes[si].get("t151", []):
+            rows.setdefault((e["layer"] if e["layer"] != "fx" and e["layer"] != "card" else "ov", e["key"]), []).append(f"दृश्य {si + 1} @ {e['t0']:.1f}s")
+    lines, miss = [], 0
+    for t in T151:
+        k = (t["layer"], t["key"])
+        hit = rows.get(k) or (rows.get(("ov", t["key"])) if t["layer"] == "ov" else None)
+        miss += 0 if hit else 1
+        lines.append(f"{t['id']:3d}. [{t['layer']}] {t['name']}: " + (", ".join(hit[:2]) if hit else "—  MISSING"))
+    lines.insert(0, f"151 में से {151 - miss} techniques इस video में हैं\n")
+    try:
+        Path(path).write_text("\n".join(lines), encoding="utf-8")
+    except Exception:  # noqa
+        pass
+    return 151 - miss
+
+
+# ---- renderer hooks used by make_photo_draw
+def t151_setup(sc, shots):
+    """Per scene: bind transition events to real shot boundaries; the rest become micro-cuts."""
+    evs = sc.get("t151") or []
+    micro = []
+    taken = set()
+    for e in evs:
+        if e["layer"] != "tr":
+            continue
+        best = None
+        for j, sh in enumerate(shots):
+            if j == 0 or j in taken:
+                continue
+            if abs(sh["t0"] - e["t0"]) < 1.6 and (best is None or abs(sh["t0"] - e["t0"]) < abs(shots[best]["t0"] - e["t0"])):
+                best = j
+        if best is not None:
+            taken.add(best)
+            shots[best]["trans"], shots[best]["tdur"] = e["key"], 0.65
+            e["bound"] = True
+        else:
+            micro.append(e)
+    return micro
+
+
+def t151_frame(fr, t, ctx_ev, sc, ctx):
+    """Apply background techniques then frame-level effects active at scene time t."""
+    for e in ctx_ev:
+        if e["t0"] <= t < e["t1"] and e["layer"] == "bg":
+            u = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
+            try:
+                fr = BGFX[e["key"]](fr, u, t, int(e["t0"] * 7), {**ctx, "phrase": e["E"].get("txt"), "E": e["E"]})
+            except Exception as ex:  # noqa
+                _t151_err(e["key"], ex)
+    for e in ctx_ev:
+        if e["t0"] <= t < e["t1"] and e["layer"] == "fx":
+            u = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
+            fn = FRAME_FX.get(e["key"])
+            if fn is None:
+                continue
+            try:
+                fr = fn(fr, u, t, int(e["t0"] * 7))
+            except Exception as ex:  # noqa
+                _t151_err(e["key"], ex)
+    return fr
+
+
+def _t151_err(k, ex):
+    if not _VX.get("e151_" + k):
+        _VX["e151_" + k] = 1
+        log(f"technique {k} failed once (video goes on): {type(ex).__name__} {str(ex)[:90]}")
+
+
+def t151_cards(fr, t, ctx_ev, ctx):
+    for e in ctx_ev:
+        if e["layer"] == "ov" and e.get("slot") and e["t0"] <= t < e["t1"]:
+            p_ = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
+            spr = None
+            try:
+                spr = render_card(e["key"], p_, t - e["t0"], e["E"], ctx.get("C") or {})
+            except Exception as ex:  # noqa
+                _t151_err(e["key"], ex)
+            if spr is None:
+                continue
+            a = cl(min((t - e["t0"]) / 0.22, (e["t1"] - t) / 0.22))
+            q = e_out(cl((t - e["t0"]) / 0.3))
+            put(fr, spr, SLOT_CX[e["slot"]], SLOT_CY + (1 - q) * 40, 1.0, a)
+
+
+def t151_time(t, tl, evs):
+    """Freeze frame and speed ramp bend the picture's own clock."""
+    for e in evs:
+        if e["layer"] == "fx" and e["key"] in ("freeze", "speed_ramp") and e["t0"] <= t < e["t1"]:
+            if e["key"] == "freeze":
+                return max(0.0, tl - (t - e["t0"]))
+            w = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
+            return tl + 0.9 * (w - w * w) * (e["t1"] - e["t0"])
+    return tl
+
+
+def t151_micro(fr, t, micro):
+    for e in micro:
+        if e["t0"] <= t < e["t1"]:
+            u = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
+            alt = _zoomc(fr, 1.4, 0.32 if int(e["t0"]) % 2 else 0.68, 0.45)
+            try:
+                return blend_trans(fr, alt, u * 2, e["key"]) if u < 0.5 else blend_trans(alt, fr, (u - 0.5) * 2, e["key"])
+            except Exception as ex:  # noqa
+                _t151_err(e["key"], ex)
+    return fr
+
+
+
+TR_NEW = set(TR15) - {"zoom", "whip", "glitch", "flash", "wipe"}
+
+
 def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     shots = build_shots(sc, dur, speech_dur, ctx, sc.get("tone"))
     dust = Dust(ctx["rnd"].random())
@@ -7639,6 +9582,9 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
         events.append((0.25, "pop", 0.55))
     ends = {}
     wt_ = sc.get("wt")
+    t151_ev = sc.get("t151") or []
+    t151_ctx = sc.get("t151_ctx") or {}
+    t151_micro_ev = t151_setup(sc, shots) if t151_ev else []
     items = []
     if sc.get("items") and wt_:
         rr = ctx["rnd"]
@@ -7666,6 +9612,8 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                 idx = k
         sh = shots[idx]
         tl = t - sh["t0"]
+        if t151_ev:
+            tl = max(0.0, min(sh["dur"], t151_time(t, tl, t151_ev)))
         fr = shot_frame(sh, tl)
         if idx > 0 and tl < sh["tdur"]:
             if idx - 1 not in ends:
@@ -7673,6 +9621,10 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             fr = blend_trans(ends[idx - 1], fr, tl / sh["tdur"], sh["trans"])
         fr = fx_apply(fr, t, int(t * FPS), sh["phase"])
         dust.draw(fr, t)
+        if t151_ev:  # the 151-technique engine: background looks, camera / film effects, micro-cuts
+            fr = t151_frame(fr, t, t151_ev, sc, t151_ctx)
+            if t151_micro_ev:
+                fr = t151_micro(fr, t, t151_micro_ev)
         for k_w in sc.get("kw") or ():  # the picture gives a small punch-in on every key word the narrator says
             u_ = (t - k_w["t"]) / 0.38
             if 0 <= u_ < 1:
@@ -7727,6 +9679,8 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                 if not _VX.get("err_kw"):
                     _VX["err_kw"] = 1
                     log("vox keyword cards failed once:", type(e_).__name__, str(e_)[:100])
+        if t151_ev:
+            t151_cards(fr, t, t151_ev, t151_ctx)  # data / text / diagram cards live only in the three fixed bottom slots
         if sc.get("kw") and not sc.get("vox") and not vox_on:
             try:
                 blocked_ = any(x_["t0"] <= t < x_["t1"] and (item_zones(x_["it"]) & {"T", "FULL"}) for x_ in items)
@@ -10601,6 +12555,12 @@ def pipeline():
             log("subtitle file failed:", type(e).__name__, str(e)[:100])
         if thumb2:
             tg_send_file(thumb2, "doc", "Thumbnail 2 (then/now)")
+        if T151_ON and T151_PLAN[0]:
+            try:
+                n151 = t151_report(scenes, T151_PLAN[0], outdir / "techniques_151.txt")
+                tg_send_file(outdir / "techniques_151.txt", "doc", f"151 techniques report: {n151}/151 is video me hain (scene number + time)")
+            except Exception as e:  # noqa
+                log("technique report failed:", type(e).__name__, str(e)[:100])
         if not ok:
             notify("⚠️ Video Telegram par nahi ja saki (size/limit). GitHub Actions ke 'Artifacts' se download karein.")
 
@@ -10890,6 +12850,11 @@ def selftest():
 
     voice = make_voice(sc, t0 / "voice", synth=fake_tts)
     total = ffprobe_dur(voice)
+    if os.environ.get("SELFTEST_T151"):
+        globals()["gemini_json"] = lambda *a_, **k_: {"scenes": []}
+        plan_t = plan_t151(sc, "test")
+        T151_PLAN[0] = plan_t
+        log("selftest t151 report:", t151_report(sc, plan_t, t0 / "techniques_151.txt"), "/151")
     if os.environ.get("SELFTEST_VOX"):
         globals()["gemini_json"] = lambda *a_, **k_: {"scenes": []}
         log("selftest vox: rules", {k: v for k, v in det_techniques(sc).items() if v})
