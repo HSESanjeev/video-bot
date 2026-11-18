@@ -5141,6 +5141,21 @@ def draw_note(fr, ps, tl, ov, t0, t1, a):
         style = "banner"  # reference-only card: the real source name and a one-line note
         body = "The facts in this part of the video are based on this source."
     title, dom = it.get("sub") or "", it.get("dom") or ""
+    if it.get("center") and it.get("text"):  # ninth round: the real article line, big, in the middle; nothing dims the picture; overlay cards live below it
+        if style not in ("paper", "doc"):
+            style = "paper"
+        card = build_card(style, body, title, dom, it.get("mark") or "")
+        qin = e_out(cl((tl - t0) / 0.6))
+        qout = 1 - e_out(cl((tl - (t1 - 0.45)) / 0.4))
+        pp_ = e_out(cl((tl - t0 - 0.35) / 1.0))
+        spr = card.frame(pp_, cl((pp_ - 0.8) / 0.2)) if style == "paper" else card.frame(pp_)
+        box_h = 405 if it.get("with_ov") else 600
+        sk = min(1.0, W * 0.64 / spr.width, box_h / spr.height)
+        if sk < 0.999:
+            spr = spr.resize((max(2, int(spr.width * sk)), max(2, int(spr.height * sk))), Image.LANCZOS)
+        cy = 24 + box_h / 2 if it.get("with_ov") else H * 0.5 - 10
+        put(fr, spr, W / 2, cy + (1 - min(qin, qout)) * 36, 1.0, min(qin, qout))
+        return
     card = build_card(style, body, title, dom, (it.get("mark") or ov.get("mark", "")) if it.get("text") else "")
     p = e_out(cl((tl - t0 - 0.55) / 1.15))
     q = e_out(cl((tl - t0) / 0.55))
@@ -6890,6 +6905,8 @@ def _label_hits(words, label):
 def item_zones(it):
     """Screen areas: BL bottom-left, BR bottom-right, M middle, T top, FULL everything. Wide bottom things (banner card, year slider, source list) use BL+BR."""
     k = it["kind"]
+    if k == "note" and it.get("center"):
+        return {"M"}
     if k == "note":
         st_ = it.get("style") or "banner"
         if not it.get("text") or st_ == "banner":
@@ -8164,14 +8181,46 @@ ACC = [(255, 92, 72), (0, 190, 205), (255, 190, 40), (120, 200, 90), (150, 120, 
 HI_DIG = str.maketrans("0123456789", "०१२३४५६७८९")
 
 
+def _realize(im):
+    """Overlay graphics have no panel: they sit on the picture like broadcast graphics - soft contact shadow, tight dark edge, a little bloom and film grain so they do not look computer-drawn."""
+    np = _np()
+    a = im.getchannel("A")
+    soft = a.filter(ImageFilter.GaussianBlur(6)).point(lambda v: int(v * 0.75))
+    edge = a.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(1.4)).point(lambda v: int(v * 0.55))
+    sh = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    sh.putalpha(ImageChops.offset(soft, 3, 6))
+    ed = Image.new("RGBA", im.size, (0, 0, 0, 0))
+    ed.putalpha(edge)
+    glow = im.filter(ImageFilter.GaussianBlur(7))
+    arr = np.asarray(im).astype(np.float32)
+    g_ = np.asarray(glow).astype(np.float32)
+    arr[..., :3] = np.clip(arr[..., :3] + 0.22 * g_[..., :3] * (g_[..., 3:4] / 255.0), 0, 255)
+    arr[..., :3] = np.clip(arr[..., :3] + np.random.default_rng(int(a.getbbox()[2] if a.getbbox() else 1)).normal(0, 4.0, arr.shape[:2] + (1,)), 0, 255)
+    spr = Image.fromarray(arr.astype(np.uint8), "RGBA")
+    spr = Image.blend(spr, spr.filter(ImageFilter.GaussianBlur(0.7)), 0.35)
+    out = Image.alpha_composite(Image.alpha_composite(sh, ed), spr)
+    return out
+
+
+def _bg_real(src, fr, t):
+    """After a background technique: soften the hard computer edges, add grain and a vignette so it matches the photograph."""
+    np = _np()
+    fr = Image.blend(fr, fr.filter(ImageFilter.GaussianBlur(1.1)), 0.4)
+    if "vig" not in _VX:
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        r = np.sqrt(((xx - W / 2) / (W / 2)) ** 2 + ((yy - H / 2) / (H / 2)) ** 2)
+        _VX["vig"] = (1 - 0.34 * np.clip(r - 0.55, 0, 1) ** 1.6)[..., None]
+    arr = np.asarray(fr).astype(np.float32) * _VX["vig"]
+    arr += np.random.default_rng(int(t * 30) % 997).normal(0, 4.5, (H, W, 1))
+    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
+
+
 class Cv:
     def __init__(s, acc):
         s.S = 2
         s.acc = acc
         s.im = Image.new("RGBA", (T_CW * 2, T_CH * 2), (0, 0, 0, 0))
         s.d = ImageDraw.Draw(s.im)
-        s.d.rounded_rectangle([0, 0, T_CW * 2 - 1, T_CH * 2 - 1], 40, fill=(10, 13, 22, 214), outline=(255, 255, 255, 60), width=3)
-        s.d.rounded_rectangle([0, 0, 14, T_CH * 2 - 1], 6, fill=acc + (255,))
 
     def text(s, txt, size, x, y, fill=(255, 255, 255), role="title", max_w=None, a=1.0, rot=0, anchor="c"):
         if not str(txt).strip():
@@ -8213,7 +8262,7 @@ class Cv:
         s.d.arc([(x - r) * 2, (y - r) * 2, (x + r) * 2, (y + r) * 2], a0, a1, fill=fill, width=int(w * 2))
 
     def done(s):
-        return s.im.resize((T_CW, T_CH), Image.LANCZOS)
+        return _realize(s.im.resize((T_CW, T_CH), Image.LANCZOS))
 
 
 import unicodedata
@@ -8443,8 +8492,9 @@ def c_txt(cv, p, t, E, C, key):
     s_ = _ph(E, C)[:34]
     g = cl(p * 2.2)
     if key == "typewriter":
-        n = int(len(s_) * g)
-        cv.text(s_[:n] + ("▌" if int(t * 3) % 2 == 0 else ""), 34, 205, 118, (255, 255, 255), max_w=380)
+        gl_ = _gr(s_)
+        n = int(len(gl_) * g)
+        cv.text("".join(gl_[:n]) + ("|" if int(t * 3) % 2 == 0 else ""), 40, 205, 118, (255, 255, 255), max_w=390)
     elif key == "letter":
         gl = _gr(s_)[:16]
         x = 205 - 11 * len(gl) / 2
@@ -8724,17 +8774,34 @@ def _map_img(c, span, style="terrain"):
         return _VX[key]
     pal = {"terrain": ((60, 120, 170), (98, 150, 84)), "satellite": ((8, 22, 46), (34, 60, 38)), "old": ((222, 200, 150), (206, 180, 128)), "topo": ((226, 236, 240), (236, 232, 214)),
            "flat": ((30, 70, 120), (200, 190, 150))}[style]
-    big = Image.new("RGB", (W, H), pal[0])
-    d = ImageDraw.Draw(big)
+    msk = Image.new("L", (W, H), 0)
+    d = ImageDraw.Draw(msk)
     for ring in get_land():
         pts = [_proj(x, y, c, span) for x, y in ring[::max(1, int(len(ring) / 400))]]
         if len(pts) > 2 and max(p[0] for p in pts) > -50 and min(p[0] for p in pts) < W + 50 and max(p[1] for p in pts) > -50 and min(p[1] for p in pts) < H + 50:
             try:
-                d.polygon(pts, fill=pal[1], outline=(40, 60, 40) if style != "old" else (90, 60, 30))
+                d.polygon(pts, fill=255)
             except Exception:  # noqa
                 pass
-    n = _noise_img(31, 24)
-    big = Image.blend(big, ImageOps.colorize(n, tuple(int(v * 0.8) for v in pal[1]), tuple(min(255, int(v * 1.15)) for v in pal[1])), 0.28)
+    np = _np()
+    m_ = np.asarray(msk.filter(ImageFilter.GaussianBlur(1.2))).astype(np.float32)[..., None] / 255.0
+    shallow = np.asarray(msk.filter(ImageFilter.GaussianBlur(16))).astype(np.float32)[..., None] / 255.0
+    n1 = np.asarray(ImageOps.grayscale(_noise_img(31, 24))).astype(np.float32)[..., None] / 255.0
+    n2 = np.asarray(ImageOps.grayscale(_noise_img(53, 90))).astype(np.float32)[..., None] / 255.0
+    n3 = np.asarray(ImageOps.grayscale(_noise_img(77, 8))).astype(np.float32)[..., None] / 255.0
+    oc, ld = np.array(pal[0], np.float32), np.array(pal[1], np.float32)
+    ocean = oc * (0.8 + 0.3 * n1) * (1 - 0.35 * shallow) + np.array([40, 70, 80], np.float32) * 0.35 * shallow * (style in ("terrain", "satellite", "flat"))
+    land = ld * (0.72 + 0.5 * n1 + 0.18 * (n3 - 0.5))
+    sh_ = np.asarray(ImageOps.grayscale(_noise_img(53, 90)).filter(ImageFilter.EMBOSS)).astype(np.float32)[..., None] / 255.0 - 0.5
+    land = land * (1 + 1.1 * sh_)  # hill shading
+    if style in ("terrain", "satellite"):  # forests dark, dry ground warm
+        land = land * (0.85 + 0.3 * n2) + np.array([22, 10, -6], np.float32) * (n2 - 0.5)
+    comp = ocean * (1 - m_) + land * m_
+    coast = np.abs(np.asarray(msk.filter(ImageFilter.GaussianBlur(2.2))).astype(np.float32)[..., None] / 255.0 - 0.5)
+    comp = comp * (1 - 0.5 * np.clip(1 - coast * 6, 0, 1) * 0.35)
+    big = Image.fromarray(np.clip(comp, 0, 255).astype(np.uint8), "RGB")
+    ed_ = msk.filter(ImageFilter.FIND_EDGES).filter(ImageFilter.GaussianBlur(0.8))
+    big = _ov(big, (60, 50, 38) if style != "old" else (90, 60, 30), ed_.point(lambda v: min(255, v * 2)), 0.55)
     if style == "topo":
         q = ImageOps.grayscale(_noise_img(17, 70)).point(lambda v: (v // 18) * 18)
         e = ImageChops.difference(q, q.filter(ImageFilter.MaxFilter(3))).point(lambda v: 255 if v else 0)
@@ -8869,7 +8936,9 @@ def bg_place(fr, u, t, s, ctx, key="pin"):
         dd = ImageDraw.Draw(lay)
         r = 40 + 260 * gr
         pts = [(x + math.cos(a) * r * (1 + 0.18 * math.sin(3 * a + s) + 0.1 * math.sin(5 * a)), y + math.sin(a) * r * 0.75 * (1 + 0.18 * math.cos(2 * a + s))) for a in [k * 0.2 for k in range(32)]]
-        dd.polygon(pts, fill=(232, 60, 56, 90) if key != "border_hl" else (255, 210, 60, 70), outline=(232, 40, 56, 255) if key != "border_hl" else (255, 230, 90, 255))
+        dd.polygon(pts, fill=(232, 60, 56, 70) if key != "border_hl" else (255, 210, 60, 56), outline=(232, 40, 56, 235) if key != "border_hl" else (255, 230, 90, 235))
+        gl_ = lay.filter(ImageFilter.GaussianBlur(14))
+        lay = Image.alpha_composite(gl_, lay.filter(ImageFilter.GaussianBlur(0.8)))
         if key == "hist_border":
             dd.line(pts + [pts[0]], fill=(255, 255, 255, 255), width=4)
             sm = [(x + (p[0] - x) * 0.6, y + (p[1] - y) * 0.6) for p in pts]
@@ -8916,8 +8985,15 @@ def _globe(c_lon, size=420):
     la = np.clip((90 - lat) * 2, 0, 359).astype(np.int32)
     isl = land[la, li] > 128
     img = np.zeros((size, size, 4), np.uint8)
-    shade = (0.35 + 0.65 * nz)[..., None]
-    col = np.where(isl[..., None], np.array([70, 150, 80]), np.array([30, 90, 170])) * shade
+    lit = np.clip(-0.45 * nx - 0.35 * ny + 0.82 * nz, 0, 1)
+    shade = (0.12 + 0.95 * lit ** 0.9)[..., None]
+    cl_ = (np.random.default_rng(3).random((size // 8 + 2, size // 8 + 2)) * 255).astype(np.uint8)
+    cloud = np.asarray(Image.fromarray(cl_).resize((size, size), Image.BICUBIC).filter(ImageFilter.GaussianBlur(5))).astype(np.float32)[..., None] / 255.0
+    base = np.where(isl[..., None], np.array([78, 118, 66]) + 40 * (cloud - 0.5), np.array([16, 52, 118]))
+    spec = (np.clip(lit - 0.78, 0, 1) * 4.0)[..., None] * (~isl)[..., None] * 120
+    col = base * shade + spec + np.clip(cloud - 0.62, 0, 1) * 330 * shade
+    rim = np.clip(r2 - 0.72, 0, 1)[..., None] * 3.0
+    col = col + rim * np.array([60, 110, 200]) * (0.4 + lit[..., None])
     img[..., :3] = np.clip(col, 0, 255)
     img[..., 3] = np.where(ok, 255, 0)
     return Image.fromarray(img, "RGBA")
@@ -9016,7 +9092,7 @@ for _k in ("gps", "latlon", "compass", "scalebar", "elev", "evidence_hl"):
 
 
 # ---- history / documentary looks
-def _paper(w, h, tone=(236, 222, 186), seed=1):
+def _paper_t(w, h, tone=(236, 222, 186), seed=1):
     key = ("paper", w, h, tone, seed)
     if key not in _VX:
         np = _np()
@@ -9030,7 +9106,7 @@ def _paper(w, h, tone=(236, 222, 186), seed=1):
 def _sheet(fr, u, sp, txt_lines, rot=-3, w_=0.56, head=None, tone=(236, 222, 186), pos=0.28, ink=(40, 30, 20)):
     out = fr.copy()
     w, h = int(W * w_), int(H * 0.82)
-    pg = _paper(w, h, tone).copy().convert("RGBA")
+    pg = _paper_t(w, h, tone).copy().convert("RGBA")
     d = ImageDraw.Draw(pg)
     d.rectangle([0, 0, w - 1, h - 1], outline=(90, 60, 30), width=5)
     y = 36
@@ -9078,7 +9154,7 @@ for _k in ("doc_reveal", "manuscript", "handwriting"):
 
 @_bg("newspaper")
 def bg_news(fr, u, t, s, ctx):
-    pg = _paper(W, H, (226, 222, 210), 4).copy()
+    pg = _paper_t(W, H, (226, 222, 210), 4).copy()
     d = ImageDraw.Draw(pg)
     mh = _vx_text("दैनिक समाचार", 96, "title", fill=(25, 25, 25), stroke=0, shadow=False)
     pg.paste(mh, ((W - mh.width) // 2, 24), mh)
@@ -9473,6 +9549,275 @@ def t151_report(scenes, plan, path):
     return 151 - miss
 
 
+# ---- NINTH ROUND: ONE technique per sentence (best fit), source card as fallback / companion, realistic look
+T151_ALL = os.environ.get("T151_ALL", "0") == "1"  # 1 = old behaviour: all 151 packed into every video
+KEYINFO = {t["key"]: t for t in T151 if t["layer"] in ("bg", "ov")}
+RULES = {}
+
+
+def _R(key, toks, need=None, w=1.0):
+    RULES[key] = (tuple(toks.split()), need, w)
+
+
+# --- background (44): need "geo" = real places known for the story, "num"/"year"/"nums2" = real numbers said in the sentence
+_R("map_anim", "देश इलाके क्षेत्र राज्य महाद्वीप नक्शा", "geo"); _R("route", "रास्ता सफर सफ़र यात्रा पहुंच पहुँच रवाना से_लेकर", "geo2"); _R("travel_path", "चलते निकल पैदल सफर चल_पड़ा", "geo")
+_R("dist_counter", "किमी किलोमीटर दूर दूरी मील", "geo2"); _R("pin", "गांव गाँव शहर जगह रहता रहती पैदा जन्म कस्बे", "geo"); _R("map_zoom", "जिला जिले इलाका आसपास पास मोहल्ले", "geo")
+_R("globe_rot", "दुनिया पृथ्वी धरती विश्व ग्रह अंतरराष्ट्रीय"); _R("globe_map", "दुनिया_भर देशों महाद्वीपों", "geo"); _R("satellite", "सैटेलाइट उपग्रह अंतरिक्ष ऊपर_से जंगल", "geo")
+_R("border_hl", "सीमा बॉर्डर सरहद", "geo"); _R("territory", "कब्ज़ा कब्जा इलाकों राज शासन", "geo"); _R("hist_border", "बंटवारा विभाजन सीमाएं बदल", "geo")
+_R("army_move", "सेना फौज हमला चढ़ाई कूच", "geo"); _R("gps", "निर्देशांक ढूंढ खोज लोकेशन स्थान", "geo"); _R("latlon", "अक्षांश देशांतर", "geo")
+_R("topo", "पहाड़ पर्वत घाटी पठार ढलान", "geo"); _R("elev", "ऊंचा ऊँचा मीटर चोटी चढ़", "geo"); _R("compass", "उत्तर दक्षिण पूरब पश्चिम दिशा", "geo")
+_R("scalebar", "वर्ग फैला विशाल चौड़ा क्षेत्रफल", "geo"); _R("geo_compare", "जबकि के_मुकाबले दोनों एक_तरफ", "geo2"); _R("kingdom_exp", "साम्राज्य विस्तार फैलाया जीत", "geo")
+_R("old_map", "प्राचीन पुराने_नक्शे सदियों", "geo")
+_R("h_timeline", "सदी युग काल इतिहास साल_पहले सालों"); _R("old_photo", "पुरानी तस्वीर फोटो तब उस_समय बचपन यादें"); _R("parallax25", "गहराई आगे पीछे भीतर अंदर")
+_R("kenburns", "याद शांत धीरे चुपचाप", None, 0.5); _R("doc_reveal", "दस्तावेज रिकॉर्ड रिपोर्ट कागज फाइल प्रमाण"); _R("handwriting", "लिखा लिखी चिट्ठी पत्र डायरी नोट")
+_R("newspaper", "अखबार अख़बार खबर छपी समाचार पत्रकार"); _R("manuscript", "ग्रंथ पांडुलिपि शास्त्र पुराण वेद किताब लिखित"); _R("family_tree", "परिवार माता पिता बेटा बेटी भाई बहन वंशज रिश्ते माँ मां")
+_R("dynasty", "वंश राजवंश पीढ़ी पीढ़ियों"); _R("ruler_intro", "राजा रानी सम्राट शासक बादशाह नवाब"); _R("portrait_reveal", "व्यक्ति महिला लड़की लड़का बच्ची बच्चा आदमी नाम")
+_R("archival", "वीडियो फुटेज रिकॉर्डिंग"); _R("ba_hist", "पहले अब बदल आज पहले_जैसा"); _R("event_seq", "फिर उसके_बाद इसके_बाद और_फिर"); _R("battle_form", "युद्ध लड़ाई जंग मोर्चा सैनिक")
+_R("army_strength", "सैनिकों सैनिक फौज", "num"); _R("evidence_hl", "सबूत गवाह मिला पाया निशान जांच प्रमाण")
+_R("push_in", "डर रहस्य अचानक करीब गौर ध्यान", None, 0.8); _R("pull_out", "पूरी सबकुछ चारों आख़िर अंत दूर", None, 0.8); _R("dolly_zoom", "चौंका हैरान अजीब सन्न"); _R("pan", "फैला चारों_तरफ पूरे हर_तरफ", None, 0.8)
+# --- overlay (92)
+_R("num_counter", "", "num", 1.4); _R("dist_card", "किमी किलोमीटर दूर मील", "num", 1.8); _R("pop_counter", "लोग आबादी जनसंख्या बच्चे", "num", 1.6); _R("pct_counter", "प्रतिशत % फीसदी", "num", 1.8)
+_R("year_counter", "", "year", 1.5); _R("countdown", "बाद साल_बाद इंतज़ार", "year"); _R("time_counter", "घंटे मिनट दिन महीने हफ्ते", "num", 1.4)
+_R("bar_chart", "ज्यादा कम सबसे", "nums2", 1.6); _R("pie_chart", "हिस्सा प्रतिशत", "nums2", 1.5); _R("line_graph", "बढ़ घट बढ़ा घटा", "nums2", 1.5); _R("area_chart", "कुल बढ़ती", "nums2")
+_R("data_compare", "ज्यादा कम बराबर मुकाबले", "nums2", 1.6); _R("ranking", "पहला दूसरा तीसरा सबसे", "nums2"); _R("fin_counter", "रुपये रुपए डॉलर करोड़ लाख", "num", 1.9)
+_R("stat_info", "", "num", 1.0); _R("progress", "प्रतिशत पूरा हिस्सा", "num"); _R("digital_clock", "घंटे रात बजे समय", "num", 1.2); _R("odometer", "", "num", 1.0); _R("dashboard", "आंकड़े", "nums2"); _R("num_roll", "", "num", 1.0)
+_R("tilt", "ऊंचा ऊँचा ऊपर नीचे गिरा", None, 0.8); _R("fly", "उड़ उड़ान पार", None, 0.9); _R("orbit", "चारों घूम गोल चक्कर", None, 0.9); _R("parallax_cam", "परत आगे पीछे", None, 0.7)
+_R("aerial", "ऊपर आसमान हवा आकाश"); _R("drone", "गांव शहर जंगल इलाके"); _R("rack", "फोकस पीछे धुंधला"); _R("shake", "धमाका कांप भूकंप हिल झटका"); _R("handheld", "मैंने हमने सच असली गवाही")
+_R("whip_pan", "झट तुरंत फौरन"); _R("match_move", "साथ साथ_में उसके"); _R("persp_zoom", "सामने नज़दीक"); _R("inf_zoom", "अनंत गहरे हमेशा अंतहीन"); _R("tracking", "पीछा चल दौड़ पीछे_पीछे")
+_R("cine_reveal", "सामने_आया खुलासा राज़ सच"); _R("focus_pull", "ध्यान से देखा नज़र")
+_R("kinetic", "सबसे बड़ा बहुत सबसे_ज्यादा", None, 0.8); _R("text3d", "नंबर एक पहला", None, 0.7); _R("typewriter", "सवाल क्यों कैसे क्या", None, 1.2); _R("text_reveal", "छुपा राज़ असली")
+_R("text_mask", "आग पानी रेगिस्तान"); _R("word_hl", "खास अहम जरूरी"); _R("letter", "नाम शब्द"); _R("glitch_text", "डिजिटल टेक्नोलॉजी मशीन कंप्यूटर"); _R("tracking_text", "धीरे हल्के")
+_R("text_path", "रास्ता राह पथ"); _R("subtitles", "", None, 0.0); _R("lower_third", "नाम कहलाते जाने"); _R("chapter", "पहला भाग अध्याय शुरुआत आखिर आख़िरी")
+_R("date_loc", "", "yearplace", 1.6); _R("callout", "यहीं यही यहां"); _R("text_persp", "सामने आगे"); _R("text_rot", "घूम पलट"); _R("text_blur", "धुंधली भूल")
+_R("labels", "हिस्सा अंग"); _R("text_trans", "बदल रूप")
+_R("flowchart", "अगर तो या फैसला"); _R("process", "प्रक्रिया तरीका कैसे"); _R("steps", "पहले फिर चरण कदम"); _R("mindmap", "विचार कई अलग अलग_पहलू")
+_R("orgchart", "सरकार विभाग अधिकारी संस्था"); _R("network", "नेटवर्क इंटरनेट लोगों_से जुड़े"); _R("conn_line", "संबंध जोड़ मेल कड़ी जुड़"); _R("arrow_dir", "ओर तरफ दिशा")
+_R("callout_ptr", "यह इसे यहां"); _R("blueprint", "बनाया निर्माण डिज़ाइन बनावट"); _R("exploded", "पुर्जे हिस्सों"); _R("assembly", "जोड़कर बनता तैयार"); _R("cross_section", "परत भीतर ज़मीन_के_नीचे दिमाग")
+_R("layer_sep", "परतें स्तर"); _R("tech_label", "अंग नाम")
+_R("grain", "पुराना बीता याद", None, 0.6); _R("dust", "खंडहर धूल प्राचीन सूखा"); _R("smoke", "धुआं धुआँ आग जल"); _R("fog", "कोहरा धुंध रात रहस्य सन्नाटा"); _R("fire", "आग जला जलते चिता लपटें")
+_R("rain", "बारिश बरसात पानी तूफान"); _R("snow", "बर्फ ठंड सर्द"); _R("lightning", "बिजली गरज तूफान"); _R("light_leak", "रोशनी उम्मीद सुबह सूरज"); _R("lens_flare", "चमक सूरज तारा चमकता")
+_R("vignette", "अकेला अकेली उदास खामोश", None, 0.8); _R("chroma", "अजीब भ्रम"); _R("glitch", "गड़बड़ टूट"); _R("film_burn", "खत्म अंत जल_गया"); _R("vhs", "वीडियो टेप"); _R("old_film", "जमाने ज़माने बीते")
+_R("motion_blur", "तेज भागा दौड़ा रफ्तार"); _R("speed_ramp", "तेज़ी देखते_ही"); _R("freeze", "रुक ठहर थम रुका"); _R("split", "दोनों एक_तरफ दूसरी_तरफ जबकि"); _R("vox", "मतलब यानी दरअसल समझ", None, 0.9)
+WEAK = ("kenburns", "push_in", "pan", "grain", "vignette", "tilt", "parallax_cam", "orbit")  # calm defaults when nothing in the sentence calls for more
+LONG_FX = {"grain", "dust", "smoke", "fog", "fire", "rain", "snow", "vignette", "light_leak", "old_film", "vhs", "tilt", "orbit", "parallax_cam", "aerial", "drone", "fly", "tracking", "handheld", "motion_blur"}
+for _k in list(RULES):
+    assert _k in KEYINFO, _k
+
+
+def _sent_feats(sc, C):
+    wds = (sc.get("narration_hi") or "").split()
+    tw = [_tw(w_) for w_ in wds]
+    text = " ".join(tw)
+    nums, years = [], []
+    for i, t_ in enumerate(tw):
+        nv = _num_val(t_)
+        if nv is not None and nv > 0:
+            (years if 1000 <= nv <= 2100 and float(nv).is_integer() else nums).append(i)
+    geo = C.get("geo") or []
+    gn = [g_["name"] for g_ in geo if g_.get("name")]
+    geo_here = [i for i, t_ in enumerate(tw) if any(n_ and (n_ in t_ or (len(t_) > 2 and t_ in n_)) for n_ in gn)]
+    return {"wds": wds, "tw": tw, "text": text, "nums": nums, "years": years, "geo_here": geo_here, "geo_n": len(geo)}
+
+
+def _score_sent(F, C):
+    """Every technique that really fits this sentence, with a score and the first word that triggers it."""
+    out = []
+    for key, (toks, need, w_) in RULES.items():
+        if w_ <= 0:
+            continue
+        ok = {None: True, "num": bool(F["nums"]), "year": bool(F["years"]), "nums2": len(F["nums"]) >= 2, "geo": F["geo_n"] > 0, "geo2": F["geo_n"] > 1, "yearplace": bool(F["years"]) and bool(F["geo_here"])}[need]
+        if not ok:
+            continue
+        hits, first = 0, None
+        for tk in toks:
+            tk = tk.replace("_", " ")
+            if tk and tk in F["text"]:
+                hits += 1
+                i = next((j for j, t_ in enumerate(F["tw"]) if tk.split()[0] in t_), None)
+                if i is not None and (first is None or i < first):
+                    first = i
+        base = 0.0
+        if need in ("num", "nums2") and not toks[0:1] == ():
+            base = 0.0
+        if need == "num" and F["nums"]:
+            base, first = 1.0, F["nums"][0] if first is None else first
+        elif need == "year" and F["years"]:
+            base, first = 1.0, F["years"][0] if first is None else first
+        elif need == "yearplace":
+            base, first = 1.0, F["years"][0]
+        elif need == "nums2":
+            base, first = 0.6, F["nums"][0] if first is None else first
+        elif need in ("geo", "geo2") and F["geo_here"]:
+            base = 0.5
+            first = F["geo_here"][0] if first is None else first
+        sc_ = (hits + base) * w_
+        if key in WEAK:
+            sc_ += 0.25
+        if sc_ > 0:
+            out.append((sc_, key, 0 if first is None else first))
+    out.sort(key=lambda x: -x[0])
+    return out
+
+
+def _gemini_pick(rows, topic):
+    """One Gemini call (budget-governed): from the shortlist of each sentence pick the single technique that explains it best."""
+    pick = {}
+    try:
+        lst = []
+        for i, sent, cands in rows:
+            lst.append({"i": i, "sentence": sent[:160], "options": [{"key": k, "name": KEYINFO[k]["name"]} for k in cands]})
+        out = gemini_json_opt(f"""Hindi documentary on: {topic}. For EACH sentence choose the ONE visual technique from its options that explains what the narrator says best (data -> counter/chart, place -> map, old events -> documents/history, mood -> film effect). Use each technique at most once across the video where possible. Return ONLY JSON {{"picks":[{{"i":number,"key":"one of that sentence's option keys"}}]}}.
+{json.dumps(lst, ensure_ascii=False)}""", 0.2)
+        for p_ in out.get("picks", []):
+            if isinstance(p_, dict) and str(p_.get("i", "")).lstrip("-").isdigit():
+                pick[int(p_["i"])] = p_.get("key")
+    except Exception as e:  # noqa
+        log("t151 pick by Gemini skipped:", str(e)[:80])
+    return pick
+
+
+def plan_one(scenes, topic=""):
+    """ONE technique per sentence: background (44) first, else overlay (92) in a bottom slot, else a real source card. A source card may sit together with an overlay (big card in the centre, overlay below); never with a background technique."""
+    ph = [(i, sc) for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt") and len(sc["wt"]) == len((sc.get("narration_hi") or "").split())]
+    if not ph:
+        log("t151: no photo scene with word timings")
+        return None
+    C = build_t151_content(scenes, topic)
+    C["geo"] = geo_for_story(scenes, topic) or None
+    rnd = random.Random(sum(map(ord, topic or "x")))
+    plan_rows, used = [], {}
+    cand_by = {}
+    for n, (si, sc) in enumerate(ph):
+        sc["t151"], sc["kw"], sc["vox"] = [], None, None
+        sc["t151_ctx"] = {"geo": C["geo"], "C": {"words": C["words"], "series": C["series"]}}
+        items = [it for it in (sc.get("items") or []) if isinstance(it, dict)]
+        sc["_srclist"] = any(it.get("kind") == "srclist" for it in items)
+        sc["_notes"] = [it for it in items if it.get("kind") == "note" and it.get("text")]
+        sc["items"] = [it for it in items if it.get("kind") == "srclist"]  # every other helper is replaced by THE technique
+        if sc["_srclist"]:
+            continue
+        F = _sent_feats(sc, C)
+        cand_by[si] = (F, _score_sent(F, C))
+    order = [si for si, _ in ph if si in cand_by]
+    shortlist = []
+    for si in order:
+        F, cs = cand_by[si]
+        adj = []
+        for s_, k, f_ in cs:
+            s2 = s_ - 0.7 * used.get(k, 0) + rnd.uniform(0, 0.15)
+            adj.append((s2, k, f_))
+        adj.sort(key=lambda x: -x[0])
+        cand_by[si] = (F, adj)
+        keys = [k for _, k, _ in adj[:6]]
+        shortlist.append((si, " ".join(F["wds"]), keys))
+        if adj and adj[0][0] >= 1.0:
+            used[adj[0][1]] = used.get(adj[0][1], 0) + 1
+    picks = _gemini_pick([r for r in shortlist if len(r[2]) > 1], topic) if len(shortlist) else {}
+    prev_key, slot_i = None, 0
+    for n, (si, sc) in enumerate(ph):
+        if si not in cand_by:
+            continue
+        F, adj = cand_by[si]
+        dur = max(2.0, _scene_len(sc))
+        has_note = bool(sc["_notes"])
+        good = [(s_, k, f_) for s_, k, f_ in adj if s_ >= 1.0 and k != prev_key]
+        ch = None
+        if picks.get(si) in [k for _, k, _ in adj[:6]] and any(k == picks[si] for _, k, _ in good):
+            ch = next(x for x in good if x[1] == picks[si])
+        elif good:
+            top = good[0]
+            bgs = [x for x in good if KEYINFO[x[1]]["layer"] == "bg" and x[0] >= top[0] - 0.15]
+            ch = bgs[0] if bgs else top
+        if ch is None and not has_note:  # nothing fits and no real source line supports it: a calm background look
+            weak = [x for x in adj if x[1] in WEAK and x[1] != prev_key]
+            ch = weak[0] if weak else (adj[0] if adj else ("kenburns", "kenburns", 0))
+            ch = (ch[0], ch[1], ch[2])
+        wt = sc["wt"]
+        ev = None
+        if ch is not None:
+            s_, key, wi = ch
+            info = KEYINFO[key]
+            wi = min(max(0, wi), len(wt) - 1)
+            tw0 = max(0.1, wt[wi][0] - 0.12)
+            E = _num_params(sc, F["wds"], wt, tw0, C, dur)
+            E["n"] = 1 + (si % 9)
+            if info["layer"] == "bg":
+                d_ = min(max(1.8, dur - tw0 - 0.15), 4.6)
+                t0 = max(0.1, min(tw0, dur - d_ - 0.1))
+                ev = {"key": key, "layer": "bg", "k": n, "t0": t0, "d": d_, "t1": t0 + d_, "E": E}
+            elif info["group"] in ("camera", "vfx"):
+                d_ = min(max(1.4, dur - tw0 - 0.15), 3.4 if key in LONG_FX else 1.8)
+                t0 = max(0.1, min(tw0, dur - d_ - 0.1))
+                ev = {"key": key, "layer": "fx", "k": n, "t0": t0, "d": d_, "t1": t0 + d_, "E": E}
+            else:
+                d_ = min(max(2.2, dur - tw0 - 0.2), 4.6)
+                t0 = max(0.1, min(tw0, dur - d_ - 0.1))
+                slot = ("R", "L", "C")[slot_i % 3]
+                slot_i += 1
+                ev = {"key": key, "layer": "ov", "k": n, "t0": t0, "d": d_, "t1": t0 + d_, "E": E, "slot": slot}
+            sc["t151"].append(ev)
+            prev_key = key
+        # the source card: fallback when no technique, companion when the technique is an overlay; never together with a background technique
+        use_note = has_note and (ev is None or ev["layer"] in ("fx", "ov"))
+        if use_note:
+            it = sc["_notes"][0]
+            it["w"], it["center"], it["with_ov"] = 0, True, bool(ev and ev["layer"] == "ov")
+            it["span"] = min(max(3.4, dur - 0.5), 6.6)
+            if it.get("style") not in ("paper", "doc"):
+                it["style"] = ("paper", "doc")[n % 2]
+            sc["items"].append(it)
+        sc["_pick"] = {"key": ev["key"] if ev else None, "layer": ev["layer"] if ev else None, "note": use_note}
+    # transitions (kept from before): one per scene, rotating through all 15, bound to real shot cuts only
+    trs = TR_KEYS[:]
+    rnd.shuffle(trs)
+    placed = []
+    for n, (si, sc) in enumerate(ph):
+        if sc.get("_srclist") or n == 0:
+            continue
+        key = trs[len(placed) % len(trs)]
+        e = {"key": key, "layer": "tr", "k": n, "t0": max(0.5, _scene_len(sc) * 0.45), "d": 0.6, "nomicro": True, "E": {}}
+        e["t1"] = e["t0"] + e["d"]
+        sc["t151"].append(e)
+        placed.append(e)
+    for _, sc in ph:
+        sc["t151"].sort(key=lambda e: e["t0"])
+    n1 = sum(1 for _, sc in ph if sc.get("_pick", {}).get("key"))
+    nn = sum(1 for _, sc in ph if sc.get("_pick", {}).get("note"))
+    log(f"t151 one-per-sentence: {len(ph)} photo sentences -> {n1} techniques, {nn} source cards, {len(placed)} transitions")
+    C["P"], C["placed"] = sum(max(2.0, _scene_len(sc)) for _, sc in ph), n1 + nn
+    return {"one": True, "placed": placed, "ph": [i for i, _ in ph], "C": C}
+
+
+def report_one(scenes, plan, path):
+    lines = ["हर वाक्य के लिए चुनी गई एक technique:\n"]
+    nm = {t["key"]: t["name"] for t in T151}
+    for si in plan["ph"]:
+        sc = scenes[si]
+        p_ = sc.get("_pick") or {}
+        what = (nm.get(p_.get("key"), p_.get("key")) + f" [{ {'bg': 'background', 'fx': 'overlay-पूरी स्क्रीन', 'ov': 'overlay-नीचे'}.get(p_.get('layer'), '') }]") if p_.get("key") else "—"
+        lines.append(f"दृश्य {si + 1}: {what}" + ("  + source card" if p_.get("note") else "") + f"\n   \"{(sc.get('narration_hi') or '')[:70]}\"")
+    try:
+        Path(path).write_text("\n".join(lines), encoding="utf-8")
+    except Exception:  # noqa
+        pass
+    return sum(1 for si in plan["ph"] if (scenes[si].get("_pick") or {}).get("key"))
+
+
+_plan_t151_all = plan_t151
+
+
+def plan_t151(scenes, topic=""):  # noqa: F811
+    return _plan_t151_all(scenes, topic) if T151_ALL else plan_one(scenes, topic)
+
+
+_t151_report_all = t151_report
+
+
+def t151_report(scenes, plan, path):  # noqa: F811
+    return report_one(scenes, plan, path) if plan and plan.get("one") else _t151_report_all(scenes, plan, path)
+
+
+
 # ---- renderer hooks used by make_photo_draw
 def t151_setup(sc, shots):
     """Per scene: bind transition events to real shot boundaries; the rest become micro-cuts."""
@@ -9492,7 +9837,7 @@ def t151_setup(sc, shots):
             taken.add(best)
             shots[best]["trans"], shots[best]["tdur"] = e["key"], 0.65
             e["bound"] = True
-        else:
+        elif not e.get("nomicro"):
             micro.append(e)
     return micro
 
@@ -9503,7 +9848,10 @@ def t151_frame(fr, t, ctx_ev, sc, ctx):
         if e["t0"] <= t < e["t1"] and e["layer"] == "bg":
             u = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
             try:
+                pre_ = fr
                 fr = BGFX[e["key"]](fr, u, t, int(e["t0"] * 7), {**ctx, "phrase": e["E"].get("txt"), "E": e["E"]})
+                if fr is not pre_ and fr.size == (W, H):
+                    fr = _bg_real(pre_, fr.convert("RGB"), t)
             except Exception as ex:  # noqa
                 _t151_err(e["key"], ex)
     for e in ctx_ev:
@@ -12558,7 +12906,7 @@ def pipeline():
         if T151_ON and T151_PLAN[0]:
             try:
                 n151 = t151_report(scenes, T151_PLAN[0], outdir / "techniques_151.txt")
-                tg_send_file(outdir / "techniques_151.txt", "doc", f"151 techniques report: {n151}/151 is video me hain (scene number + time)")
+                tg_send_file(outdir / "techniques_151.txt", "doc", (f"हर वाक्य की technique: {n151} वाक्यों में technique" if T151_PLAN[0].get("one") else f"151 techniques report: {n151}/151 is video me hain (scene number + time)"))
             except Exception as e:  # noqa
                 log("technique report failed:", type(e).__name__, str(e)[:100])
         if not ok:
