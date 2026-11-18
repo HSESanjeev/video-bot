@@ -8916,7 +8916,7 @@ def bg_am(fr, u, t, s, ctx):
 def bg_place(fr, u, t, s, ctx, key="pin"):
     g = _geo(ctx)
     c = (g["lon"], g["lat"])
-    style = {"satellite": "satellite", "old_map": "old", "topo": "topo", "kingdom_exp": "old", "hist_border": "old"}.get(key, "terrain")
+    style = {"satellite": "terrain", "old_map": "old", "topo": "topo", "kingdom_exp": "old", "hist_border": "old"}.get(key, "terrain")
     if key == "geo_compare":
         a_, b_ = _geo(ctx, 0), _geo(ctx, 1)
         out = fr.copy()
@@ -8944,12 +8944,6 @@ def bg_place(fr, u, t, s, ctx, key="pin"):
             sm = [(x + (p[0] - x) * 0.6, y + (p[1] - y) * 0.6) for p in pts]
             dd.polygon(sm, outline=(60, 30, 10, 255))
         out.paste(lay, (0, 0), lay)
-    if key == "satellite":
-        d = ImageDraw.Draw(out, "RGBA")
-        for k in range(4):
-            d.line([(60, 60 + 22 * k * 0), (60, 60)], fill=(120, 255, 160, 200), width=4)
-        d.rectangle([40, 40, W - 40, H - 40], outline=(120, 255, 160, 170), width=3)
-        d.line([(0, int(H * ((t * 0.5) % 1))), (W, int(H * ((t * 0.5) % 1)))], fill=(120, 255, 160, 120), width=3)
     _pin(out, x, y, cl(u * 3), 0.9 + 0.1 * math.sin(t * 6))
     d = ImageDraw.Draw(out, "RGBA")
     for k in range(2):
@@ -9653,6 +9647,8 @@ def _score_sent(F, C):
         sc_ = (hits + base) * w_
         if key in WEAK:
             sc_ += 0.25
+        if KEYINFO[key]["layer"] == "ov":  # a visible overlay card is preferred over an invisible full-frame effect
+            sc_ += -0.2 if KEYINFO[key]["group"] in ("camera", "vfx") else 0.3
         if sc_ > 0:
             out.append((sc_, key, 0 if first is None else first))
     out.sort(key=lambda x: -x[0])
