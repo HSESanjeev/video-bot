@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Hindi nature & science explainer video bot (v2).
+Hindi historical documentary video bot (v3).
 
 Flow:  topic -> research -> script (with visual plan) -> Hindi voice -> images
        -> animated explainer scenes + photo scenes -> subtitles -> thumbnail -> Telegram / YouTube
@@ -58,17 +58,17 @@ GEMINI_TTS_MODELS = [m for m in os.environ.get(
     "GEMINI_TTS_MODELS", "gemini-3.1-flash-tts-preview,gemini-2.5-flash-preview-tts").split(",") if m.strip()]
 GEMINI_TTS_GAP = float(os.environ.get("GEMINI_TTS_GAP", "4"))
 WPM = float(os.environ.get("WPM_ESTIMATE", "130"))  # spoken Hindi words per minute (default estimate)
-MIN_SEC, MAX_SEC = 180, 300
+MIN_SEC, MAX_SEC = 300, 600
 def _test_sec():
     v = os.environ.get("TEST_SECONDS", "0").strip().lower()
-    return int(v) if v.isdigit() else 0  # 0 / off / no / full / empty = normal 3-5 minute video
+    return int(v) if v.isdigit() else 0  # 0 / off / no / full / empty = normal 5-10 minute video
 
 
 TEST_SEC = _test_sec()  # >0 = short test video of about this many seconds
 UPLOAD_MODE = os.environ.get("UPLOAD_MODE", "telegram").strip().lower()
 SCENE_GAP = 0.18
 HOOK_GAP = 0.70
-SFX_ON = os.environ.get("SFX", "0") == "1"  # sound effects are off by default
+SFX_ON = os.environ.get("SFX", "1") == "1"  # subtle documentary sound design enabled by default
 ALLOW_POLLI = os.environ.get("ALLOW_POLLINATIONS", "") == "1"  # watermarked + very slow, off by default
 
 GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
@@ -80,37 +80,40 @@ CF_TOKEN = os.environ.get("CF_API_TOKEN", "")
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-STYLE_PHOTO = ("cinematic film still, photorealistic, dramatic moody lighting, rich contrast, shallow depth of field, "
-               "35mm lens, highly detailed, high quality documentary look, one clear main subject, "
-               "no text, no letters, no watermark, no logo, no real person's face")
-STYLE_CARD = ("vibrant detailed digital illustration, one clear centered subject, clean simple soft-colored background, "
-              "bright saturated colors, soft studio lighting, polished game-art quality, "
-              "no text, no letters, no watermark, no logo")
-STYLE_THUMB = ("ultra dramatic hero shot, one single main subject large and centered (close-up), bright rim light, vivid saturated colors, "
-               "shallow depth of field, simple uncluttered background, high contrast, professional youtube thumbnail background, "
-               "no text, no letters, no watermark")
+STYLE_PHOTO = ("historical documentary cinematic film still, photorealistic period-accurate reconstruction, "
+               "warm aged sepia and earthy brown color grade, subtle teal shadows, dramatic natural practical lighting, "
+               "35mm anamorphic film look, subtle film grain, realistic historical clothing architecture tools and materials "
+               "appropriate to the exact era and region, emotionally grounded documentary composition, one clear main subject, "
+               "no modern objects, no text, no letters, no watermark, no logo, no identifiable real person's face")
+STYLE_CARD = ("restrained historical documentary graphic, archival parchment texture, muted sepia, aged paper, "
+              "charcoal ink and antique brass accents, elegant museum-exhibit visual language, clean readable composition, "
+              "period-appropriate artifacts and map details, no modern objects, no text, no letters, no watermark, no logo")
+STYLE_THUMB = ("ultra cinematic historical documentary hero shot, one single period-accurate subject large in frame, "
+               "dramatic firelight or natural window light, aged sepia and earthy brown palette with restrained teal shadows, "
+               "subtle film grain, deep contrast, shallow depth of field, authentic historical setting, "
+               "professional documentary thumbnail background, no modern objects, no text, no letters, no watermark")
 
 # bright themes (one is picked per video so the whole video looks consistent)
 PALETTES = [
-    {"name": "sky", "top": (110, 190, 255), "bottom": (236, 248, 255), "accent": (255, 160, 0), "ink": (14, 40, 96)},
-    {"name": "sunrise", "top": (255, 190, 120), "bottom": (255, 243, 220), "accent": (230, 70, 60), "ink": (70, 24, 48)},
-    {"name": "mint", "top": (120, 222, 186), "bottom": (234, 253, 244), "accent": (255, 110, 64), "ink": (8, 62, 74)},
-    {"name": "lavender", "top": (186, 166, 255), "bottom": (246, 240, 255), "accent": (255, 190, 10), "ink": (44, 22, 96)},
+    {"name": "parchment", "top": (82, 58, 42), "bottom": (196, 164, 118), "accent": (210, 164, 72), "ink": (35, 25, 20)},
+    {"name": "sepia", "top": (64, 48, 39), "bottom": (174, 137, 96), "accent": (190, 145, 70), "ink": (28, 22, 18)},
+    {"name": "archive", "top": (42, 55, 54), "bottom": (158, 133, 103), "accent": (197, 157, 91), "ink": (25, 25, 22)},
+    {"name": "earth", "top": (91, 58, 43), "bottom": (190, 151, 111), "accent": (184, 128, 64), "ink": (37, 24, 19)},
 ]
 
 CATEGORIES = [
-    ("earth_formation", "How the Earth, Moon, oceans and atmosphere formed"),
-    ("solar_system", "Sun, planets, moons, asteroids, comets and how they formed"),
-    ("stars_universe", "Stars, galaxies, black holes and the universe in simple terms"),
-    ("insects", "Ants, bees, termites, butterflies and other insects and how they live"),
-    ("wild_animals", "Behaviour and survival of wild animals (big cats, elephants, wolves, birds)"),
-    ("ocean_life", "Oceans, coral reefs, whales, sharks, deep-sea creatures"),
-    ("forests_plants", "Forests, trees, plants, fungi and how they survive and communicate"),
-    ("human_evolution", "How humans evolved, early humans, fire, tools, language, migration"),
-    ("natural_phenomena", "Volcanoes, earthquakes, aurora, lightning, monsoon, rainbows, tides"),
-    ("extinct_life", "Dinosaurs, mammoths, mass extinctions and ancient life"),
-    ("ecosystems", "Food chains, ecosystems, deserts, rivers, glaciers, seasons"),
-    ("animal_senses", "Amazing senses and abilities of animals (migration, echolocation, camouflage)"),
+    ("ancient_civilizations", "Ancient civilizations: Indus Valley, Egypt, Mesopotamia, Greece, Rome and their daily life"),
+    ("indian_history", "Indian history: ancient kingdoms, empires, dynasties, cities, rulers and society"),
+    ("world_history", "World history: major turning points, people, societies and historical change across continents"),
+    ("ancient_empires", "Rise and fall of ancient empires, administration, trade, culture and expansion"),
+    ("kings_queens", "Historically documented kings, queens, rulers, leaders and their decisions"),
+    ("battles_wars", "Historical battles, military campaigns, strategy, causes and consequences of wars"),
+    ("revolutions", "Revolutions, independence movements, political change and social movements"),
+    ("architecture_archaeology", "Ancient architecture, monuments, archaeological sites, excavations and discoveries"),
+    ("historical_mysteries", "Historical mysteries examined through evidence, inscriptions, archaeology and credible scholarship"),
+    ("ancient_technology", "Ancient engineering, inventions, ships, weapons, roads, water systems and technology"),
+    ("trade_culture", "Historical trade routes, food, clothing, education, beliefs, art and everyday life"),
+    ("modern_history", "Modern world history, documented events, political changes and major historical figures"),
 ]
 
 STYLES = [
@@ -313,7 +316,7 @@ ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.
 ITEM_SLOT = {"quote": "N", "bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P",
              "measure": "N", "qmark": "N", "lens": "N", "beforeafter": "N", "compare": "N", "mark": "N", "chart": "N", "tline": "N", "hl": "N"}
 
-DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
+DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi historical documentary in a premium cinematic archival-reconstruction style. The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
 
 === STEP 1: READ THE MOMENT (do this silently for every scene) ===
 - WHAT is said: a subject (animal / place / object / phenomenon), a part of a subject, a movement, a number, a date, a quote, a real source or evidence, a comparison, a process, a mystery, a reveal.
@@ -461,13 +464,13 @@ def story_context(topic, story, script):
 {(story or script or '')[:2500]}
 Does this story happen among PEOPLE of a specific country / culture (a family, a village, a case, a historical event)? Answer with JSON only:
 {{"people": true or false, "country": "India", "adjective": "Indian", "region": "e.g. rural Uttar Pradesh village", "era": "e.g. 1980s", "look": "10-18 English words describing how every picture must look: architecture, clothes, objects, light, e.g. 'rural Indian village, mud-brick houses, hand pump, charpai, women in sarees, warm cinematic light, 1980s'"}}
-people=false for pure science / nature / space / animal topics.""", 0.1)
+people=false only when the topic genuinely contains no human society, person, settlement or historical event.""", 0.1)
         if out.get("people") and str(out.get("adjective") or "").isascii() and out.get("adjective"):
             STORY_CTX.update({"on": True, "adj": str(out["adjective"])[:20], "look": str(out.get("look") or "")[:160],
                               "text": f"{out.get('country', '')} / {out.get('region', '')} / {out.get('era', '')}: {out.get('look', '')}"[:260]})
     except Exception as e:  # noqa
         log("story context failed:", str(e)[:100])
-    log("story context:", STORY_CTX["text"] or "none (science / nature topic)")
+    log("story context:", STORY_CTX["text"] or "none (no specific human setting detected)")
     return STORY_CTX
 
 
@@ -917,7 +920,7 @@ SCENES:
                         rows_.append(f'S{i}.{k}: {sh["text_hi"]}')
             if not rows_:
                 continue
-            prompt = f"""Hindi narration phrases of a nature documentary (topic: {topic}). For every phrase in which the narrator describes a visible ACTION or MOVEMENT (walking, running, hunting, eating, drinking, flying, swimming, roaring, resting, flowing water, fire, spinning...), give the English stock-footage search "subject + exact action" (1-4 words) that shows EXACTLY that action by that subject: chalna = "lion walking", daudna = "lion running", pani peena = "lion drinking water". Skip phrases that describe no visible action (facts, numbers, places, ideas).
+            prompt = f"""Hindi narration phrases of a historical documentary (topic: {topic}). For every phrase in which the narrator describes a visible ACTION or MOVEMENT (walking, running, hunting, eating, drinking, flying, swimming, roaring, resting, flowing water, fire, spinning...), give the English stock-footage search "subject + exact action" (1-4 words) that shows EXACTLY that action by that subject: chalna = "lion walking", daudna = "lion running", pani peena = "lion drinking water". Skip phrases that describe no visible action (facts, numbers, places, ideas).
 Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 """ + "\n".join(rows_)
             try:
@@ -1579,10 +1582,10 @@ def is_dup(topic_en, done):
 def pick_topic(done):
     cat_key, cat_desc = random.choice(CATEGORIES)
     covered = [v.get("topic_en", "") for v in done.get("videos", [])][-300:]
-    prompt = f"""You plan videos for a Hindi nature & science documentary YouTube channel for general viewers in India.
+    prompt = f"""You plan videos for a Hindi historical documentary YouTube channel for general viewers in India.
 Category: {cat_desc}
-Suggest 8 NEW, specific video topics in this category. Each must be answerable clearly in 3-5 minutes,
-be genuinely interesting, and rest on well-established science (no myths, no unproven claims).
+Suggest 8 NEW, specific historical video topics suitable for a carefully researched 5-10 minute documentary.
+Choose topics with credible historical sources and clear evidence; distinguish established facts, disputed interpretations and legends. Never present folklore as proven history.
 Do NOT repeat or rephrase any of these already-covered topics: {json.dumps(covered, ensure_ascii=False)}
 Return JSON: [{{"topic_en": "...", "topic_hi": "..."}}]"""
     try:
@@ -1683,7 +1686,7 @@ def collect_sources(max_src=14, topic="", story=""):
         if len(SRC_LIST) >= max_src:
             break
         try:
-            r = requests.get(g["uri"], headers={"User-Agent": "Mozilla/5.0 (compatible; nature-video-bot/1.0)"}, timeout=25, allow_redirects=True)
+            r = requests.get(g["uri"], headers={"User-Agent": "Mozilla/5.0 (compatible; history-video-bot/1.0)"}, timeout=25, allow_redirects=True)
             if not r.ok or "html" not in r.headers.get("content-type", "html"):
                 continue
             h = r.text[:1_500_000]
@@ -1799,8 +1802,9 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Around 55% of the video add a short re-hook line ("लेकिन असली राज़ अभी बाक़ी है...") that is true to what follows.
 - NO recap, NO summary, NO call to subscribe/like/comment. The story simply ends on its last strong fact or an open, thought-provoking line; the video then fades out.
 - The viewer must truly UNDERSTAND the topic by the end: define every new term when first used, use one simple everyday analogy, go in a logical order.
-- Facts: only well-established science, rounded widely-accepted numbers. If something is debated say "वैज्ञानिकों का मानना है". Never invent names, dates, statistics or quotes. If unsure, leave it out.
-- Neutral on religion and politics; never mention or mock any belief. Say "वैज्ञानिक मान्यता के अनुसार" for origin topics.
+- HISTORY FACTS: use only facts supported by the supplied research passages and credible historical sources. Never invent dates, names, quotations, battles, numbers, motives or dialogue. If historians disagree, clearly say "इतिहासकारों के बीच इस पर मतभेद है" and explain the competing interpretations briefly. Separate documented evidence, reasonable inference, legend and speculation.
+- For ancient dates, clearly distinguish BCE/ईसा पूर्व and CE/ईस्वी; do not convert calendars unless the source supports it. Do not state a precise date when only an approximate period is known.
+- Treat religion, culture and political history respectfully. Do not present religious tradition as archaeological proof, or dismiss it as factually false; label traditions as traditions when relevant.
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
@@ -1818,9 +1822,9 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 - "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook and key insights.
 STYLE TARGET = a real documentary: use type "photo" for at least 60% of ALL scenes and "sketch" for the explaining scenes, because every photo scene is edited word by word with real pictures, camera keyframes, maps, dates and source cards by the director. Cartoon-style explainer cards (merge, split, steps, compare, bars) look cheap: use "sketch" scenes instead whenever a point is a mechanism or process. STORYTELLING RULES (documentary craft, obey always): open IN THE MIDDLE OF A REAL MOMENT (a specific place, date and person or animal, one concrete image) before explaining anything; never start with "आज हम जानेंगे"/greetings/definitions. Build like a true-story film: a clear subject we care about -> what they wanted or faced -> rising tension with concrete facts -> one turning point (the surprising reveal, placed late) -> consequence -> a quiet, resonant last line (no recap, no moral lecture, no subscribe). Use concrete sensory details and numbers from the sources, short sentences (8-16 words), one idea per sentence, vary the rhythm (a very short sentence after a long one for impact). Calm, restrained, factual tone; no hype words (अद्भुत, ज़बरदस्त, शॉकिंग); never invent anything. PERMANENT TECHNIQUE RULES (never drop): the engine draws these on the spoken words, so WRITE narration that gives them something to show: (1) say real sizes / lengths / heights / depths / weights with a number and unit (measuring screen); (2) ask the viewer 2-4 real questions during the video ("आखिर ऐसा क्यों?") (question marks); (3) say a 'then vs now' or 'before vs after' of the same thing at least once; (4) compare two things with numbers at least once (comparison panel / chart); (5) tell 3-5 dated events in order at least once (timeline); (6) name two subjects together at least once (split screen, use one "multi" scene) and a journey or distance between two real places at least once (use one "map" scene); (7) say what is a myth and what is a fact at least once (cross / tick); (8) point at a tiny detail ('ध्यान से देखिए') at least once (magnifier); (9) end each scene on a short, clear sentence. Numbers must always be real, taken from the sources. Use "counter" only for one really striking number, "map" whenever places/routes are named (this is the preferred explainer), "kinetic" at most once (the re-hook). Photo scenes should have 22-40 words of narration (several different subjects/details per scene give the director more to show).
 Explainer, counter, bars and kinetic scenes need short narration (14-22 words). Explainer scenes also need "headline_hi" of 2-5 Hindi words shown on screen (e.g. "टक्कर से चाँद बना").
-Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in any picture, no real people.
-Every scene also has "grade" (colour grading that fits the scene: warm for fire/desert/sunrise/early Earth, cool for ocean/ice/night/space, cinematic for dramatic reveals, vivid for lively nature and animals, dark for danger and mystery, dread for creepy/scary/dangerous night scenes (cold teal), bwred for shock, fear, anger or a dramatic turning point (black and white with red glow), redwash for violence or emergency, natural for calm facts) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
-"mood" of the whole video's background music: one of mystery, epic, wonder, calm, tense, life, space.
+Each explainer item has "label_hi" (1-3 Hindi words under the picture) and "prompt_en": a concrete, simple description of ONE clear subject on a plain background (e.g. "a young glowing blue-green Earth", "a Mars-sized rocky planet", "the grey cratered Moon"). No text or letters in generated pictures. For historical people, use a clearly labelled AI re-creation with non-identifiable faces; use genuine licensed archival portraits only when the named public figure has a verified source image.
+Every scene also has "grade" (keep a coherent historical film look: warm for interiors, firelight, parchment and old cities; cinematic for dramatic reveals; dark or dread for danger and mystery; bwred only for a major turning point; natural for calm evidence and landscapes; use cool only for night, winter or deliberately cold scenes) and "transition" (how the scene begins: fade = time passes or calm change, zoom = go closer into a detail, whip = fast energetic jump, wipe = new chapter or place, flash = big reveal or impact, cut = continuous action).
+"mood" of the whole video's background music: one of mystery, epic, wonder, calm, tense, solemn, or tragic.
 """
 
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
@@ -1834,7 +1838,7 @@ def build_script_prompt(topic, cat, style, target_sec, facts, words):
     n_scenes = max(5 if TEST_SEC else 14, round(words / 21))
     test_note = ("\nTEST MODE: this is a very short test video. Use only about 5-6 scenes, a hook of 15-18 words, no long recap. "
                  "Ignore the minimum counts below. Almost all scenes must be type photo; exactly ONE sketch scene (scene 3 or 4) is wanted; map or counter allowed once if natural; no merge/split/steps/compare/bars.\n") if TEST_SEC else ""
-    return f"""You are a script writer and film editor for a Hindi nature & science explainer YouTube channel.
+    return f"""You are a script writer and film editor for a Hindi historical documentary YouTube channel.
 TOPIC: {topic}
 CATEGORY: {cat}
 STRUCTURE STYLE: {style[1]}
@@ -1986,7 +1990,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
         if typ in ("merge", "split", "steps", "compare", "kinetic") and os.environ.get("KEEP_EXPLAINERS") != "1":
             # cartoon explainer cards look cheap: every such scene becomes a real-photo scene (the director then edits it word by word)
             if typ == "kinetic":
-                raw_shots = [{"text_hi": "", "prompt_en": clean_short(sc.get("image_prompt_en"), 400) or "a dramatic cinematic nature scene", "query_en": ""}]
+                raw_shots = [{"text_hi": "", "prompt_en": clean_short(sc.get("image_prompt_en"), 400) or "a cinematic historical documentary scene", "query_en": ""}]
             else:
                 raw_shots = [{"text_hi": it["label_hi"] or "x", "prompt_en": it["prompt_en"], "query_en": it.get("query_en", "")} for it in sc["items"]]
             sc["shots"] = raw_shots or sc.get("shots")
@@ -2023,7 +2027,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
                                       if str(sh.get("note_hi") or "").strip() else None)), "fx": fr_(sh.get("focus_x")), "fy": fr_(sh.get("focus_y"))})
         if typ == "photo":
             if not shots:
-                shots = [{"text_hi": sc["narration_hi"], "prompt_en": base_prompt or "a dramatic wide nature landscape", "label_hi": ""}]
+                shots = [{"text_hi": sc["narration_hi"], "prompt_en": base_prompt or "a cinematic historical landscape", "label_hi": ""}]
             shots = shots[:8]
             nw = len(sc["narration_hi"].split())
             sw = sum(len(x["text_hi"].split()) for x in shots)
@@ -2038,7 +2042,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
         else:
             sc["shots"] = []
         if typ == "kinetic":
-            sc["image_prompt_en"] = base_prompt or "a dramatic cinematic nature scene"
+            sc["image_prompt_en"] = base_prompt or "a cinematic historical documentary scene"
         else:
             sc["image_prompt_en"] = base_prompt
     for k in ("title_hi", "thumb_text_hi", "description_hi"):
@@ -3116,7 +3120,7 @@ STYLE_OBJ = ("single isolated object, centered, whole object visible, plain pure
 
 # --------------------------------------------------------------------------- REAL photo of the exact named thing (Wikipedia / Wikimedia Commons)
 IMG_CREDITS = []
-WIKI_UA = {"User-Agent": "nature-video-bot/1.0 (educational video project; https://github.com)"}
+WIKI_UA = {"User-Agent": "history-video-bot/1.0 (educational video project; https://github.com)"}
 BAD_TITLE = ("map", "diagram", "logo", "flag", "stamp", "drawing", "svg", "icon", "chart", "graph", "coat of arms", "poster", "cover", "screenshot",
              "illustration", "painting", "skeleton", "locator", "location", "plan of", "scheme", "emblem", "signature", "portrait of",
              "engraving", "woodcut", "lithograph", "etching", "sketch", "print ", "illustrated", "cartoon", "clipart", "caricature", "drawn", "manuscript", "newspaper", "book ")
@@ -10572,7 +10576,7 @@ def real_terrain_ground(pts, regs, CW, CH, to_px, lon_lat_of):
     names = []
     try:  # borders
         cc = requests.get(f"https://nominatim.openstreetmap.org/reverse?format=json&zoom=3&lat={pts[0][0]}&lon={pts[0][1]}",
-                          headers={"User-Agent": "nature-video-bot/1.0"}, timeout=25).json().get("address", {}).get("country_code", "").upper()
+                          headers={"User-Agent": "history-video-bot/1.0"}, timeout=25).json().get("address", {}).get("country_code", "").upper()
         iso = ISO3.get(cc)
         feats = None
         for lvl in ("ADM2", "ADM1"):
@@ -12058,7 +12062,7 @@ T_YEL, T_RED, T_WHITE, T_BLK, T_GREEN = (255, 214, 0), (222, 24, 32), (255, 255,
 
 
 def thumb_plan_prompt(script, topic_en, avoid):
-    return f"""You design YouTube thumbnails for a Hindi science / nature documentary channel. Study the story and plan ONE thumbnail picture that makes people curious (curiosity gap, never a lie).
+    return f"""You design YouTube thumbnails for a Hindi historical documentary channel. Study the story and plan ONE thumbnail picture that makes people curious (curiosity gap, never a lie).
 STORY: {topic_en}
 HINDI TITLE: {script.get('title_hi')}
 STORY HOOK (Hindi): {script['scenes'][0]['narration_hi'][:300]}
@@ -12066,7 +12070,7 @@ The same picture will be used in the style that fits the story best. The four st
  hero_right  = huge subject on the LEFT, 2-3 big Hindi words stacked on the RIGHT (first line yellow, others white) and a small caption line under them (e.g. "66 MILLION YEARS AGO...") - for dramatic / danger / extinction / disaster stories.
  top_title   = one clean white title across the TOP, a spectacular subject below - for origin / space / planet / big-picture stories.
  banner_zoom = a full-width yellow banner on top with a 5-8 word curiosity sentence (key words red), and a round magnified inset of one creepy / surprising DETAIL joined by a line - for mystery / hidden / shocking-detail stories.
- doc_tag     = small white tag + two huge words (yellow + white) at the right and a green corner banner - for calm nature / wildlife / documentary stories.
+ doc_tag     = small archival tag + two large yellow/white words and a muted corner banner - for evidence-led historical stories.
 Return ONLY JSON:
 {{"subject_en": "the single real subject the story is about (e.g. Tyrannosaurus rex, Earth, Amazon anaconda)",
  "photo_prompt_en": "ONE clear ultra-detailed photorealistic image of that subject: a single large sharp subject, dramatic cinematic lighting, a vivid colour scene around it; subject large on the left-centre of the frame with calmer darker space on the right and a little space above; no text, no letters, no watermark, no logo, no person's face",
@@ -12671,7 +12675,7 @@ def make_visuals(scenes, imgdir):
                     sh["image"] = prev_img  # same picture, camera moves to the part being spoken about
                     continue
                 if not sh["prompt_en"].strip():
-                    sh["prompt_en"] = "a dramatic wide nature landscape"
+                    sh["prompt_en"] = "a cinematic historical landscape"
                 if prev_img and CF_STATE["used"] >= MAX_IMAGES and not PIXABAY_KEY:
                     sh["image"] = prev_img  # free-quota saver: reuse the previous picture with a new camera move
                     continue
