@@ -9554,6 +9554,7 @@ def t151_report(scenes, plan, path):
 
 
 # ---- NINTH ROUND: ONE technique per sentence (best fit), source card as fallback / companion, realistic look
+BOT_VERSION = "round-10 one-technique-per-sentence"
 T151_ALL = os.environ.get("T151_ALL", "0") == "1"  # 1 = old behaviour: all 151 packed into every video
 KEYINFO = {t["key"]: t for t in T151 if t["layer"] in ("bg", "ov")}
 RULES = {}
@@ -9696,7 +9697,9 @@ def _gemini_pick(rows, topic):
 
 
 def plan_one(scenes, topic=""):
-    """ONE technique per sentence: background (44) first, else overlay (92) in a bottom slot, else a real source card. A source card may sit together with an overlay (big card in the centre, overlay below); never with a background technique."""
+    """Scene breakdown first: every SENTENCE of every photo scene is its own unit (its own picture, its own time slot). Each unit gets exactly ONE technique:
+    a background technique (44) that replaces the picture, else one overlay (92) in a bottom slot, else a real source card. A source card may sit together with an overlay
+    (big card in the centre, overlay below); never with a background technique."""
     ph = [(i, sc) for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt") and len(sc["wt"]) == len((sc.get("narration_hi") or "").split())]
     if not ph:
         log("t151: no photo scene with word timings")
@@ -9704,85 +9707,87 @@ def plan_one(scenes, topic=""):
     C = build_t151_content(scenes, topic)
     C["geo"] = geo_for_story(scenes, topic) or None
     rnd = random.Random(sum(map(ord, topic or "x")))
-    plan_rows, used = [], {}
-    cand_by = {}
-    for n, (si, sc) in enumerate(ph):
-        sc["t151"], sc["kw"], sc["vox"] = [], None, None
+    units = []  # one per sentence
+    for si, sc in ph:
+        sc["t151"], sc["kw"], sc["vox"], sc["_units"] = [], None, None, []
         sc["t151_ctx"] = {"geo": C["geo"], "C": {"words": C["words"], "series": C["series"]}}
         items = [it for it in (sc.get("items") or []) if isinstance(it, dict)]
-        sc["_srclist"] = any(it.get("kind") == "srclist" for it in items)
-        sc["_notes"] = [it for it in items if it.get("kind") == "note" and it.get("text")]
-        sc["_labels"] = [it for it in items if it.get("kind") in ("place", "name", "person")]  # place / name text stays
-        sc["_old"] = [it for it in items if it.get("kind") in OLD_TECH]  # split / compare / measure / lens / before-after / question mark / tick stay as techniques
-        sc["items"] = [it for it in items if it.get("kind") == "srclist"]
+        keep = [it for it in items if it.get("kind") == "srclist"]
+        sc["_srclist"] = bool(keep)
+        sc["items"] = keep
         if sc["_srclist"]:
             continue
-        F = _sent_feats(sc, C)
-        cand_by[si] = (F, _score_sent(F, C))
-    order = [si for si, _ in ph if si in cand_by]
+        wds = sc["narration_hi"].split()
+        dur_s = max(2.0, _scene_len(sc))
+        sent = [x for x in (sc.get("sent") or []) if x[3] - x[2] > 0.3] or [(0, len(wds), 0.0, dur_s)]
+        for j, (a_, b_, ts, te) in enumerate(sent):
+            its = [it for it in items if it.get("kind") != "srclist" and (a_ <= int(it.get("w", 0)) < b_ or (j == 0 and int(it.get("w", 0)) < a_) or (j == len(sent) - 1 and int(it.get("w", 0)) >= b_))]
+            u = {"si": si, "sc": sc, "j": j, "a": a_, "b": b_, "ts": ts, "te": min(te, dur_s), "F": None,
+                 "notes": [it for it in its if it.get("kind") == "note" and it.get("text")],
+                 "labels": [it for it in its if it.get("kind") in ("place", "name", "person")],
+                 "old": [it for it in its if it.get("kind") in OLD_TECH]}
+            sc2 = dict(narration_hi=" ".join(wds[a_:b_]))
+            u["F"] = _sent_feats(sc2, C)
+            u["cands"] = _score_sent(u["F"], C)
+            units.append(u)
+    used = {}
     shortlist = []
-    for si in order:
-        F, cs = cand_by[si]
+    for n, u in enumerate(units):
         adj = []
-        for s_, k, f_ in cs:
-            s2 = s_ - 0.7 * used.get(k, 0) + rnd.uniform(0, 0.15)
-            adj.append((s2, k, f_))
+        for s_, k, f_ in u["cands"]:
+            adj.append((s_ - 0.7 * used.get(k, 0) + rnd.uniform(0, 0.15), k, f_))
         adj.sort(key=lambda x: -x[0])
-        cand_by[si] = (F, adj)
-        keys = [k for _, k, _ in adj[:6]]
-        shortlist.append((si, " ".join(F["wds"]), keys))
+        u["adj"] = adj
+        shortlist.append((n, " ".join(u["F"]["wds"]), [k for _, k, _ in adj[:6]]))
         if adj and adj[0][0] >= 1.0:
             used[adj[0][1]] = used.get(adj[0][1], 0) + 1
-    picks = _gemini_pick([r for r in shortlist if len(r[2]) > 1], topic) if len(shortlist) else {}
-    prev_key, slot_i = None, 0
-    for n, (si, sc) in enumerate(ph):
-        if si not in cand_by:
-            continue
-        F, adj = cand_by[si]
-        dur = max(2.0, _scene_len(sc))
-        has_note = bool(sc["_notes"])
+    picks = _gemini_pick([r for r in shortlist if len(r[2]) > 1], topic) if shortlist else {}
+    prev_key, slot_i, n1, nn = None, 0, 0, 0
+    for n, u in enumerate(units):
+        sc, a_, b_, ts, te, F, adj = u["sc"], u["a"], u["b"], u["ts"], u["te"], u["F"], u["adj"]
+        wt = sc["wt"]
+        L = max(1.2, te - ts)
+        has_note = bool(u["notes"])
         good = [(s_, k, f_) for s_, k, f_ in adj if s_ >= 0.8 and k not in WEAK and k != prev_key]
         ch = None
-        if picks.get(si) in [k for _, k, _ in adj[:6]] and any(k == picks[si] for _, k, _ in good):
-            ch = next(x for x in good if x[1] == picks[si])
+        if picks.get(n) in [k for _, k, _ in adj[:6]] and any(k == picks[n] for _, k, _ in good):
+            ch = next(x for x in good if x[1] == picks[n])
         elif good:
             top = good[0]
             bgs = [x for x in good if KEYINFO[x[1]]["layer"] == "bg" and x[0] >= top[0] - 0.15]
             ch = bgs[0] if bgs else top
-        if ch is None and not has_note:  # nothing fits and no real source line supports it: still a VISIBLE technique that shows the sentence's own key words
+        if ch is None and not has_note and not u["old"]:
             vis = sorted([k for k in VISIBLE_DEFAULT if k != prev_key], key=lambda k: (used.get(k, 0), rnd.random()))
-            k0 = vis[0]
-            used[k0] = used.get(k0, 0) + 1
-            ch = (1.0, k0, max(0, min(len(sc["wt"]) - 1, len(sc["wt"]) // 3)))
-        wt = sc["wt"]
-        ev = None
-        old_it = sc["_old"][0] if sc["_old"] else None
-        if old_it is not None and not (ch is not None and KEYINFO[ch[1]]["layer"] == "bg"):
-            ch = None  # the earlier technique the director picked for this sentence IS its technique
-            sc["items"].append(old_it)
-            sc["_pick"] = {"key": "old:" + old_it["kind"], "layer": "old", "note": False}
+            used[vis[0]] = used.get(vis[0], 0) + 1
+            ch = (1.0, vis[0], max(0, (b_ - a_) // 3))
+        rec = {"j": u["j"], "text": " ".join(F["wds"]), "key": None, "layer": None, "note": False}
+        sc["_units"].append(rec)
+        if u["old"] and not (ch is not None and KEYINFO[ch[1]]["layer"] == "bg"):
+            it = u["old"][0]
+            sc["items"].append(it)
+            rec.update(key="old:" + it["kind"], layer="old")
             prev_key = "old"
+            n1 += 1
             continue
+        ev = None
         if ch is not None:
             s_, key, wi = ch
             info = KEYINFO[key]
-            wi = min(max(0, wi), len(wt) - 1)
-            tw0 = max(0.1, wt[wi][0] - 0.12)
-            E = _num_params(sc, F["wds"], wt, tw0, C, dur)
-            E["n"] = 1 + (si % 9)
+            wi = min(a_ + max(0, wi), b_ - 1)
+            tw0 = max(ts + 0.05, wt[wi][0] - 0.12)
+            E = _num_params(sc, sc["narration_hi"].split(), wt, tw0, C, te)
+            E["n"] = 1 + (n % 9)
             if info["layer"] == "bg":
-                d_ = min(max(1.8, dur - tw0 - 0.15), 4.6)
-                t0 = max(0.1, min(tw0, dur - d_ - 0.1))
-                ev = {"key": key, "layer": "bg", "k": n, "t0": t0, "d": d_, "t1": t0 + d_, "E": E}
+                d_ = max(1.0, te - ts - 0.2)
+                t0 = ts + 0.05
+                ev = {"key": key, "layer": "bg", "k": n, "t0": t0, "d": d_, "t1": min(te - 0.05, t0 + d_), "E": E}
             elif info["group"] in ("camera", "vfx"):
-                d_ = min(max(1.4, dur - tw0 - 0.15), 3.4 if key in LONG_FX else 1.8)
-                t0 = max(0.1, min(tw0, dur - d_ - 0.1))
-                ev = {"key": key, "layer": "fx", "k": n, "t0": t0, "d": d_, "t1": t0 + d_, "E": E}
+                d_ = max(1.0, min(te - tw0 - 0.1, 3.4 if key in LONG_FX else 1.8))
+                t0 = max(ts + 0.05, min(tw0, te - d_ - 0.05))
+                ev = {"key": key, "layer": "fx", "k": n, "t0": t0, "d": d_, "t1": min(te - 0.05, t0 + d_), "E": E}
             else:
-                d_ = min(max(2.2, dur - tw0 - 0.2), 4.6)
-                t0 = max(0.1, min(tw0, dur - d_ - 0.1))
                 blk = set()
-                for it_ in sc["_labels"]:
+                for it_ in u["labels"]:
                     z_ = item_zones(it_)
                     if "BL" in z_:
                         blk.add("L")
@@ -9791,38 +9796,38 @@ def plan_one(scenes, topic=""):
                 free = [x for x in ("R", "L", "C") if x not in blk] or ["C"]
                 slot = free[slot_i % len(free)]
                 slot_i += 1
-                ev = {"key": key, "layer": "ov", "k": n, "t0": t0, "d": d_, "t1": t0 + d_, "E": E, "slot": slot}
+                d_ = max(1.0, min(te - tw0 - 0.1, 4.6))
+                t0 = max(ts + 0.05, min(tw0, te - d_ - 0.05))
+                ev = {"key": key, "layer": "ov", "k": n, "t0": t0, "d": d_, "t1": min(te - 0.05, t0 + d_), "E": E, "slot": slot}
             sc["t151"].append(ev)
             prev_key = key
-        # the source card: fallback when no technique, companion when the technique is an overlay; never together with a background technique
+            n1 += 1
         use_note = has_note and (ev is None or ev["layer"] in ("fx", "ov"))
         if use_note:
-            it = sc["_notes"][0]
-            it["w"], it["center"], it["with_ov"] = 0, True, bool(ev and ev["layer"] == "ov")
-            it["span"] = min(max(3.4, dur - 0.5), 6.6)
+            it = u["notes"][0]
+            it["w"], it["center"], it["with_ov"] = a_, True, bool(ev and ev["layer"] == "ov")
+            it["span"] = min(max(2.6, L - 0.3), 6.6)
             if it.get("style") not in ("paper", "doc"):
                 it["style"] = ("paper", "doc")[n % 2]
             sc["items"].append(it)
+            nn += 1
         if not (ev and ev["layer"] == "bg"):
-            sc["items"].extend(sc["_labels"][:2])
-        sc["_pick"] = {"key": ev["key"] if ev else None, "layer": ev["layer"] if ev else None, "note": use_note}
-    # transitions (kept from before): one per scene, rotating through all 15, bound to real shot cuts only
+            sc["items"].extend(u["labels"][:1])
+        rec.update(key=ev["key"] if ev else None, layer=ev["layer"] if ev else None, note=use_note)
+    # transitions (kept from before): one at every sentence cut, rotating through all 15, bound to the real picture cuts
     trs = TR_KEYS[:]
     rnd.shuffle(trs)
     placed = []
-    for n, (si, sc) in enumerate(ph):
-        if sc.get("_srclist") or n == 0:
+    for u in units:
+        if u["j"] == 0:
             continue
-        key = trs[len(placed) % len(trs)]
-        e = {"key": key, "layer": "tr", "k": n, "t0": max(0.5, _scene_len(sc) * 0.45), "d": 0.6, "nomicro": True, "E": {}}
+        e = {"key": trs[len(placed) % len(trs)], "layer": "tr", "k": u["si"], "t0": u["ts"], "d": 0.6, "nomicro": True, "E": {}}
         e["t1"] = e["t0"] + e["d"]
-        sc["t151"].append(e)
+        u["sc"]["t151"].append(e)
         placed.append(e)
     for _, sc in ph:
         sc["t151"].sort(key=lambda e: e["t0"])
-    n1 = sum(1 for _, sc in ph if sc.get("_pick", {}).get("key"))
-    nn = sum(1 for _, sc in ph if sc.get("_pick", {}).get("note"))
-    log(f"t151 one-per-sentence: {len(ph)} photo sentences -> {n1} techniques, {nn} source cards, {len(placed)} transitions")
+    log(f"t151 scene breakdown: {len(ph)} scenes -> {len(units)} sentences -> {n1} techniques, {nn} source cards, {len(placed)} transitions")
     C["P"], C["placed"] = sum(max(2.0, _scene_len(sc)) for _, sc in ph), n1 + nn
     return {"one": True, "trs": placed, "n": n1 + nn, "ph": [i for i, _ in ph], "C": C}
 
@@ -9830,16 +9835,18 @@ def plan_one(scenes, topic=""):
 def report_one(scenes, plan, path):
     lines = ["हर वाक्य के लिए चुनी गई एक technique:\n"]
     nm = {t["key"]: t["name"] for t in T151}
+    lay = {"bg": "background", "fx": "overlay-पूरी स्क्रीन", "ov": "overlay-नीचे", "old": "पहले वाली technique"}
+    cnt = 0
     for si in plan["ph"]:
-        sc = scenes[si]
-        p_ = sc.get("_pick") or {}
-        what = (nm.get(p_.get("key"), p_.get("key")) + f" [{ {'bg': 'background', 'fx': 'overlay-पूरी स्क्रीन', 'ov': 'overlay-नीचे'}.get(p_.get('layer'), '') }]") if p_.get("key") else "—"
-        lines.append(f"दृश्य {si + 1}: {what}" + ("  + source card" if p_.get("note") else "") + f"\n   \"{(sc.get('narration_hi') or '')[:70]}\"")
+        for r in scenes[si].get("_units") or []:
+            what = (nm.get(r["key"], r["key"]) + f" [{lay.get(r['layer'], '')}]") if r["key"] else "—"
+            cnt += 1 if r["key"] else 0
+            lines.append(f"दृश्य {si + 1} वाक्य {r['j'] + 1}: {what}" + ("  + source card" if r["note"] else "") + f"\n   \"{r['text'][:70]}\"")
     try:
         Path(path).write_text("\n".join(lines), encoding="utf-8")
     except Exception:  # noqa
         pass
-    return sum(1 for si in plan["ph"] if (scenes[si].get("_pick") or {}).get("key"))
+    return cnt
 
 
 _plan_t151_all = plan_t151
@@ -12954,7 +12961,7 @@ def pipeline():
         if T151_ON and T151_PLAN[0]:
             try:
                 n151 = t151_report(scenes, T151_PLAN[0], outdir / "techniques_151.txt")
-                tg_send_file(outdir / "techniques_151.txt", "doc", (f"हर वाक्य की technique: {n151} वाक्यों में technique" if T151_PLAN[0].get("one") else f"151 techniques report: {n151}/151 is video me hain (scene number + time)"))
+                tg_send_file(outdir / "techniques_151.txt", "doc", (f"BOT संस्करण: round-10 (हर वाक्य में एक technique). {n151} वाक्यों में technique" if T151_PLAN[0].get("one") else f"151 techniques report: {n151}/151 is video me hain (scene number + time)"))
             except Exception as e:  # noqa
                 log("technique report failed:", type(e).__name__, str(e)[:100])
         if not ok:
@@ -13288,6 +13295,7 @@ if __name__ == "__main__":
             WORK.mkdir(parents=True, exist_ok=True)
             voice_samples()
         else:
+            log("BOT VERSION:", BOT_VERSION)
             pipeline()
     except Exception as exc:
         traceback.print_exc()
