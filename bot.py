@@ -621,8 +621,9 @@ DIRECTOR_REPORT = [""]
 DIR_CAMS = {"suspense": ["push", "push_br", "tilt_down", "push_tl"], "wonder": ["pull", "tilt_up", "pan_lr", "orbit"],
              "serious": ["push", "pan_rl", "push_tl", "pull"], "excited": ["handheld", "push_br", "pan_lr", "push"],
              "calm": ["pan_lr", "pull", "pan_rl", "tilt_up"]}
-DIR_TRANS = {"suspense": ["fade", "zoom", "fade", "flash"], "wonder": ["fade", "circle", "zoom", "fade"],
-              "serious": ["fade", "wipe", "fade", "cut"], "excited": ["whip", "zoom", "flash", "whip"], "calm": ["fade", "wipe", "fade", "circle"]}
+SLIDE_MIX = ["slide_l", "slide_r", "slide_l", "slide_u", "slide_d", "pandark"]  # reference look: the next picture slides in from any side, one continuous move
+DIR_TRANS = {"suspense": ["slide_l", "pandark", "slide_r", "flash"], "wonder": ["slide_l", "slide_u", "slide_r", "pandark"],
+              "serious": ["slide_l", "pandark", "slide_d", "cut"], "excited": ["slide_l", "slide_r", "slide_u", "slide_d"], "calm": ["slide_r", "pandark", "slide_l", "slide_u"]}
 
 
 def ensure_techniques(sc, k0=0):
@@ -1479,13 +1480,6 @@ def finalize_overlays(scenes, topic=""):
         assign_note_styles(scenes)
     except Exception as e:  # noqa
         log("assign_note_styles failed:", type(e).__name__, str(e)[:100])
-    if T151_ON:
-        try:
-            plan_ = plan_t151(scenes, topic)
-            T151_PLAN[0] = plan_
-            st["t151"] = plan_["C"]["placed"] if plan_ else 0
-        except Exception as e:  # noqa
-            log("t151 planner failed:", type(e).__name__, str(e)[:120])
     log("overlay finalize:", st, "| optional Gemini calls:", GOV["opt"], "skipped:", GOV["skipped"], "| minutes used:", round(elapsed_min()))
     return st
 
@@ -1824,7 +1818,7 @@ Every scene also has "grade" (colour grading that fits the scene: warm for fire/
 """
 
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
-TRANS_NAMES = ["pandark", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
+TRANS_NAMES = ["pandark", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
 TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
 MOOD_NAMES = ["mystery", "epic", "wonder", "calm", "tense", "life", "space"]
 TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
@@ -3220,7 +3214,9 @@ def english_search(txt):
     return en
 
 
-def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity="", bg=""):
+def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity="", bg="", ai_only=False, refs=()):
+    if ai_only:  # true-story cast pictures: AI only, built from the story bible (see CAST)
+        return gen_image_cast(prompt, out, refs)
     query, entity, fallback_query = english_search(query), english_search(entity), english_search(fallback_query)
     suffix = {"photo": STYLE_PHOTO, "card": STYLE_CARD, "thumb": STYLE_THUMB, "obj": STYLE_OBJ}[kind]
     if kind == "obj" and bg == "green":
@@ -4114,7 +4110,7 @@ def make_explainer(sc, dur, pal, events):
 # --------------------------------------------------------------------------- compositor: camera, effects, transitions, subtitles
 _C = {}
 TONE_TRANS = ["fade", "zoom", "whip", "wipe", "circle"]
-TRANS_SFX = {"whip": ("whoosh", 0.6), "wipe": ("whoosh_soft", 0.8), "circle": ("whoosh_soft", 0.8), "zoom": ("whoosh_down", 0.5),
+TRANS_SFX = {"slide_l": ("whoosh", 0.6), "slide_r": ("whoosh", 0.6), "slide_u": ("whoosh", 0.6), "slide_d": ("whoosh", 0.6), "whip": ("whoosh", 0.6), "wipe": ("whoosh_soft", 0.8), "circle": ("whoosh_soft", 0.8), "zoom": ("whoosh_down", 0.5),
              "flash": ("impact", 0.55), "glitch": ("glitch", 0.9), "fade": (None, 0)}
 CAMS = ["push", "pull", "pan_lr", "pan_rl", "tilt_up", "tilt_down", "orbit", "handheld", "push_tl", "push_br"]
 SW, SH = 1920, 1080
@@ -4318,9 +4314,41 @@ def pan_dark(prev, cur, p):
     return fr
 
 
+def slide_push(prev, cur, p, d):
+    """Reference 0:32-0:40: picture A and picture B move together as ONE continuous slide (no fade, no darkness). B arrives a little enlarged and settles
+    while the slide decelerates; only a light motion blur at the fastest moment. d = l / r / u / d = the direction A leaves."""
+    p = cl(p)
+    e = p * p * p * (p * (6 * p - 15) + 10)
+    z = lerp(1.14, 1.0, e_out(p))
+    cur2 = cur.resize((W, H), Image.BILINEAR, box=(W / 2 - W / 2 / z, H / 2 - H / 2 / z, W / 2 + W / 2 / z, H / 2 + H / 2 / z)) if z > 1.002 else cur
+    if d in ("l", "r"):
+        canvas = Image.new("RGB", (2 * W, H))
+        a_, b_ = (prev, cur2) if d == "l" else (cur2, prev)
+        canvas.paste(a_, (0, 0))
+        canvas.paste(b_, (W, 0))
+        off = int(round(e * W)) if d == "l" else int(round((1 - e) * W))
+        fr = canvas.crop((off, 0, off + W, H))
+        k = 1 + int(4 * math.sin(math.pi * p))
+        if k > 1:
+            fr = fr.resize((max(8, W // k), H), Image.BILINEAR).resize((W, H), Image.BILINEAR)
+    else:
+        canvas = Image.new("RGB", (W, 2 * H))
+        a_, b_ = (prev, cur2) if d == "u" else (cur2, prev)
+        canvas.paste(a_, (0, 0))
+        canvas.paste(b_, (0, H))
+        off = int(round(e * H)) if d == "u" else int(round((1 - e) * H))
+        fr = canvas.crop((0, off, W, off + H))
+        k = 1 + int(4 * math.sin(math.pi * p))
+        if k > 1:
+            fr = fr.resize((W, max(8, H // k)), Image.BILINEAR).resize((W, H), Image.BILINEAR)
+    return fr
+
+
 def blend_trans(prev, cur, p, kind):
     np = _np()
     p = cl(p)
+    if kind in ("slide_l", "slide_r", "slide_u", "slide_d"):
+        return slide_push(prev, cur, p, kind[-1])
     if kind == "pandark":
         return pan_dark(prev, cur, p)
     if kind in TR_NEW:
@@ -4579,7 +4607,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
             elif j > 0 or not new_img:
                 trans = "zoom" if rnd.random() < 0.5 else "fade"
             else:
-                trans = rnd.choice(["fade", "zoom", "wipe", "whip", "flash"] if tone in ("excited", "suspense") else ["fade", "fade", "zoom", "wipe"])
+                trans = rnd.choice(SLIDE_MIX)
             kfs = None
             if s_.get("kf") and not s_.get("clip") and wt and j == 0:
                 prev_st = shot_state(shots[-1], shots[-1]["dur"]) if (shots and not new_img and not shots[-1].get("clip")) else None
@@ -4607,7 +4635,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                           "pulse": ((rnd.choice([(200, 20, 30), (20, 120, 140), (255, 255, 255)]) if (new_img and shots and rnd.random() < (0.4 if tone in ("suspense", "serious", "excited") else 0.12)) else None)),
                           "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
                           "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
-                          "focus": (not shots), "trans": trans, "tdur": (min(0.9, 0.4 * sd) if trans == "pandark" else 0.3 if trans in ("fade", "zoom") else 0.4), "zcap": zoom_cap(s_["image"]),
+                          "focus": (not shots), "trans": trans, "tdur": (min(0.9, 0.4 * sd) if trans == "pandark" else min(0.6, 0.4 * sd) if str(trans).startswith("slide_") else 0.3 if trans in ("fade", "zoom") else 0.4), "zcap": zoom_cap(s_["image"]),
                           "ov": (s_.get("ov") if j == 0 else None), "popup": (s_.get("popup_img") if j == 0 else None),
                           "clip": s_.get("clip"), "reader": None, "grade": s_.get("grade") if s_.get("grade") in GRADES else sc.get("grade", "natural"),
                           "pop_side": rnd.choice([-1, 1]),
@@ -9300,701 +9328,9 @@ def _bg_missing():
 
 
 # ---- planner: decides WHEN each of the 151 techniques appears (every video, any length) and keeps the three bottom slots free of collisions
-T151_PLAN = [None]
-PLAIN_MODE = os.environ.get("PLAIN", "1") != "0"  # clean slate: no editing techniques at all; PLAIN=0 brings the old technique code back (all of it is still in the file)
-T151_ON = os.environ.get("T151", "1") != "0" and not PLAIN_MODE
-FX_FRAME_KEYS = [t["key"] for t in T151 if t["layer"] == "ov" and t["group"] in ("camera", "vfx")]
-CARD_KEYS = [t["key"] for t in T151 if t["layer"] == "ov" and t["group"] in ("data", "text", "diagram")]
-BG_KEYS = [t["key"] for t in T151 if t["layer"] == "bg"]
-TR_KEYS = list(TR15)
-TRIG = {  # preferred trigger word type for a technique (None = just spread over the video)
-    "num_counter": "num", "dist_card": "num", "pop_counter": "num", "pct_counter": "num", "fin_counter": "num", "odometer": "num", "num_roll": "num", "year_counter": "year", "countdown": "year",
-    "dist_counter": "place", "route": "place", "pin": "place", "map_zoom": "place", "map_anim": "place", "travel_path": "place", "gps": "place", "date_loc": "place", "lower_third": "place",
-    "typewriter": "q", "lens": "q", "h_timeline": "year", "dynasty": "year", "event_seq": "year", "handwriting": "year", "ba_hist": "before", "newspaper": "year",
-}
-BG_MINMAX = (0.9, 1.7)
-FX_MINMAX = (0.6, 1.1)
-CARD_MINMAX = (1.1, 2.4)
-
-
-def _scene_len(sc):
-    try:
-        return float(sc.get("dur") or (sc["wt"][-1][1] + 0.5))
-    except Exception:  # noqa
-        return 6.0
-
-
-def build_t151_content(scenes, topic):
-    words, nums, years, cnt = [], [], [], {}
-    total_words = 0
-    for sc in scenes:
-        wds = (sc.get("narration_hi") or "").split()
-        total_words += len(wds)
-        for i, w_ in enumerate(wds):
-            t_ = _tw(w_)
-            nv = _num_val(t_)
-            if nv is not None and nv > 0:
-                if 1000 <= nv <= 2100 and float(nv).is_integer():
-                    years.append(int(nv))
-                else:
-                    nums.append((nv, _tw(wds[i + 1]) if i + 1 < len(wds) else "", t_))
-            if len(t_) >= 3 and t_ not in STOP_HI and t_ not in Q_ALL and not any(t_.endswith(v) for v in VERB_END):
-                cnt[t_] = cnt.get(t_, 0) + 1
-                if t_ not in words:
-                    words.append(t_)
-    for sc in scenes:
-        for it in sc.get("items", []) if isinstance(sc.get("items"), list) else []:
-            if isinstance(it, dict) and it.get("kind") == "year" and it.get("year_num"):
-                try:
-                    years.append(int(it["year_num"]))
-                except Exception:  # noqa
-                    pass
-    top = sorted(cnt.items(), key=lambda kv: -kv[1])[:6]
-    if len(nums) >= 3:
-        series = [(clean_short(n[1], 10) or n[2], n[0]) for n in nums[:6]]
-        series_note = "आँकड़े"
-    else:
-        series = [(w, c) for w, c in top[:5]] or [("क", 3), ("ख", 5)]
-        series_note = "कितनी बार बोला"
-    return {"words": words[:12] or ["शुरुआत", "कारण", "असर", "नतीजा", "आगे"], "series": series, "series_note": series_note, "nums": nums, "years": years, "total_words": total_words}
-
-
-def geo_for_story(scenes, topic):
-    """Real coordinates of the places in the story (Gemini), default map position if unavailable."""
-    try:
-        txt = " ".join(sc.get("narration_hi", "") for sc in scenes)[:2500]
-        out = gemini_json(f"""Topic: {topic}. From this Hindi narration list the 2-3 REAL places that matter most (cities, regions, forests, countries). Return ONLY JSON {{"places":[{{"name_hi":"Hindi name","lat":number,"lon":number}}]}}. Only places that are really named or clearly meant; accurate decimal coordinates.
-{txt}""", 0.1)
-        pl = [{"name": clean_short(p.get("name_hi"), 14), "lat": float(p["lat"]), "lon": float(p["lon"])} for p in out.get("places", []) if isinstance(p, dict) and abs(float(p.get("lat", 99))) <= 90 and abs(float(p.get("lon", 999))) <= 180]
-        if pl:
-            return pl[:3]
-    except Exception as e:  # noqa
-        log("geo lookup skipped:", str(e)[:80])
-    return None
-
-
-def _num_params(sc, wds, wt, tloc, C, T):
-    """Real values for the card at local time tloc: the nearest number / year / place / phrase the narrator says."""
-    E = {}
-    if not wds or len(wt) != len(wds):
-        return E
-    wi = min(range(len(wt)), key=lambda i: abs(wt[i][0] - tloc))
-    E["txt"] = " ".join(_tw(x) for x in wds[wi:wi + 5])
-    E["word"] = _tw(wds[wi]) if len(_tw(wds[wi])) >= 3 else (C["words"][0] if C["words"] else "")
-    near = None
-    for i, w_ in enumerate(wds):
-        nv = _num_val(_tw(w_))
-        if nv is not None and nv > 0 and not (1000 <= nv <= 2100):
-            if near is None or abs(wt[i][0] - tloc) < abs(wt[near][0] - tloc):
-                near = i
-    if near is not None:
-        E["num"] = _num_val(_tw(wds[near]))
-        E["label"] = _tw(wds[near + 1]) if near + 1 < len(wds) else ""
-    elif C["nums"]:
-        E["num"], E["label"] = C["nums"][0][0], C["nums"][0][1]
-    else:
-        E["num"], E["label"] = C["total_words"], "कुल शब्द"
-    yr = [int(_num_val(_tw(w_))) for w_ in wds if _num_val(_tw(w_)) and 1000 <= _num_val(_tw(w_)) <= 2100]
-    E["year"] = yr[0] if yr else (C["years"][0] if C["years"] else time.localtime().tm_year)
-    E["label"] = E.get("label") or ""
-    if E["num"] <= 100:
-        E["pct"] = E["num"]
-    else:
-        E["pct"] = min(99, int(100 * tloc / max(1.0, T)))
-    E["series"] = C["series"]
-    E["place"] = _geo_name(C, 0)
-    E["sub"] = C.get("series_note", "")
-    E["minutes"] = 600 + int(E["num"]) % 600
-    return E
-
-
-def _geo_name(C, i):
-    g = C.get("geo") or []
-    return g[min(i, len(g) - 1)]["name"] if g else ""
-
-
-def _trig_times(wds, wt, kind):
-    out = []
-    for i, w_ in enumerate(wds):
-        t_ = _tw(w_)
-        nv = _num_val(t_)
-        if kind == "num" and nv and not (1000 <= nv <= 2100):
-            out.append(wt[i][0])
-        elif kind == "year" and nv and 1000 <= nv <= 2100:
-            out.append(wt[i][0])
-        elif kind == "q" and (t_ in Q_ALL or "?" in w_ or t_ in LENS_ALL):
-            out.append(wt[i][0])
-        elif kind == "before" and t_ in BA_PRE:
-            out.append(wt[i][0])
-    return out
-
-
-def plan_t151(scenes, topic=""):
-    """One schedule per video that contains ALL 151 techniques (stored in scene['t151'], local scene seconds)."""
-    ph = [(i, sc) for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt") and len(sc["wt"]) == len((sc.get("narration_hi") or "").split())]
-    if not ph:
-        log("t151: no photo scene with word timings; cannot place techniques")
-        return None
-    C = build_t151_content(scenes, topic)
-    C["geo"] = geo_for_story(scenes, topic) or None
-    lens = [max(2.0, _scene_len(sc)) for _, sc in ph]
-    P = sum(lens)
-    starts = [sum(lens[:k]) for k in range(len(lens))]
-
-    def locate(g):  # global photo-time -> (index in ph, local t)
-        g = min(max(g, 0.0), P - 0.01)
-        for k in range(len(ph) - 1, -1, -1):
-            if g >= starts[k]:
-                return k, g - starts[k]
-        return 0, g
-
-    for _, sc in ph:
-        sc["t151"] = []
-        sc["t151_ctx"] = {"geo": C["geo"], "C": {"words": C["words"], "series": C["series"]}}
-    # blocked slot time from the director's own bottom overlays (place / year / name / source cards ...)
-    blocked = {"L": [], "C": [], "R": []}
-    for k, (_, sc) in enumerate(ph):
-        for it in sc.get("items", []) if isinstance(sc.get("items"), list) else []:
-            if not isinstance(it, dict) or it.get("kind") not in ITEM_KINDS or it.get("kind") in NEW_KINDS:
-                continue
-            try:
-                z = item_zones(it)
-                t0_ = starts[k] + sc["wt"][min(int(it.get("w", 0)), len(sc["wt"]) - 1)][0]
-                t1_ = t0_ + float(it.get("span") or ITEM_KINDS.get(it["kind"], 4.0))
-            except Exception:  # noqa
-                continue
-            for slot in ("L", "C", "R"):
-                if "FULL" in z or (slot == "L" and "BL" in z) or (slot == "R" and "BR" in z) or (slot == "C" and ("BL" in z and "BR" in z)):
-                    blocked[slot].append((t0_, t1_))
-
-    def free_slot(slot, a, b, lanes):
-        return all(b <= x0 or a >= x1 for x0, x1 in blocked[slot] + lanes[slot])
-
-    def spread(n, off):
-        return [P * (0.03 + 0.92 * ((k + off) / max(1, n))) for k in range(n)]
-
-    cap_bg = max(1, math.ceil(len(BG_KEYS) * BG_MINMAX[0] / P))
-    cap_fx = max(2, math.ceil(len(FX_FRAME_KEYS) * FX_MINMAX[0] / P) + 1)
-    lanes_bg, lanes_fx = [[] for _ in range(cap_bg)], [[] for _ in range(cap_fx)]
-    lanes_slot = {"L": [], "C": [], "R": []}
-    placed = []
-
-    def trig_target(key, g):
-        kind = TRIG.get(key)
-        if not kind:
-            return g
-        best = None
-        for k, (_, sc) in enumerate(ph):
-            wds = sc["narration_hi"].split()
-            for tt in _trig_times(wds, sc["wt"], kind):
-                gg = starts[k] + tt
-                if abs(gg - g) < P * 0.3 and (best is None or abs(gg - g) < abs(best - g)):
-                    best = gg
-        return best if best is not None else g
-
-    def pack(keys, layer, lanes, mm, off):
-        tgt = spread(len(keys), off)
-        for key, g in zip(keys, tgt):
-            g = trig_target(key, g)
-            d = mm[1] if P > 60 * 1.0 else max(mm[0], min(mm[1], P / len(keys) * (3 if lanes is None else len(lanes)) * 0.9))
-            ok = False
-            for dd in (d, (d + mm[0]) / 2, mm[0]):
-                s_ = max(0.2, g - dd * 0.3)
-                for _ in range(int(P / 0.25) + 1):
-                    if s_ + dd > P - 0.05:
-                        s_ = max(0.1, P - dd - 0.05)
-                    k_, tl_ = locate(s_)
-                    if tl_ + dd > lens[k_] - 0.1:  # keep a technique inside its scene
-                        s_ = starts[k_] + lens[k_] if k_ + 1 < len(ph) else s_ + 0.25
-                        if k_ + 1 >= len(ph):
-                            break
-                        continue
-                    lane = None if layer == "card" else next((ln for ln in lanes if all(s_ + dd <= x0 or s_ >= x1 for x0, x1 in ln)), None)
-                    if layer == "card":
-                        sl_ = next((sl for sl in lanes_order(g, ph, starts) if free_slot(sl, s_, s_ + dd, lanes_slot)), None)
-                        if sl_ is None:
-                            s_ += 0.25
-                            continue
-                        lanes_slot[sl_].append((s_, s_ + dd))
-                        placed.append({"key": key, "layer": "ov", "k": k_, "t0": tl_, "d": dd, "slot": sl_})
-                        ok = True
-                        break
-                    if lane is not None:
-                        lane.append((s_, s_ + dd))
-                        placed.append({"key": key, "layer": layer, "k": k_, "t0": tl_, "d": dd})
-                        ok = True
-                        break
-                    s_ += 0.25
-                if ok:
-                    break
-            if not ok:  # last resort: stack it on the first lane inside the best scene (never drop a technique)
-                k_, tl_ = locate(g)
-                dd = mm[0]
-                tl_ = min(tl_, max(0.1, lens[k_] - dd - 0.1))
-                placed.append({"key": key, "layer": layer if layer != "card" else "ov", "k": k_, "t0": tl_, "d": dd, **({"slot": "C"} if layer == "card" else {})})
-
-    def lanes_order(g, ph_, st_):  # slot choice: the side opposite the subject is tried first
-        k_, _ = locate(g)
-        return ("R", "C", "L") if (k_ + int(g)) % 2 == 0 else ("L", "C", "R")
-
-    pack(CARD_KEYS, "card", None, CARD_MINMAX, 0.0)
-    pack(BG_KEYS, "bg", lanes_bg, BG_MINMAX, 0.35)
-    pack([k for k in FX_FRAME_KEYS], "fx", lanes_fx, FX_MINMAX, 0.15)
-    tr_tgt = spread(len(TR_KEYS), 0.5)
-    for key, g in zip(TR_KEYS, tr_tgt):
-        k_, tl_ = locate(g)
-        placed.append({"key": key, "layer": "tr", "k": k_, "t0": max(0.5, tl_), "d": 0.6})
-    # distribute into scenes with real parameters
-    for ev in placed:
-        _, sc = ph[ev["k"]]
-        wds = sc["narration_hi"].split()
-        E = _num_params(sc, wds, sc["wt"], ev["t0"], C, lens[ev["k"]])
-        E["n"] = 1 + (ev["k"] % 9)
-        ev["E"] = E
-        ev["t1"] = ev["t0"] + ev["d"]
-        sc["t151"].append(ev)
-    for _, sc in ph:
-        sc["t151"].sort(key=lambda e: e["t0"])
-    ids = {t["key"] + "|" + t["layer"] for t in T151}
-    got = {(e["key"] + "|" + ("ov" if e["layer"] in ("fx", "card", "ov") else e["layer"])) for _, sc in ph for e in sc["t151"]}
-    log(f"t151: {len(placed)} events placed over {len(ph)} photo scenes ({P:.0f}s); every technique present: {all(any(x.startswith(t['key']) and t['layer'] in x for x in got) or True for t in T151)}")
-    C["P"], C["placed"] = P, len(placed)
-    return {"placed": placed, "ph": [i for i, _ in ph], "starts": starts, "lens": lens, "C": C}
-
-
-def t151_report(scenes, plan, path):
-    """Plain-text proof that all 151 techniques are in this video (scene number + time)."""
-    rows = {}
-    for si in plan["ph"] if plan else []:
-        for e in scenes[si].get("t151", []):
-            rows.setdefault((e["layer"] if e["layer"] != "fx" and e["layer"] != "card" else "ov", e["key"]), []).append(f"दृश्य {si + 1} @ {e['t0']:.1f}s")
-    lines, miss = [], 0
-    for t in T151:
-        k = (t["layer"], t["key"])
-        hit = rows.get(k) or (rows.get(("ov", t["key"])) if t["layer"] == "ov" else None)
-        miss += 0 if hit else 1
-        lines.append(f"{t['id']:3d}. [{t['layer']}] {t['name']}: " + (", ".join(hit[:2]) if hit else "—  MISSING"))
-    lines.insert(0, f"151 में से {151 - miss} techniques इस video में हैं\n")
-    try:
-        Path(path).write_text("\n".join(lines), encoding="utf-8")
-    except Exception:  # noqa
-        pass
-    return 151 - miss
-
-
-# ---- NINTH ROUND: ONE technique per sentence (best fit), source card as fallback / companion, realistic look
-BOT_VERSION = "round-10 one-technique-per-sentence"
-T151_ALL = os.environ.get("T151_ALL", "0") == "1"  # 1 = old behaviour: all 151 packed into every video
-KEYINFO = {t["key"]: t for t in T151 if t["layer"] in ("bg", "ov")}
-RULES = {}
-
-
-def _R(key, toks, need=None, w=1.0):
-    RULES[key] = (tuple(toks.split()), need, w)
-
-
-# --- background (44): need "geo" = real places known for the story, "num"/"year"/"nums2" = real numbers said in the sentence
-_R("map_anim", "देश इलाके क्षेत्र राज्य महाद्वीप नक्शा", "geo"); _R("route", "रास्ता सफर सफ़र यात्रा पहुंच पहुँच रवाना से_लेकर", "geo2"); _R("travel_path", "चलते निकल पैदल सफर चल_पड़ा", "geo")
-_R("dist_counter", "किमी किलोमीटर दूर दूरी मील", "geo2"); _R("pin", "गांव गाँव शहर जगह रहता रहती पैदा जन्म कस्बे", "geo"); _R("map_zoom", "जिला जिले इलाका आसपास पास मोहल्ले", "geo")
-_R("globe_rot", "दुनिया पृथ्वी धरती विश्व ग्रह अंतरराष्ट्रीय"); _R("globe_map", "दुनिया_भर देशों महाद्वीपों", "geo"); _R("satellite", "सैटेलाइट उपग्रह अंतरिक्ष ऊपर_से जंगल", "geo")
-_R("border_hl", "सीमा बॉर्डर सरहद", "geo"); _R("territory", "कब्ज़ा कब्जा इलाकों राज शासन", "geo"); _R("hist_border", "बंटवारा विभाजन सीमाएं बदल", "geo")
-_R("army_move", "सेना फौज हमला चढ़ाई कूच", "geo"); _R("gps", "निर्देशांक ढूंढ खोज लोकेशन स्थान", "geo"); _R("latlon", "अक्षांश देशांतर", "geo")
-_R("topo", "पहाड़ पर्वत घाटी पठार ढलान", "geo"); _R("elev", "ऊंचा ऊँचा मीटर चोटी चढ़", "geo"); _R("compass", "उत्तर दक्षिण पूरब पश्चिम दिशा", "geo")
-_R("scalebar", "वर्ग फैला विशाल चौड़ा क्षेत्रफल", "geo"); _R("geo_compare", "जबकि के_मुकाबले दोनों एक_तरफ", "geo2"); _R("kingdom_exp", "साम्राज्य विस्तार फैलाया जीत", "geo")
-_R("old_map", "प्राचीन पुराने_नक्शे सदियों", "geo")
-_R("h_timeline", "सदी युग काल इतिहास साल_पहले सालों"); _R("old_photo", "पुरानी तस्वीर फोटो तब उस_समय बचपन यादें"); _R("parallax25", "गहराई आगे पीछे भीतर अंदर")
-_R("kenburns", "याद शांत धीरे चुपचाप", None, 0.5); _R("doc_reveal", "दस्तावेज रिकॉर्ड रिपोर्ट कागज फाइल प्रमाण"); _R("handwriting", "लिखा लिखी चिट्ठी पत्र डायरी नोट")
-_R("newspaper", "अखबार अख़बार खबर छपी समाचार पत्रकार"); _R("manuscript", "ग्रंथ पांडुलिपि शास्त्र पुराण वेद किताब लिखित"); _R("family_tree", "परिवार माता पिता बेटा बेटी भाई बहन वंशज रिश्ते माँ मां")
-_R("dynasty", "वंश राजवंश पीढ़ी पीढ़ियों"); _R("ruler_intro", "राजा रानी सम्राट शासक बादशाह नवाब"); _R("portrait_reveal", "व्यक्ति महिला लड़की लड़का बच्ची बच्चा आदमी नाम")
-_R("archival", "वीडियो फुटेज रिकॉर्डिंग"); _R("ba_hist", "पहले अब बदल आज पहले_जैसा"); _R("event_seq", "फिर उसके_बाद इसके_बाद और_फिर"); _R("battle_form", "युद्ध लड़ाई जंग मोर्चा सैनिक")
-_R("army_strength", "सैनिकों सैनिक फौज", "num"); _R("evidence_hl", "सबूत गवाह मिला पाया निशान जांच प्रमाण")
-_R("push_in", "डर रहस्य अचानक करीब गौर ध्यान", None, 0.8); _R("pull_out", "पूरी सबकुछ चारों आख़िर अंत दूर", None, 0.8); _R("dolly_zoom", "चौंका हैरान अजीब सन्न"); _R("pan", "फैला चारों_तरफ पूरे हर_तरफ", None, 0.8)
-# --- overlay (92)
-_R("num_counter", "", "num", 1.4); _R("dist_card", "किमी किलोमीटर दूर मील", "num", 1.8); _R("pop_counter", "लोग आबादी जनसंख्या बच्चे", "num", 1.6); _R("pct_counter", "प्रतिशत % फीसदी", "num", 1.8)
-_R("year_counter", "", "year", 1.5); _R("countdown", "बाद साल_बाद इंतज़ार", "year"); _R("time_counter", "घंटे मिनट दिन महीने हफ्ते साल उम्र", "num", 1.4)
-_R("bar_chart", "ज्यादा कम सबसे", "nums2", 1.6); _R("pie_chart", "हिस्सा प्रतिशत", "nums2", 1.5); _R("line_graph", "बढ़ घट बढ़ा घटा", "nums2", 1.5); _R("area_chart", "कुल बढ़ती", "nums2")
-_R("data_compare", "ज्यादा कम बराबर मुकाबले", "nums2", 1.6); _R("ranking", "पहला दूसरा तीसरा सबसे", "nums2"); _R("fin_counter", "रुपये रुपए डॉलर करोड़ लाख", "num", 1.9)
-_R("stat_info", "", "num", 1.0); _R("progress", "प्रतिशत पूरा हिस्सा", "num"); _R("digital_clock", "घंटे रात बजे समय", "num", 1.2); _R("odometer", "", "num", 1.0); _R("dashboard", "आंकड़े", "nums2"); _R("num_roll", "", "num", 1.0)
-_R("tilt", "ऊंचा ऊँचा ऊपर नीचे गिरा", None, 0.8); _R("fly", "उड़ उड़ान पार", None, 0.9); _R("orbit", "चारों घूम गोल चक्कर", None, 0.9); _R("parallax_cam", "परत आगे पीछे", None, 0.7)
-_R("aerial", "ऊपर आसमान हवा आकाश"); _R("drone", "गांव शहर जंगल इलाके"); _R("rack", "फोकस पीछे धुंधला"); _R("shake", "धमाका कांप भूकंप हिल झटका"); _R("handheld", "मैंने हमने सच असली गवाही")
-_R("whip_pan", "झट तुरंत फौरन"); _R("match_move", "साथ साथ_में उसके"); _R("persp_zoom", "सामने नज़दीक"); _R("inf_zoom", "अनंत गहरे हमेशा अंतहीन"); _R("tracking", "पीछा चल दौड़ पीछे_पीछे")
-_R("cine_reveal", "सामने_आया खुलासा राज़ सच"); _R("focus_pull", "ध्यान से देखा नज़र")
-_R("kinetic", "सबसे बड़ा बहुत सबसे_ज्यादा", None, 0.8); _R("text3d", "नंबर एक पहला", None, 0.7); _R("typewriter", "सवाल क्यों कैसे क्या", None, 1.2); _R("text_reveal", "छुपा राज़ असली")
-_R("text_mask", "आग पानी रेगिस्तान"); _R("word_hl", "खास अहम जरूरी"); _R("letter", "नाम शब्द"); _R("glitch_text", "डिजिटल टेक्नोलॉजी मशीन कंप्यूटर"); _R("tracking_text", "धीरे हल्के")
-_R("text_path", "रास्ता राह पथ"); _R("subtitles", "", None, 0.0); _R("lower_third", "नाम कहलाते जाने"); _R("chapter", "पहला भाग अध्याय शुरुआत आखिर आख़िरी")
-_R("date_loc", "", "yearplace", 1.6); _R("callout", "यहीं यही यहां"); _R("text_persp", "सामने आगे"); _R("text_rot", "घूम पलट"); _R("text_blur", "धुंधली भूल")
-_R("labels", "हिस्सा अंग"); _R("text_trans", "बदल रूप")
-_R("flowchart", "अगर तो या फैसला"); _R("process", "प्रक्रिया तरीका कैसे"); _R("steps", "पहले फिर चरण कदम"); _R("mindmap", "विचार कई अलग अलग_पहलू")
-_R("orgchart", "सरकार विभाग अधिकारी संस्था"); _R("network", "नेटवर्क इंटरनेट लोगों_से जुड़े"); _R("conn_line", "संबंध जोड़ मेल कड़ी जुड़"); _R("arrow_dir", "ओर तरफ दिशा")
-_R("callout_ptr", "यह इसे यहां"); _R("blueprint", "बनाया निर्माण डिज़ाइन बनावट"); _R("exploded", "पुर्जे हिस्सों"); _R("assembly", "जोड़कर बनता तैयार"); _R("cross_section", "परत भीतर ज़मीन_के_नीचे दिमाग")
-_R("layer_sep", "परतें स्तर"); _R("tech_label", "अंग नाम")
-_R("grain", "पुराना बीता याद", None, 0.6); _R("dust", "खंडहर धूल प्राचीन सूखा"); _R("smoke", "धुआं धुआँ आग जल"); _R("fog", "कोहरा धुंध रात रहस्य सन्नाटा"); _R("fire", "आग जला जलते चिता लपटें")
-_R("rain", "बारिश बरसात पानी तूफान"); _R("snow", "बर्फ ठंड सर्द"); _R("lightning", "बिजली गरज तूफान"); _R("light_leak", "रोशनी उम्मीद सुबह सूरज"); _R("lens_flare", "चमक सूरज तारा चमकता")
-_R("vignette", "अकेला अकेली उदास खामोश", None, 0.8); _R("chroma", "अजीब भ्रम"); _R("glitch", "गड़बड़ टूट"); _R("film_burn", "खत्म अंत जल_गया"); _R("vhs", "वीडियो टेप"); _R("old_film", "जमाने ज़माने बीते")
-_R("motion_blur", "तेज भागा दौड़ा रफ्तार"); _R("speed_ramp", "तेज़ी देखते_ही"); _R("freeze", "रुक ठहर थम रुका"); _R("split", "दोनों एक_तरफ दूसरी_तरफ जबकि"); _R("vox", "मतलब यानी दरअसल समझ", None, 0.9)
-UNIT_KEYS = {"fin_counter", "dist_card", "pop_counter", "pct_counter", "time_counter", "digital_clock", "progress", "countdown", "army_strength", "dist_counter"}
-OLD_TECH = ("compare", "measure", "qmark", "lens", "beforeafter", "mark")  # earlier techniques he wants to keep
-WEAK = ("kenburns", "push_in", "pan", "grain", "vignette", "tilt", "parallax_cam", "orbit")  # calm defaults when nothing in the sentence calls for more
-LONG_FX = {"grain", "dust", "smoke", "fog", "fire", "rain", "snow", "vignette", "light_leak", "old_film", "vhs", "tilt", "orbit", "parallax_cam", "aerial", "drone", "fly", "tracking", "handheld", "motion_blur"}
-for _k in list(RULES):
-    assert _k in KEYINFO, _k
-
-
-def _nrm(x):
-    return (x or "").replace("\u093c", "").replace("\u0901", "\u0902")
-
-
-VISIBLE_DEFAULT = ("kinetic", "typewriter", "text_reveal", "word_hl", "callout", "labels", "text_blur", "mindmap", "steps", "lower_third", "conn_line", "chapter")
-
-
-def _sent_feats(sc, C):
-    wds = (sc.get("narration_hi") or "").split()
-    tw = [_nrm(_tw(w_)) for w_ in wds]
-    text = " ".join(tw)
-    nums, years = [], []
-    for i, t_ in enumerate(tw):
-        nv = _num_val(t_)
-        if nv is not None and nv > 0:
-            (years if 1000 <= nv <= 2100 and float(nv).is_integer() else nums).append(i)
-    geo = C.get("geo") or []
-    gn = [g_["name"] for g_ in geo if g_.get("name")]
-    geo_here = [i for i, t_ in enumerate(tw) if any(n_ and (n_ in t_ or (len(t_) > 2 and t_ in n_)) for n_ in gn)]
-    return {"wds": wds, "tw": tw, "text": text, "nums": nums, "years": years, "geo_here": geo_here, "geo_n": len(geo)}
-
-
-def _score_sent(F, C):
-    """Every technique that really fits this sentence, with a score and the first word that triggers it."""
-    out = []
-    for key, (toks, need, w_) in RULES.items():
-        if w_ <= 0:
-            continue
-        ok = {None: True, "num": bool(F["nums"]), "year": bool(F["years"]), "nums2": len(F["nums"]) >= 2, "geo": F["geo_n"] > 0, "geo2": F["geo_n"] > 1, "yearplace": bool(F["years"]) and bool(F["geo_here"])}[need]
-        if not ok:
-            continue
-        hits, first = 0, None
-        for tk in toks:
-            tk = _nrm(tk.replace("_", " "))
-            if tk and ((tk in F["tw"]) if len(tk) <= 3 and " " not in tk else (tk in F["text"])):
-                hits += 1
-                i = next((j for j, t_ in enumerate(F["tw"]) if tk.split()[0] in t_), None)
-                if i is not None and (first is None or i < first):
-                    first = i
-        base = 0.0
-        if need in ("num", "nums2") and not toks[0:1] == ():
-            base = 0.0
-        if need == "num" and F["nums"]:
-            base, first = 1.0, F["nums"][0] if first is None else first
-        elif need == "year" and F["years"]:
-            base, first = 1.0, F["years"][0] if first is None else first
-        elif need == "yearplace":
-            base, first = 1.0, F["years"][0]
-        elif need == "nums2":
-            base, first = 0.6, F["nums"][0] if first is None else first
-        elif need in ("geo", "geo2") and F["geo_here"]:
-            base = 0.5
-            first = F["geo_here"][0] if first is None else first
-        if key in UNIT_KEYS and hits == 0:
-            continue  # "11 साल" must never become a rupee / percent / distance card: the unit has to be said
-        if toks and need in ("num", "year", "nums2", "yearplace") and hits == 0:
-            base *= 0.45
-        sc_ = (hits + base) * w_
-        if key in WEAK:
-            sc_ += 0.25
-        if KEYINFO[key]["layer"] == "ov":  # a visible overlay card is preferred over an invisible full-frame effect
-            sc_ += -0.2 if KEYINFO[key]["group"] in ("camera", "vfx") else 0.3
-        if sc_ > 0:
-            out.append((sc_, key, 0 if first is None else first))
-    out.sort(key=lambda x: -x[0])
-    return out
-
-
-def _gemini_pick(rows, topic):
-    """One Gemini call (budget-governed): from the shortlist of each sentence pick the single technique that explains it best."""
-    pick = {}
-    try:
-        lst = []
-        for i, sent, cands in rows:
-            lst.append({"i": i, "sentence": sent[:160], "options": [{"key": k, "name": KEYINFO[k]["name"]} for k in cands]})
-        out = gemini_json_opt(f"""Hindi documentary on: {topic}. For EACH sentence choose the ONE visual technique from its options that explains what the narrator says best (data -> counter/chart, place -> map, old events -> documents/history, mood -> film effect). Use each technique at most once across the video where possible. Return ONLY JSON {{"picks":[{{"i":number,"key":"one of that sentence's option keys"}}]}}.
-{json.dumps(lst, ensure_ascii=False)}""", 0.2)
-        for p_ in out.get("picks", []):
-            if isinstance(p_, dict) and str(p_.get("i", "")).lstrip("-").isdigit():
-                pick[int(p_["i"])] = p_.get("key")
-    except Exception as e:  # noqa
-        log("t151 pick by Gemini skipped:", str(e)[:80])
-    return pick
-
-
-def plan_one(scenes, topic=""):
-    """Scene breakdown first: every SENTENCE of every photo scene is its own unit (its own picture, its own time slot). Each unit gets exactly ONE technique:
-    a background technique (44) that replaces the picture, else one overlay (92) in a bottom slot, else a real source card. A source card may sit together with an overlay
-    (big card in the centre, overlay below); never with a background technique."""
-    ph = [(i, sc) for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt") and len(sc["wt"]) == len((sc.get("narration_hi") or "").split())]
-    if not ph:
-        log("t151: no photo scene with word timings")
-        return None
-    C = build_t151_content(scenes, topic)
-    C["geo"] = geo_for_story(scenes, topic) or None
-    rnd = random.Random(sum(map(ord, topic or "x")))
-    units = []  # one per sentence
-    for si, sc in ph:
-        sc["t151"], sc["kw"], sc["vox"], sc["_units"] = [], None, None, []
-        sc["t151_ctx"] = {"geo": C["geo"], "C": {"words": C["words"], "series": C["series"]}}
-        items = [it for it in (sc.get("items") or []) if isinstance(it, dict)]
-        keep = [it for it in items if it.get("kind") == "srclist"]
-        sc["_srclist"] = bool(keep)
-        sc["items"] = keep
-        if sc["_srclist"]:
-            continue
-        wds = sc["narration_hi"].split()
-        dur_s = max(2.0, _scene_len(sc))
-        sent = [x for x in (sc.get("sent") or []) if x[3] - x[2] > 0.3] or [(0, len(wds), 0.0, dur_s)]
-        for j, (a_, b_, ts, te) in enumerate(sent):
-            its = [it for it in items if it.get("kind") != "srclist" and (a_ <= int(it.get("w", 0)) < b_ or (j == 0 and int(it.get("w", 0)) < a_) or (j == len(sent) - 1 and int(it.get("w", 0)) >= b_))]
-            u = {"si": si, "sc": sc, "j": j, "a": a_, "b": b_, "ts": ts, "te": min(te, dur_s), "F": None,
-                 "notes": [it for it in its if it.get("kind") == "note" and it.get("text")],
-                 "labels": [it for it in its if it.get("kind") in ("place", "name", "person")],
-                 "old": [it for it in its if it.get("kind") in OLD_TECH]}
-            sc2 = dict(narration_hi=" ".join(wds[a_:b_]))
-            u["F"] = _sent_feats(sc2, C)
-            u["cands"] = _score_sent(u["F"], C)
-            units.append(u)
-    used = {}
-    shortlist = []
-    for n, u in enumerate(units):
-        adj = []
-        for s_, k, f_ in u["cands"]:
-            adj.append((s_ - 0.7 * used.get(k, 0) + rnd.uniform(0, 0.15), k, f_))
-        adj.sort(key=lambda x: -x[0])
-        u["adj"] = adj
-        shortlist.append((n, " ".join(u["F"]["wds"]), [k for _, k, _ in adj[:6]]))
-        if adj and adj[0][0] >= 1.0:
-            used[adj[0][1]] = used.get(adj[0][1], 0) + 1
-    picks = _gemini_pick([r for r in shortlist if len(r[2]) > 1], topic) if shortlist else {}
-    prev_key, slot_i, n1, nn = None, 0, 0, 0
-    for n, u in enumerate(units):
-        sc, a_, b_, ts, te, F, adj = u["sc"], u["a"], u["b"], u["ts"], u["te"], u["F"], u["adj"]
-        wt = sc["wt"]
-        L = max(1.2, te - ts)
-        has_note = bool(u["notes"])
-        good = [(s_, k, f_) for s_, k, f_ in adj if s_ >= 0.8 and k not in WEAK and k != prev_key]
-        ch = None
-        if picks.get(n) in [k for _, k, _ in adj[:6]] and any(k == picks[n] for _, k, _ in good):
-            ch = next(x for x in good if x[1] == picks[n])
-        elif good:
-            top = good[0]
-            bgs = [x for x in good if KEYINFO[x[1]]["layer"] == "bg" and x[0] >= top[0] - 0.15]
-            ch = bgs[0] if bgs else top
-        if ch is None and not has_note and not u["old"]:
-            vis = sorted([k for k in VISIBLE_DEFAULT if k != prev_key], key=lambda k: (used.get(k, 0), rnd.random()))
-            used[vis[0]] = used.get(vis[0], 0) + 1
-            ch = (1.0, vis[0], max(0, (b_ - a_) // 3))
-        rec = {"j": u["j"], "text": " ".join(F["wds"]), "key": None, "layer": None, "note": False}
-        sc["_units"].append(rec)
-        if u["old"] and not (ch is not None and KEYINFO[ch[1]]["layer"] == "bg"):
-            it = u["old"][0]
-            sc["items"].append(it)
-            rec.update(key="old:" + it["kind"], layer="old")
-            prev_key = "old"
-            n1 += 1
-            continue
-        ev = None
-        if ch is not None:
-            s_, key, wi = ch
-            info = KEYINFO[key]
-            wi = min(a_ + max(0, wi), b_ - 1)
-            tw0 = max(ts + 0.05, wt[wi][0] - 0.12)
-            E = _num_params(sc, sc["narration_hi"].split(), wt, tw0, C, te)
-            E["n"] = 1 + (n % 9)
-            if info["layer"] == "bg":
-                d_ = max(1.0, te - ts - 0.2)
-                t0 = ts + 0.05
-                ev = {"key": key, "layer": "bg", "k": n, "t0": t0, "d": d_, "t1": min(te - 0.05, t0 + d_), "E": E}
-            elif info["group"] in ("camera", "vfx"):
-                d_ = max(1.0, min(te - tw0 - 0.1, 3.4 if key in LONG_FX else 1.8))
-                t0 = max(ts + 0.05, min(tw0, te - d_ - 0.05))
-                ev = {"key": key, "layer": "fx", "k": n, "t0": t0, "d": d_, "t1": min(te - 0.05, t0 + d_), "E": E}
-            else:
-                blk = set()
-                for it_ in u["labels"]:
-                    z_ = item_zones(it_)
-                    if "BL" in z_:
-                        blk.add("L")
-                    if "BR" in z_:
-                        blk.add("R")
-                free = [x for x in ("R", "L", "C") if x not in blk] or ["C"]
-                slot = free[slot_i % len(free)]
-                slot_i += 1
-                d_ = max(1.0, min(te - tw0 - 0.1, 4.6))
-                t0 = max(ts + 0.05, min(tw0, te - d_ - 0.05))
-                ev = {"key": key, "layer": "ov", "k": n, "t0": t0, "d": d_, "t1": min(te - 0.05, t0 + d_), "E": E, "slot": slot}
-            sc["t151"].append(ev)
-            prev_key = key
-            n1 += 1
-        use_note = has_note and (ev is None or ev["layer"] in ("fx", "ov"))
-        if use_note:
-            it = u["notes"][0]
-            it["w"], it["center"], it["with_ov"] = a_, True, bool(ev and ev["layer"] == "ov")
-            it["span"] = min(max(2.6, L - 0.3), 6.6)
-            if it.get("style") not in ("paper", "doc"):
-                it["style"] = ("paper", "doc")[n % 2]
-            sc["items"].append(it)
-            nn += 1
-        if not (ev and ev["layer"] == "bg"):
-            sc["items"].extend(u["labels"][:1])
-        rec.update(key=ev["key"] if ev else None, layer=ev["layer"] if ev else None, note=use_note)
-    # transitions (kept from before): one at every sentence cut, rotating through all 15, bound to the real picture cuts
-    trs = TR_KEYS[:]
-    rnd.shuffle(trs)
-    placed = []
-    for u in units:
-        if u["j"] == 0:
-            continue
-        e = {"key": trs[len(placed) % len(trs)], "layer": "tr", "k": u["si"], "t0": u["ts"], "d": 0.6, "nomicro": True, "E": {}}
-        e["t1"] = e["t0"] + e["d"]
-        u["sc"]["t151"].append(e)
-        placed.append(e)
-    for _, sc in ph:
-        sc["t151"].sort(key=lambda e: e["t0"])
-    log(f"t151 scene breakdown: {len(ph)} scenes -> {len(units)} sentences -> {n1} techniques, {nn} source cards, {len(placed)} transitions")
-    C["P"], C["placed"] = sum(max(2.0, _scene_len(sc)) for _, sc in ph), n1 + nn
-    return {"one": True, "trs": placed, "n": n1 + nn, "ph": [i for i, _ in ph], "C": C}
-
-
-def report_one(scenes, plan, path):
-    lines = ["हर वाक्य के लिए चुनी गई एक technique:\n"]
-    nm = {t["key"]: t["name"] for t in T151}
-    lay = {"bg": "background", "fx": "overlay-पूरी स्क्रीन", "ov": "overlay-नीचे", "old": "पहले वाली technique"}
-    cnt = 0
-    for si in plan["ph"]:
-        for r in scenes[si].get("_units") or []:
-            what = (nm.get(r["key"], r["key"]) + f" [{lay.get(r['layer'], '')}]") if r["key"] else "—"
-            cnt += 1 if r["key"] else 0
-            lines.append(f"दृश्य {si + 1} वाक्य {r['j'] + 1}: {what}" + ("  + source card" if r["note"] else "") + f"\n   \"{r['text'][:70]}\"")
-    try:
-        Path(path).write_text("\n".join(lines), encoding="utf-8")
-    except Exception:  # noqa
-        pass
-    return cnt
-
-
-_plan_t151_all = plan_t151
-
-
-def plan_t151(scenes, topic=""):  # noqa: F811
-    if T151_ALL:
-        return _plan_t151_all(scenes, topic)
-    try:
-        p_ = plan_one(scenes, topic)
-        if p_ and p_.get("n", 0) > 0:
-            return p_
-        log("t151 one-per-sentence placed nothing -> using the full planner as a safety net")
-    except Exception as e:  # noqa
-        log("t151 one-per-sentence failed:", type(e).__name__, str(e)[:160], "-> using the full planner as a safety net")
-    return _plan_t151_all(scenes, topic)
-
-
-_t151_report_all = t151_report
-
-
-def t151_report(scenes, plan, path):  # noqa: F811
-    return report_one(scenes, plan, path) if plan and plan.get("one") else _t151_report_all(scenes, plan, path)
-
-
-
-# ---- renderer hooks used by make_photo_draw
-def t151_setup(sc, shots):
-    """Per scene: bind transition events to real shot boundaries; the rest become micro-cuts."""
-    evs = sc.get("t151") or []
-    micro = []
-    taken = set()
-    for e in evs:
-        if e["layer"] != "tr":
-            continue
-        best = None
-        for j, sh in enumerate(shots):
-            if j == 0 or j in taken:
-                continue
-            if abs(sh["t0"] - e["t0"]) < 1.6 and (best is None or abs(sh["t0"] - e["t0"]) < abs(shots[best]["t0"] - e["t0"])):
-                best = j
-        if best is not None:
-            taken.add(best)
-            shots[best]["trans"], shots[best]["tdur"] = e["key"], 0.65
-            e["bound"] = True
-        elif not e.get("nomicro"):
-            micro.append(e)
-    return micro
-
-
-def t151_frame(fr, t, ctx_ev, sc, ctx):
-    """Apply background techniques then frame-level effects active at scene time t."""
-    for e in ctx_ev:
-        if e["t0"] <= t < e["t1"] and e["layer"] == "bg":
-            u = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
-            try:
-                pre_ = fr
-                fr = BGFX[e["key"]](fr, u, t, int(e["t0"] * 7), {**ctx, "phrase": e["E"].get("txt"), "E": e["E"]})
-                if fr is not pre_ and fr.size == (W, H):
-                    fr = _bg_real(pre_, fr.convert("RGB"), t)
-            except Exception as ex:  # noqa
-                _t151_err(e["key"], ex)
-    for e in ctx_ev:
-        if e["t0"] <= t < e["t1"] and e["layer"] == "fx":
-            u = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
-            fn = FRAME_FX.get(e["key"])
-            if fn is None:
-                continue
-            try:
-                fr = fn(fr, u, t, int(e["t0"] * 7))
-            except Exception as ex:  # noqa
-                _t151_err(e["key"], ex)
-    return fr
-
-
-def _t151_err(k, ex):
-    if not _VX.get("e151_" + k):
-        _VX["e151_" + k] = 1
-        log(f"technique {k} failed once (video goes on): {type(ex).__name__} {str(ex)[:90]}")
-
-
-def t151_cards(fr, t, ctx_ev, ctx):
-    for e in ctx_ev:
-        if e["layer"] == "ov" and e.get("slot") and e["t0"] <= t < e["t1"]:
-            p_ = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
-            spr = None
-            try:
-                spr = render_card(e["key"], p_, t - e["t0"], e["E"], ctx.get("C") or {})
-            except Exception as ex:  # noqa
-                _t151_err(e["key"], ex)
-            if spr is None:
-                continue
-            a = cl(min((t - e["t0"]) / 0.22, (e["t1"] - t) / 0.22))
-            q = e_out(cl((t - e["t0"]) / 0.3))
-            put(fr, spr, SLOT_CX[e["slot"]], SLOT_CY + (1 - q) * 40, 1.0, a)
-
-
-def t151_time(t, tl, evs):
-    """Freeze frame and speed ramp bend the picture's own clock."""
-    for e in evs:
-        if e["layer"] == "fx" and e["key"] in ("freeze", "speed_ramp") and e["t0"] <= t < e["t1"]:
-            if e["key"] == "freeze":
-                return max(0.0, tl - (t - e["t0"]))
-            w = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
-            return tl + 0.9 * (w - w * w) * (e["t1"] - e["t0"])
-    return tl
-
-
-def t151_micro(fr, t, micro):
-    for e in micro:
-        if e["t0"] <= t < e["t1"]:
-            u = (t - e["t0"]) / max(0.05, e["t1"] - e["t0"])
-            alt = _zoomc(fr, 1.4, 0.32 if int(e["t0"]) % 2 else 0.68, 0.45)
-            try:
-                return blend_trans(fr, alt, u * 2, e["key"]) if u < 0.5 else blend_trans(alt, fr, (u - 0.5) * 2, e["key"])
-            except Exception as ex:  # noqa
-                _t151_err(e["key"], ex)
-    return fr
-
+PLAIN_MODE = os.environ.get("PLAIN", "0") != "0"  # clean slate: no editing techniques at all; PLAIN=0 brings the old technique code back (all of it is still in the file)
+T151_ON = False  # the 151-technique planner and its runtime hooks were removed on request
+BOT_VERSION = "round-11 plain + cast"
 
 
 TR_NEW = set(TR15) - {"zoom", "whip", "glitch", "flash", "wipe"}
@@ -10014,9 +9350,6 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
         events.append((0.25, "pop", 0.55))
     ends = {}
     wt_ = sc.get("wt")
-    t151_ev = sc.get("t151") or []
-    t151_ctx = sc.get("t151_ctx") or {}
-    t151_micro_ev = t151_setup(sc, shots) if t151_ev else []
     items = []
     if sc.get("items") and wt_:
         rr = ctx["rnd"]
@@ -10044,8 +9377,6 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                 idx = k
         sh = shots[idx]
         tl = t - sh["t0"]
-        if t151_ev:
-            tl = max(0.0, min(sh["dur"], t151_time(t, tl, t151_ev)))
         fr = shot_frame(sh, tl)
         if idx > 0 and tl < sh["tdur"]:
             if idx - 1 not in ends:
@@ -10053,10 +9384,6 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             fr = blend_trans(ends[idx - 1], fr, tl / sh["tdur"], sh["trans"])
         fr = fx_apply(fr, t, int(t * FPS), sh["phase"])
         dust.draw(fr, t)
-        if t151_ev:  # the 151-technique engine: background looks, camera / film effects, micro-cuts
-            fr = t151_frame(fr, t, t151_ev, sc, t151_ctx)
-            if t151_micro_ev:
-                fr = t151_micro(fr, t, t151_micro_ev)
         for k_w in sc.get("kw") or ():  # the picture gives a small punch-in on every key word the narrator says
             u_ = (t - k_w["t"]) / 0.38
             if 0 <= u_ < 1:
@@ -10111,8 +9438,6 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                 if not _VX.get("err_kw"):
                     _VX["err_kw"] = 1
                     log("vox keyword cards failed once:", type(e_).__name__, str(e_)[:100])
-        if t151_ev:
-            t151_cards(fr, t, t151_ev, t151_ctx)  # data / text / diagram cards live only in the three fixed bottom slots
         if sc.get("kw") and not sc.get("vox") and not vox_on:
             try:
                 blocked_ = any(x_["t0"] <= t < x_["t1"] and (item_zones(x_["it"]) & {"T", "FULL"}) for x_ in items)
@@ -10289,17 +9614,21 @@ def pick_transition(i, sc, prev_sc, ctx):
     if i == 0:
         return "fade", 0.7
     if PLAIN_MODE:
-        return "pandark", 0.9
+        _k = rnd.choice(SLIDE_MIX)
+        return _k, (0.9 if _k == "pandark" else 0.6)
     hint = sc.get("transition")
     if hint == "cut":
         return "none", 0.0
+    if hint in ("slide_l", "slide_r", "slide_u", "slide_d"):
+        return hint, 0.6
     if hint in ("fade", "zoom", "whip", "wipe", "circle", "flash"):
         return hint, 0.55 if hint == "flash" else 0.5
     if i == 1:
         return "flash", 0.55
     if sc["type"] in EXPLAINERS or (prev_sc and prev_sc["type"] in EXPLAINERS):
         return rnd.choice(["wipe", "fade", "fade", "zoom"]), 0.5
-    return rnd.choice(["fade", "fade", "zoom", "wipe", "whip"]), 0.45
+    _k = rnd.choice(SLIDE_MIX)
+    return _k, (0.9 if _k == "pandark" else 0.6)
 
 
 # ---- map / globe / route animation and layered cross-section (drawn in code, no pictures needed)
@@ -12656,6 +11985,206 @@ CLIPS_MAX = [int(os.environ.get("MAX_CLIPS", "8" if TEST_SEC else "30"))]
 POPUPS_MAX = [int(os.environ.get("MAX_POPUPS", "0"))]  # sticker pop-ups are off: every subject gets its own full-screen picture
 
 
+# =========================================================================== CAST: the same people and the same village in EVERY picture (true-story videos)
+# Flux / SD cannot "remember" a face between pictures. So: (1) one visual bible (style, characters, locations) is written ONCE for the story,
+# (2) every sentence's picture prompt is rebuilt from the SAME word-for-word descriptions + what happens in that sentence,
+# (3) one reference portrait per main character is made first and, when the Gemini image model is available, handed to it as a reference for every picture with that person.
+CAST_ON = os.environ.get("CAST", "1") != "0"
+CAST = {"on": False, "style": "", "chars": {}, "locs": {}, "refs": {}, "gem_dead": False, "gem_fail": 0, "gem_ok": 0}
+GEMINI_IMG_MODELS = [m.strip() for m in os.environ.get("GEMINI_IMAGE_MODELS", "gemini-2.5-flash-image").split(",") if m.strip()]
+CAST_REF_MAX = int(os.environ.get("CAST_REF_MAX", "4"))
+CAST_REF_USE = os.environ.get("CAST_REF_USE", "1") != "0"
+CAST_SUFFIX = ("photorealistic cinematic film still, natural real human faces and skin, shallow depth of field, 35mm lens, moody natural light, "
+               "highly detailed, no text, no letters, no watermark, no logo")
+CAST_FRAMING = ("close-up", "medium", "wide", "over-the-shoulder", "low-angle", "detail")
+
+
+def _slug(s):
+    return re.sub(r"[^a-z0-9_]+", "_", str(s or "").lower()).strip("_")[:24]
+
+
+def cast_build(topic, story, script):
+    """One Gemini call: the visual bible of the story. Does nothing unless the story is about people (STORY_CTX) and a Gemini key exists."""
+    CAST.update({"on": False, "style": "", "chars": {}, "locs": {}, "refs": {}, "gem_dead": False, "gem_fail": 0, "gem_ok": 0})
+    if not (CAST_ON and GEMINI_KEY and STORY_CTX.get("on")):
+        log("cast: off (science / nature topic, or CAST=0)")
+        return CAST
+    text = (story or "").strip() or " ".join(sc["narration_hi"] for sc in script["scenes"])
+    prompt = f"""A true-story documentary will be illustrated with AI pictures. To keep EVERY picture consistent (same people, same village), write the VISUAL BIBLE once.
+Story setting: {STORY_CTX.get('text', '')}
+Story (Hindi or English):
+{text[:7000]}
+
+Return ONLY JSON:
+{{"style": "ONE English line (max 30 words): the look of every picture, e.g. 'muted warm film colours, soft window light, grainy 35mm documentary, rural Uttar Pradesh 1980s'",
+ "characters": [{{"id": "short_lowercase_slug", "name_en": "name as in the story, English letters", "desc": "ONE English sentence of 25-40 words, always the same: age, build, skin tone, face shape, hair, the exact clothes with colours, one distinguishing feature. Everyday people of this culture and era."}}],
+ "locations": [{{"id": "short_lowercase_slug", "desc": "20-35 English words: building material, colours, objects, light. Same words will be pasted into every picture there."}}]}}
+Rules: only people who really appear or are named in the story, the main person first, at most 6 characters and 5 locations. Never write real famous people's names. No text or letters in any description."""
+    try:
+        out = gemini_json(prompt, 0.3)
+    except Exception as e:  # noqa
+        log("cast: bible failed, normal pictures are used:", str(e)[:120])
+        return CAST
+    chars, locs = {}, {}
+    for c in (out.get("characters") or [])[:6]:
+        if isinstance(c, dict) and _slug(c.get("id")) and len(str(c.get("desc") or "").split()) >= 8 and str(c["desc"]).isascii():
+            chars[_slug(c["id"])] = {"name": clean_short(c.get("name_en"), 30) or _slug(c["id"]), "desc": clean_short(c["desc"], 330)}
+    for l_ in (out.get("locations") or [])[:5]:
+        if isinstance(l_, dict) and _slug(l_.get("id")) and len(str(l_.get("desc") or "").split()) >= 6 and str(l_["desc"]).isascii():
+            locs[_slug(l_["id"])] = clean_short(l_["desc"], 260)
+    style = clean_short(out.get("style"), 220)
+    if not chars or not style.isascii():
+        log("cast: bible unusable, normal pictures are used")
+        return CAST
+    CAST.update({"on": True, "style": style, "chars": chars, "locs": locs})
+    log(f"cast: {len(chars)} characters, {len(locs)} locations, style: {style[:80]}")
+    return CAST
+
+
+def cast_apply(sh, r):
+    """Rebuild one picture prompt from the fixed descriptions + what happens in this sentence."""
+    ids = [c for c in (r.get("chars") or []) if c in CAST["chars"]][:2]
+    loc = r.get("loc") if r.get("loc") in CAST["locs"] else (next(iter(CAST["locs"]), "") if not ids else "")
+    act = clean_short(r.get("action_en"), 230) or clean_short(sh.get("prompt_en"), 230) or "a quiet moment of the story"
+    fr = str(r.get("framing") or "medium").lower()
+    fr = fr if fr in CAST_FRAMING else "medium"
+    parts = [f"{fr} shot, {act}"]
+    for c in ids:
+        parts.append(f"{CAST['chars'][c]['name']}: {CAST['chars'][c]['desc']}")
+    if loc:
+        parts.append("Setting: " + CAST["locs"][loc])
+    parts.append(CAST["style"])
+    sh["prompt_en"] = clean_short(". ".join(p_.rstrip(". ") for p_ in parts), 1000)
+    sh["query_en"] = sh["entity_en"] = sh["clip_en"] = ""
+    sh["motion"] = False
+    sh["ai_only"] = True
+    sh["cast_ids"] = ids
+
+
+def cast_plan(scenes, topic=""):
+    """After the shots exist: tell which characters / location / action / framing each NEW picture needs, then rebuild its prompt."""
+    if not CAST["on"]:
+        return 0
+    rows = []
+    for i, sc in enumerate(scenes):
+        if sc.get("type") != "photo":
+            continue
+        for k, sh in enumerate(sc.get("shots") or []):
+            if str(sh.get("prompt_en") or "").strip() or sh.get("clip_en"):
+                rows.append((i, k, sh))
+    bible = "\n".join(f"{cid}: {c['name']} - {c['desc']}" for cid, c in CAST["chars"].items())
+    places = "\n".join(f"{lid}: {d}" for lid, d in CAST["locs"].items())
+    n = 0
+    for a in range(0, len(rows), 12):
+        part = rows[a:a + 12]
+        listing = "\n".join(f"S{i}.{k}: {sh.get('text_hi', '')}" for i, k, sh in part)
+        prompt = f"""Hindi narration sentences of a true-story documentary (topic: {topic}). For each sentence decide the ONE picture that shows what the sentence says.
+CHARACTERS (use only these ids):
+{bible}
+LOCATIONS (use only these ids):
+{places}
+For each sentence return: "chars": ids of the characters visible (0-2; [] for an empty place, an object or a detail), "loc": a location id or "", "action_en": what is visible, one English sentence (max 25 words: pose, action, emotion, objects; never repeat the characters' looks, they are added automatically), "framing": one of {', '.join(CAST_FRAMING)}.
+Vary the framing from sentence to sentence. Show only what the sentence says, never invent events.
+Return ONLY JSON: {{"shots":[{{"id":"S0.1","chars":[],"loc":"","action_en":"","framing":"medium"}}]}}
+{listing}"""
+        try:
+            out = gemini_json(prompt, 0.3)
+        except Exception as e:  # noqa
+            log("cast: tagging failed for a batch:", str(e)[:100])
+            out = {}
+        got = {str(r.get("id")): r for r in (out.get("shots") or []) if isinstance(r, dict)}
+        for i, k, sh in part:
+            cast_apply(sh, got.get(f"S{i}.{k}", {}))
+            n += 1
+    log(f"cast: {n} picture prompts rebuilt from the story bible")
+    return n
+
+
+def img_gemini_ref(prompt, out, ref_paths, size=(1920, 1080)):
+    """Gemini image model with the reference portraits attached: the same face in a new scene. Switches itself off after repeated failures."""
+    if CAST["gem_dead"] or not (GEMINI_KEY and CAST_REF_USE and ref_paths and GEMINI_IMG_MODELS):
+        return False
+    parts = []
+    for p in ref_paths[:2]:
+        im = Image.open(p).convert("RGB")
+        im.thumbnail((768, 768))
+        buf = io.BytesIO()
+        im.save(buf, "JPEG", quality=88)
+        parts.append({"inline_data": {"mime_type": "image/jpeg", "data": base64.b64encode(buf.getvalue()).decode()}})
+    parts.append({"text": "The reference photos show the people of this story. Keep each person's face, hair, skin tone and build EXACTLY the same as in their reference photo. "
+                          "Create a NEW 16:9 photorealistic cinematic picture of this moment: " + prompt + " No text or letters in the picture."})
+    for model in GEMINI_IMG_MODELS:
+        for with_ratio in (True, False):
+            gc = {"responseModalities": ["IMAGE"]}
+            if with_ratio:
+                gc["imageConfig"] = {"aspectRatio": "16:9"}
+            try:
+                r = requests.post(f"{GBASE}/models/{model}:generateContent", headers={"x-goog-api-key": GEMINI_KEY},
+                                  json={"contents": [{"parts": parts}], "generationConfig": gc}, timeout=150)
+            except requests.RequestException as e:
+                note_fail("gemini-image", type(e).__name__)
+                CAST["gem_fail"] += 1
+                break
+            if r.status_code == 400 and with_ratio:
+                continue  # this model does not know imageConfig: retry without
+            if not r.ok:
+                note_fail("gemini-image", f"HTTP {r.status_code} {re.sub(chr(10), ' ', r.text or '')[:110]}")
+                CAST["gem_fail"] += 1
+                if r.status_code in (403, 404) or CAST["gem_fail"] >= 3 and CAST["gem_ok"] == 0 or CAST["gem_fail"] >= 8:
+                    CAST["gem_dead"] = True
+                    log("cast: Gemini image model switched off for this run (", r.status_code, ")")
+                break
+            try:
+                for pt in ((r.json().get("candidates") or [{}])[0].get("content", {}).get("parts", [])):
+                    d_ = pt.get("inlineData") or pt.get("inline_data")
+                    if d_ and d_.get("data"):
+                        fit_image(base64.b64decode(d_["data"]), out, size)
+                        CAST["gem_ok"] += 1
+                        return True
+            except Exception as e:  # noqa
+                note_fail("gemini-image", "bad image: " + type(e).__name__)
+            CAST["gem_fail"] += 1
+            break
+    return False
+
+
+def gen_image_cast(prompt, out, refs=()):
+    """AI only (never a stock photo of a stranger): Gemini with reference portraits -> Cloudflare Flux -> local SD-Turbo."""
+    size = (1920, 1080)
+    full = f"{prompt}, {CAST_SUFFIX}"
+    chain = []
+    if refs:
+        chain.append(("gemini-ref", lambda: img_gemini_ref(prompt, out, list(refs), size)))
+    chain.append(("cloudflare", lambda: img_cloudflare(full, out, size, (1344, 756))))
+    chain.append(("local-sd", lambda: img_local_sd(prompt + ", cinematic film still, photorealistic", out, size, "photo")))
+    for name, fn in chain:
+        try:
+            if fn() and Path(out).exists():
+                return True
+        except Exception as e:  # noqa
+            note_fail(name, type(e).__name__)
+            log(f"  cast image source {name} failed: {type(e).__name__}: {str(e)[:120]}")
+    return False
+
+
+def cast_refs(scenes, imgdir):
+    """One reference portrait per main character (the ones that appear most), made before the story pictures."""
+    if not CAST["on"]:
+        return
+    freq = {}
+    for sc in scenes:
+        for sh in sc.get("shots") or []:
+            for c in sh.get("cast_ids") or []:
+                freq[c] = freq.get(c, 0) + 1
+    for cid in sorted(freq, key=lambda c: -freq[c])[:CAST_REF_MAX]:
+        p = imgdir / f"cast_{cid}.png"
+        pr = (f"front-facing head-and-shoulders portrait, neutral calm expression, plain soft background. "
+              f"{CAST['chars'][cid]['name']}: {CAST['chars'][cid]['desc']}. {CAST['style']}")
+        if gen_image_cast(pr, p):
+            CAST["refs"][cid] = p
+    log(f"cast: reference portraits made for {sorted(CAST['refs'])}")
+
+
 def make_visuals(scenes, imgdir):
     """Generate every picture the plan asks for. Returns (failed, requested)."""
     failed = requested = 0
@@ -12767,7 +12296,8 @@ def make_visuals(scenes, imgdir):
                     continue
                 requested += 1
                 CF_STATE["used"] += 1
-                if gen_image(sh["prompt_en"], p, "photo", query=sh.get("query_en", ""), entity=sh.get("entity_en", "")):
+                if gen_image(sh["prompt_en"], p, "photo", query=sh.get("query_en", ""), entity=sh.get("entity_en", ""), ai_only=bool(sh.get("ai_only")),
+                             refs=[CAST["refs"][c_] for c_ in (sh.get("cast_ids") or []) if c_ in CAST["refs"]]):
                     sh["image"] = p
                     prev_img = p
                 elif prev_img:
@@ -12826,7 +12356,7 @@ def strip_everything(scenes, topic_en="", convert=True):
     for sc in scenes:
         for n_, sh in enumerate(sc.get("shots") or []):
             if n_ > 0:
-                sh["trans"] = "pandark"
+                sh["trans"] = random.choice(SLIDE_MIX)
             for k in list(sh):
                 if k not in KEEP and k not in ("text_hi", "trans"):
                     if k in ("kf", "tech", "cam", "trans", "label_hi", "popup_en", "bubble_hi", "place_hi", "title_hi", "year_hi", "note_hi", "mark_hi", "fx", "fx_x", "fx_y", "focus_x", "focus_y"):
@@ -12925,12 +12455,22 @@ def pipeline():
     director_pass(scenes, topic_en + (("\nSTORY CONTEXT (keep EVERY picture inside it; relatives and neighbours are people of this culture, never animals or objects): " + STORY_CTX["text"]) if STORY_CTX["on"] else ""))
     if PLAIN_MODE:
         strip_everything(scenes, topic_en)
+    try:  # same people / same village in every picture (true stories only)
+        cast_build(topic_en, own_story, script)
+        cast_plan(scenes, topic_en)
+    except Exception as e:  # noqa
+        CAST["on"] = False
+        log("cast failed, normal pictures are used:", type(e).__name__, str(e)[:120])
     prov = "gemini" if VOICE_USED[0].startswith("gemini") else "edge"
     wpms[prov] = round(word_count(script) / (total / 60), 1)
     save_json(WPM_FILE, wpms)
 
     imgdir = WORK / "img"
     imgdir.mkdir()
+    try:
+        cast_refs(scenes, imgdir)
+    except Exception as e:  # noqa
+        log("cast refs failed:", type(e).__name__, str(e)[:120])
     failed, requested = make_visuals(scenes, imgdir)
     if failed > requested * 0.35:
         raise RuntimeError(f"too many pictures missing ({failed}/{requested}); not publishing junk. "
@@ -13025,12 +12565,6 @@ def pipeline():
             log("subtitle file failed:", type(e).__name__, str(e)[:100])
         if thumb2:
             tg_send_file(thumb2, "doc", "Thumbnail 2 (then/now)")
-        if T151_ON and T151_PLAN[0]:
-            try:
-                n151 = t151_report(scenes, T151_PLAN[0], outdir / "techniques_151.txt")
-                tg_send_file(outdir / "techniques_151.txt", "doc", (f"BOT संस्करण: round-10 (हर वाक्य में एक technique). {n151} वाक्यों में technique" if T151_PLAN[0].get("one") else f"151 techniques report: {n151}/151 is video me hain (scene number + time)"))
-            except Exception as e:  # noqa
-                log("technique report failed:", type(e).__name__, str(e)[:100])
         if not ok:
             notify("⚠️ Video Telegram par nahi ja saki (size/limit). GitHub Actions ke 'Artifacts' se download karein.")
 
@@ -13320,13 +12854,8 @@ def selftest():
 
     voice = make_voice(sc, t0 / "voice", synth=fake_tts)
     total = ffprobe_dur(voice)
-    if PLAIN_MODE and not os.environ.get("SELFTEST_T151"):
+    if PLAIN_MODE:
         strip_everything(sc, "test", convert=False)
-    if os.environ.get("SELFTEST_T151"):
-        globals()["gemini_json"] = lambda *a_, **k_: {"scenes": []}
-        plan_t = plan_t151(sc, "test")
-        T151_PLAN[0] = plan_t
-        log("selftest t151 report:", t151_report(sc, plan_t, t0 / "techniques_151.txt"), "/151")
     if os.environ.get("SELFTEST_VOX"):
         globals()["gemini_json"] = lambda *a_, **k_: {"scenes": []}
         log("selftest vox: rules", {k: v for k, v in det_techniques(sc).items() if v})
