@@ -2332,10 +2332,18 @@ def make_voice(scenes, tdir, synth=None):
     for k in range(1, len(B)):
         B[k] = max(B[k], B[k - 1] + 0.3)
     B[-1] = max(B[-1], B[-2] + 0.3)
+    # the PICTURE changes in the middle of the narrator's breath (pause between two sentences), not when the next sentence is already being spoken
+    V = B[:]
+    for k in range(1, len(B) - 1):
+        ps_ = next((x[0] for x in sil if abs(x[1] - starts[k - 1]) < 0.02), None) if k - 1 < len(starts) and starts[k - 1] is not None else None
+        if ps_ is not None:
+            V[k] = min(B[k], max((ps_ + starts[k - 1]) / 2, V[k - 1] + 0.3))
+    for k in range(1, len(V)):
+        V[k] = max(V[k], V[k - 1] + 0.3) if V[k] < B[k] else V[k]
     for i, sc in enumerate(scenes):
         idx = [k for k, st in enumerate(sents) if st[0] == i]
-        t_a = B[idx[0]]
-        t_b = B[idx[-1] + 1]
+        t_a = V[idx[0]]
+        t_b = V[idx[-1] + 1]
         sc["dur"] = t_b - t_a
         wt, sent = [], []
         for k in idx:
@@ -2350,7 +2358,7 @@ def make_voice(scenes, tdir, synth=None):
                 log("word timing failed:", str(e)[:100])
                 sp_ = [(sp_dur * q / max(1, b - a), sp_dur * (q + 1) / max(1, b - a)) for q in range(b - a)]
             wt += [(s0 - t_a + x, s0 - t_a + y) for x, y in sp_]
-            sent.append((a, b, s0 - t_a, s1 - t_a))
+            sent.append((a, b, s0 - t_a, min(s1, V[k + 1]) - t_a))
         sc["speech_dur"] = max(0.5, sc["dur"] - 0.15)
         sc["wt"] = wt if len(wt) == len(sc["narration_hi"].split()) else None
         sc["sent"] = sent  # (first word, end word, start s, end s): the sentence's time slot inside the scene
@@ -8193,6 +8201,8 @@ def _realize(im):
     ed.putalpha(edge)
     glow = im.filter(ImageFilter.GaussianBlur(7))
     arr = np.asarray(im).astype(np.float32)
+    lum_ = (0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2])[..., None]
+    arr[..., :3] = (lum_ + (arr[..., :3] - lum_) * 0.7) * 0.95  # muted, not cartoon-bright
     g_ = np.asarray(glow).astype(np.float32)
     arr[..., :3] = np.clip(arr[..., :3] + 0.22 * g_[..., :3] * (g_[..., 3:4] / 255.0), 0, 255)
     arr[..., :3] = np.clip(arr[..., :3] + np.random.default_rng(int(a.getbbox()[2] if a.getbbox() else 1)).normal(0, 4.0, arr.shape[:2] + (1,)), 0, 255)
@@ -9592,6 +9602,8 @@ _R("grain", "पुराना बीता याद", None, 0.6); _R("dust", 
 _R("rain", "बारिश बरसात पानी तूफान"); _R("snow", "बर्फ ठंड सर्द"); _R("lightning", "बिजली गरज तूफान"); _R("light_leak", "रोशनी उम्मीद सुबह सूरज"); _R("lens_flare", "चमक सूरज तारा चमकता")
 _R("vignette", "अकेला अकेली उदास खामोश", None, 0.8); _R("chroma", "अजीब भ्रम"); _R("glitch", "गड़बड़ टूट"); _R("film_burn", "खत्म अंत जल_गया"); _R("vhs", "वीडियो टेप"); _R("old_film", "जमाने ज़माने बीते")
 _R("motion_blur", "तेज भागा दौड़ा रफ्तार"); _R("speed_ramp", "तेज़ी देखते_ही"); _R("freeze", "रुक ठहर थम रुका"); _R("split", "दोनों एक_तरफ दूसरी_तरफ जबकि"); _R("vox", "मतलब यानी दरअसल समझ", None, 0.9)
+UNIT_KEYS = {"fin_counter", "dist_card", "pop_counter", "pct_counter", "time_counter", "digital_clock", "progress", "countdown", "army_strength", "dist_counter"}
+OLD_TECH = ("compare", "measure", "qmark", "lens", "beforeafter", "mark")  # earlier techniques he wants to keep
 WEAK = ("kenburns", "push_in", "pan", "grain", "vignette", "tilt", "parallax_cam", "orbit")  # calm defaults when nothing in the sentence calls for more
 LONG_FX = {"grain", "dust", "smoke", "fog", "fire", "rain", "snow", "vignette", "light_leak", "old_film", "vhs", "tilt", "orbit", "parallax_cam", "aerial", "drone", "fly", "tracking", "handheld", "motion_blur"}
 for _k in list(RULES):
@@ -9651,8 +9663,10 @@ def _score_sent(F, C):
         elif need in ("geo", "geo2") and F["geo_here"]:
             base = 0.5
             first = F["geo_here"][0] if first is None else first
+        if key in UNIT_KEYS and hits == 0:
+            continue  # "11 साल" must never become a rupee / percent / distance card: the unit has to be said
         if toks and need in ("num", "year", "nums2", "yearplace") and hits == 0:
-            base *= 0.45  # a number alone does not make it a money / percent / population card
+            base *= 0.45
         sc_ = (hits + base) * w_
         if key in WEAK:
             sc_ += 0.25
@@ -9698,7 +9712,9 @@ def plan_one(scenes, topic=""):
         items = [it for it in (sc.get("items") or []) if isinstance(it, dict)]
         sc["_srclist"] = any(it.get("kind") == "srclist" for it in items)
         sc["_notes"] = [it for it in items if it.get("kind") == "note" and it.get("text")]
-        sc["items"] = [it for it in items if it.get("kind") == "srclist"]  # every other helper is replaced by THE technique
+        sc["_labels"] = [it for it in items if it.get("kind") in ("place", "name", "person")]  # place / name text stays
+        sc["_old"] = [it for it in items if it.get("kind") in OLD_TECH]  # split / compare / measure / lens / before-after / question mark / tick stay as techniques
+        sc["items"] = [it for it in items if it.get("kind") == "srclist"]
         if sc["_srclist"]:
             continue
         F = _sent_feats(sc, C)
@@ -9740,6 +9756,13 @@ def plan_one(scenes, topic=""):
             ch = (1.0, k0, max(0, min(len(sc["wt"]) - 1, len(sc["wt"]) // 3)))
         wt = sc["wt"]
         ev = None
+        old_it = sc["_old"][0] if sc["_old"] else None
+        if old_it is not None and not (ch is not None and KEYINFO[ch[1]]["layer"] == "bg"):
+            ch = None  # the earlier technique the director picked for this sentence IS its technique
+            sc["items"].append(old_it)
+            sc["_pick"] = {"key": "old:" + old_it["kind"], "layer": "old", "note": False}
+            prev_key = "old"
+            continue
         if ch is not None:
             s_, key, wi = ch
             info = KEYINFO[key]
@@ -9758,7 +9781,15 @@ def plan_one(scenes, topic=""):
             else:
                 d_ = min(max(2.2, dur - tw0 - 0.2), 4.6)
                 t0 = max(0.1, min(tw0, dur - d_ - 0.1))
-                slot = ("R", "L", "C")[slot_i % 3]
+                blk = set()
+                for it_ in sc["_labels"]:
+                    z_ = item_zones(it_)
+                    if "BL" in z_:
+                        blk.add("L")
+                    if "BR" in z_:
+                        blk.add("R")
+                free = [x for x in ("R", "L", "C") if x not in blk] or ["C"]
+                slot = free[slot_i % len(free)]
                 slot_i += 1
                 ev = {"key": key, "layer": "ov", "k": n, "t0": t0, "d": d_, "t1": t0 + d_, "E": E, "slot": slot}
             sc["t151"].append(ev)
@@ -9772,6 +9803,8 @@ def plan_one(scenes, topic=""):
             if it.get("style") not in ("paper", "doc"):
                 it["style"] = ("paper", "doc")[n % 2]
             sc["items"].append(it)
+        if not (ev and ev["layer"] == "bg"):
+            sc["items"].extend(sc["_labels"][:2])
         sc["_pick"] = {"key": ev["key"] if ev else None, "layer": ev["layer"] if ev else None, "note": use_note}
     # transitions (kept from before): one per scene, rotating through all 15, bound to real shot cuts only
     trs = TR_KEYS[:]
