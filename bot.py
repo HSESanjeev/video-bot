@@ -1824,7 +1824,7 @@ Every scene also has "grade" (colour grading that fits the scene: warm for fire/
 """
 
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
-TRANS_NAMES = ["fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
+TRANS_NAMES = ["pandark", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
 TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
 MOOD_NAMES = ["mystery", "epic", "wonder", "calm", "tense", "life", "space"]
 TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
@@ -4292,9 +4292,37 @@ def shot_frame(shot, tl):
     return fr
 
 
+def pan_dark(prev, cur, p):
+    """The reference look: picture A slides sideways, its far edge falls into shadow (a dark doorway), and picture B keeps sliding in from that darkness
+    and brightens as it settles - one continuous camera move from one picture into the next."""
+    np = _np()
+    p = cl(p)
+    key = ("pd", W, H)
+    if key not in _C:
+        x = (np.arange(W, dtype=np.float32) / W)[None, :, None]
+        _C[key] = x
+    x = _C[key]
+    sm = lambda v: v * v * (3 - 2 * v)  # noqa: E731
+    sa = 0.93 * sm(cl(p * 1.7))
+    sb = 0.93 * (1 - sm(cl((p - 0.15) / 0.85)))
+    ga = 1 - sa * sm(np.clip((x - 0.45) / 0.55, 0, 1))
+    gb = 1 - sb * (1 - sm(np.clip(x / 0.55, 0, 1)))
+    a = np.asarray(prev).astype(np.float32) * ga
+    b = np.asarray(cur).astype(np.float32) * gb
+    canvas = np.concatenate([a, b], axis=1)
+    off = int(round(e_io(p) * W))
+    fr = Image.fromarray(np.clip(canvas[:, off:off + W], 0, 255).astype(np.uint8), "RGB")
+    k = 1 + int(7 * math.sin(math.pi * p))
+    if k > 1:
+        fr = fr.resize((max(8, W // k), H), Image.BILINEAR).resize((W, H), Image.BILINEAR)
+    return fr
+
+
 def blend_trans(prev, cur, p, kind):
     np = _np()
     p = cl(p)
+    if kind == "pandark":
+        return pan_dark(prev, cur, p)
     if kind in TR_NEW:
         return tr_new(prev, cur, p, kind)
     if kind == "fade":
@@ -4579,7 +4607,7 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                           "pulse": ((rnd.choice([(200, 20, 30), (20, 120, 140), (255, 255, 255)]) if (new_img and shots and rnd.random() < (0.4 if tone in ("suspense", "serious", "excited") else 0.12)) else None)),
                           "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
                           "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
-                          "focus": (not shots), "trans": trans, "tdur": 0.3 if trans in ("fade", "zoom") else 0.4, "zcap": zoom_cap(s_["image"]),
+                          "focus": (not shots), "trans": trans, "tdur": (min(0.9, 0.4 * sd) if trans == "pandark" else 0.3 if trans in ("fade", "zoom") else 0.4), "zcap": zoom_cap(s_["image"]),
                           "ov": (s_.get("ov") if j == 0 else None), "popup": (s_.get("popup_img") if j == 0 else None),
                           "clip": s_.get("clip"), "reader": None, "grade": s_.get("grade") if s_.get("grade") in GRADES else sc.get("grade", "natural"),
                           "pop_side": rnd.choice([-1, 1]),
@@ -9273,7 +9301,8 @@ def _bg_missing():
 
 # ---- planner: decides WHEN each of the 151 techniques appears (every video, any length) and keeps the three bottom slots free of collisions
 T151_PLAN = [None]
-T151_ON = os.environ.get("T151", "1") != "0"
+PLAIN_MODE = os.environ.get("PLAIN", "1") != "0"  # clean slate: no editing techniques at all; PLAIN=0 brings the old technique code back (all of it is still in the file)
+T151_ON = os.environ.get("T151", "1") != "0" and not PLAIN_MODE
 FX_FRAME_KEYS = [t["key"] for t in T151 if t["layer"] == "ov" and t["group"] in ("camera", "vfx")]
 CARD_KEYS = [t["key"] for t in T151 if t["layer"] == "ov" and t["group"] in ("data", "text", "diagram")]
 BG_KEYS = [t["key"] for t in T151 if t["layer"] == "bg"]
@@ -10259,6 +10288,8 @@ def pick_transition(i, sc, prev_sc, ctx):
     rnd = ctx["rnd"]
     if i == 0:
         return "fade", 0.7
+    if PLAIN_MODE:
+        return "pandark", 0.9
     hint = sc.get("transition")
     if hint == "cut":
         return "none", 0.0
@@ -12769,6 +12800,40 @@ def make_visuals(scenes, imgdir):
     return failed, requested
 
 
+def strip_everything(scenes, topic_en="", convert=True):
+    """CLEAN SLATE (PLAIN_MODE): remove every editing technique, overlay, label, sticker, map, split screen, transition and camera trick.
+    What is left: one picture or clip per spoken sentence, shown for exactly that sentence, plain cuts, voice and music."""
+    KEEP = {"text_hi", "prompt_en", "query_en", "entity_en", "clip_en", "motion", "image", "img", "path", "file", "img2"}
+    for sc in scenes:
+        if not convert and sc.get("type") != "photo":
+            continue
+        for k in ("items", "beats", "t151"):
+            sc[k] = []
+        for k in ("kw", "vox", "t151_ctx", "headline_hi", "pills"):
+            sc[k] = None
+        for k in ("grade", "transition", "cam", "fx", "tech"):
+            sc.pop(k, None)
+        if convert and sc.get("type") != "photo":
+            sc["type"] = "photo"
+            sc["shots"] = [{"text_hi": sc["narration_hi"], "prompt_en": (sc.get("image_prompt_en") or topic_en or "a calm cinematic nature scene")[:400], "query_en": ""}]
+        sc["shots"] = [{k: v for k, v in (sh or {}).items() if k in KEEP} for sh in sc.get("shots") or []]
+        for sh in sc["shots"]:
+            sh["trans"] = ""
+    try:
+        snap_to_sentences(scenes, topic_en)
+    except Exception as e:  # noqa
+        log("plain mode: sentence snap failed:", str(e)[:100])
+    for sc in scenes:
+        for n_, sh in enumerate(sc.get("shots") or []):
+            if n_ > 0:
+                sh["trans"] = "pandark"
+            for k in list(sh):
+                if k not in KEEP and k not in ("text_hi", "trans"):
+                    if k in ("kf", "tech", "cam", "trans", "label_hi", "popup_en", "bubble_hi", "place_hi", "title_hi", "year_hi", "note_hi", "mark_hi", "fx", "fx_x", "fx_y", "focus_x", "focus_y"):
+                        sh.pop(k, None)
+    log(f"PLAIN MODE: all techniques removed ({len(scenes)} scenes)")
+
+
 def pipeline():
     for tool in ("ffmpeg", "ffprobe"):
         if not shutil.which(tool):
@@ -12858,6 +12923,8 @@ def pipeline():
     story_context(topic_en, own_story, script)
     build_sketches(scenes, topic_en)
     director_pass(scenes, topic_en + (("\nSTORY CONTEXT (keep EVERY picture inside it; relatives and neighbours are people of this culture, never animals or objects): " + STORY_CTX["text"]) if STORY_CTX["on"] else ""))
+    if PLAIN_MODE:
+        strip_everything(scenes, topic_en)
     prov = "gemini" if VOICE_USED[0].startswith("gemini") else "edge"
     wpms[prov] = round(word_count(script) / (total / 60), 1)
     save_json(WPM_FILE, wpms)
@@ -13253,6 +13320,8 @@ def selftest():
 
     voice = make_voice(sc, t0 / "voice", synth=fake_tts)
     total = ffprobe_dur(voice)
+    if PLAIN_MODE and not os.environ.get("SELFTEST_T151"):
+        strip_everything(sc, "test", convert=False)
     if os.environ.get("SELFTEST_T151"):
         globals()["gemini_json"] = lambda *a_, **k_: {"scenes": []}
         plan_t = plan_t151(sc, "test")
