@@ -309,9 +309,9 @@ def gemini_json(prompt, temperature=0.8, optional=False):
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
 ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8,
-              "measure": 4.0, "qmark": 2.8, "lens": 4.2, "beforeafter": 5.0, "compare": 5.6, "mark": 3.4, "chart": 5.6, "tline": 6.0, "hl": 3.6}
+              "measure": 4.0, "qmark": 2.8, "lens": 4.2, "beforeafter": 5.0, "compare": 5.6, "mark": 3.4, "chart": 5.6, "tline": 6.0, "hl": 3.6, "sidelabel": 5.0, "bigtext": 4.0, "tab": 3.6}
 ITEM_SLOT = {"quote": "N", "bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P",
-             "measure": "N", "qmark": "N", "lens": "N", "beforeafter": "N", "compare": "N", "mark": "N", "chart": "N", "tline": "N", "hl": "N"}
+             "measure": "N", "qmark": "N", "lens": "N", "beforeafter": "N", "compare": "N", "mark": "N", "chart": "N", "tline": "N", "hl": "N", "sidelabel": "N", "bigtext": "N", "tab": "N"}
 
 DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
 
@@ -580,6 +580,10 @@ def apply_direction(sc, d):
             mk_ = clean_short(it.get("mark_en"), 50)
             if mk_ and mk_.lower() not in sp_["text"].lower():
                 mk_ = ""
+            if TRUSTED_ONLY and not is_trusted(sp_.get("url", "")):
+                continue
+            if not note_supports(" ".join(wds[max(0, w - 10):w + 16]), sp_["text"]):
+                continue
             rec = {"w": w, "kind": "note", "text": sp_["text"], "mark": mk_, "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))}
             used.add((w, kind))
             items.append(rec)
@@ -903,6 +907,10 @@ SCENES:
                 mk = clean_short(m.get("mark_en"), 50)
                 if mk and mk.lower() not in sp_["text"].lower():
                     mk = ""
+                if TRUSTED_ONLY and not is_trusted(sp_.get("url", "")):
+                    continue
+                if not note_supports(" ".join(sc["narration_hi"].split()[max(0, w - 10):w + 16]), sp_["text"]):
+                    continue
                 sc.setdefault("items", []).append({"w": w, "kind": "note", "text": window_text(sp_["text"], mk), "mark": mk, "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))})
                 stat["notes"] += 1
     # 2b) action clips: wherever the narrator describes a visible ACTION, that moment becomes a real video clip of exactly that action
@@ -962,6 +970,9 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 # CINEMA_MODE (default on): the calm, Netflix-documentary restraint. One idea on screen at a time, no stickers / paper collage unless a chart or timeline truly needs it,
 # the real picture does the work. Set the variable CINEMA_MODE=0 to bring back the busy "every technique everywhere" look (all technique code is kept).
 CINEMA_MODE = os.environ.get("CINEMA_MODE", "1") != "0"
+# REFERENCE ONLY: overlays that never appear in the 10-minute reference video are switched off (REF_ONLY=0 brings them back)
+REF_ONLY = os.environ.get("REF_ONLY", "1") != "0"
+REF_BLOCK = {"mark", "hl", "srclist", "stat", "measure", "chart", "feature", "explain", "action"}  # red circle / red-line text, pink caption bar, SOURCES list, big red stat, ruler, chart, pop-up cards
 CALM_MAX_ITEMS = 999  # no limit: an animation appears every time the narration calls for it
 CALM_GAP = 1.0  # only the SAME kind of animation twice within one second is treated as a duplicate
 CALM_PRI = {"note": 10, "srclist": 10, "person": 9, "name": 9, "place": 9, "title": 9, "year": 8, "stat": 8, "verdict": 8, "explain": 7, "action": 7, "feature": 7, "compare": 7, "chart": 7, "tline": 7,
@@ -999,6 +1010,37 @@ def _tw(w):
     return re.sub(r"[।,.!?\"'“”‘’:;()\-–—…]", "", w)
 
 
+STRICT_SOURCES = os.environ.get("STRICT_SOURCES", "1") != "0"
+_SUPPORT = {}
+
+
+def note_supports(narr_hi, para_en):
+    """A source card is shown only when its REAL page text itself states what the narrator says at that moment (same person / event / claim),
+    not when the page is merely about the same topic. If the check cannot run (no key / error) the card is kept."""
+    if not (STRICT_SOURCES and GEMINI_KEY and narr_hi and para_en):
+        return True
+    key = (narr_hi[:240], para_en[:240])
+    if key in _SUPPORT:
+        return _SUPPORT[key]
+    prompt = f"""Narration (Hindi - what the narrator says right now):
+{narr_hi}
+
+Source paragraph (English, copied from a real web page):
+{para_en[:900]}
+
+Does this paragraph itself state or directly support the specific fact the narration says here (same person, same event, same claim)? A paragraph that is only about the same general topic does NOT count.
+Return ONLY JSON: {{"supports": true}} or {{"supports": false}}"""
+    ok = True
+    try:
+        out = gemini_json(prompt, 0.0)
+        if isinstance(out, dict) and "supports" in out:
+            ok = bool(out.get("supports"))
+    except Exception:  # noqa
+        ok = True
+    _SUPPORT[key] = ok
+    return ok
+
+
 def parse_new_item(kind, it, w):
     """Validates / normalises one new-technique item from Gemini; None when it is unusable."""
     txt = clean_short(it.get("text_hi"), 40)
@@ -1034,6 +1076,20 @@ def parse_new_item(kind, it, w):
             return None
         base["ci"] = _TECH_SEQ[0] % len(HL_COLS)
         _TECH_SEQ[0] += 1
+        return base
+    if kind == "sidelabel":
+        a_, b_ = clean_short(it.get("a_hi"), 16), clean_short(it.get("b_hi"), 16)
+        if not a_ or not b_:
+            return None
+        base.update({"a_hi": a_, "b_hi": b_})
+        return base
+    if kind == "bigtext":
+        if not txt or len(txt.split()) > 3:
+            return None
+        base["sub"] = clean_short(it.get("sub_hi"), 40)
+        return base
+    if kind == "tab":
+        base["text"] = clean_short(it.get("text_hi"), 18) or "BREAKING NEWS"
         return base
     if kind == "beforeafter":
         a_ = clean_short(it.get("after_en"), 60)
@@ -1090,6 +1146,8 @@ def _free_word(have, w, kind, gap=3):
 
 STOP_HI = set("और या कि की के का को में से पर तक ने भी ही तो यह वह ये वो इस उस इन उन एक कुछ सब जो जब तब अब यहाँ वहाँ क्योंकि लेकिन मगर फिर बहुत बस हर कोई किसी अपने अपना अपनी उसके उसकी उनके उनकी इसके इसकी इनके तरह साथ बाद पहले बीच लिए वाला वाली वाले कर करके करना होता होती होते हुआ हुई हुए गया गई गए था थी थे है हैं हो सकता सकती सकते रहा रही रहे जाता जाती जाते आया आई आए लगा लगी लगे दिया दी दिए लिया ली लिए कहा कहते कहती बोला बोली जैसे ऐसे ऐसा ऐसी कैसे क्यों क्या कौन कहाँ कब तभी जहाँ वही यही सिर्फ़ सिर्फ केवल जैसा तक भर ज़रा जरा और्".split())
 VERB_END = ("ता", "ती", "ते", "या", "ये", "ना", "कर", "गा", "गी", "गे", "ेगा", "ेगी", "ेंगे", "ूँ", "ें", "ाओ", "ाई", "ाए", "ाया", "ाते", "ाती", "ाता", "ाना")
+NEWS_WORDS = ("अख़बार", "अखबार", "अख़बारों", "अखबारों", "समाचार", "खबर", "ख़बर", "ख़बरें", "खबरें", "सुर्ख़ियाँ", "सुर्खियां", "सुर्खियाँ")
+TIME_UNITS = ("महीने", "महीना", "महीनों", "सालों", "साल", "दिन", "दिनों", "हफ़्ते", "हफ्ते", "घंटे", "घंटों", "मिनट", "सदी")
 Q_STRICT = ("क्यों", "कैसे", "आखिर", "रहस्य", "पहेली", "सवाल")
 LENS_STRICT = ("माइक्रोस्कोप", "सूक्ष्म", "बारीकी", "बारीक")
 LENS_LOOK = ("ध्यान", "गौर", "नज़दीक", "नजदीक", "करीब")
@@ -1166,6 +1224,10 @@ def det_techniques(scenes):
             elif t_ in MEAS_ALL and i >= 2 and (_tw(wds[i - 2]) in HI_NUMS or NUM_RE.match(_tw(wds[i - 2]) or "x")) and UNIT_RE.fullmatch(prev):
                 add({"w": i, "kind": "measure", "text": f"{_tw(wds[i-2])} {prev}", "orient": "v" if t_ in ("ऊँचा", "ऊंचा", "गहरा") else "h", "sub": t_}, 3)
             # QUESTION MARK = the narrator asks a real question or opens a mystery (ONE mark each time; as often as the story asks)
+            if t_ in NEWS_WORDS:
+                add({"w": i, "kind": "tab", "text": "BREAKING NEWS"}, 6)
+            if has_num and t_ in TIME_UNITS:
+                add({"w": i, "kind": "bigtext", "text": f"{prev} {t_}", "sub": ""}, 6)
             if "?" in w_ or t_ in Q_STRICT:
                 add({"w": i, "kind": "qmark", "text": ""}, 5)
             # MAGNIFIER = the narrator tells the viewer to look closely at a small physical detail ("बारीकी से देखें", "गौर से", "माइक्रोस्कोप"), never a random small word
@@ -1322,6 +1384,9 @@ Find every moment where one of these on-screen techniques fits what is REALLY be
 - "chart": 2-6 numbers the narrator says that can be compared or that change. {{"w":..,"kind":"chart","type":"bar"|"line","title_hi":"short title","pts":[{{"label_hi":"short label","v":number,"show_hi":"as spoken"}}]}} Numbers ONLY as spoken, never invented.
 - "tline": 3-5 dated events told in order. {{"w":..,"kind":"tline","events":[{{"when_hi":"year / date as spoken","what_hi":"2-4 words"}}]}}
 - "hl": THE key claim / conclusion of the scene in at most 8 words, exactly as said. {{"w":..,"kind":"hl","text_hi":"the claim"}}
+- "sidelabel": the narrator contrasts two states (old/new, before/after, then/now): two short labels (1-2 words each) in the lower corners. {{"w":..,"kind":"sidelabel","a_hi":"new / after state","b_hi":"old / before state"}}
+- "bigtext": a time span or key number that is the point of the sentence (तीन महीने, 7 दिन, 1985). Big text in the lower left. {{"w":..,"kind":"bigtext","text_hi":"number + unit, max 3 words","sub_hi":"optional short caption"}}
+- "tab": the narrator talks about a newspaper / news report / headline: a news tab. {{"w":..,"kind":"tab","text_hi":"BREAKING NEWS or a short Hindi tag"}}
 Never invent facts or numbers. If nothing fits a scene return an empty list.
 Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
 {listing}"""
@@ -1605,6 +1670,103 @@ Return JSON: [{{"topic_en": "...", "topic_hi": "..."}}]"""
         raise RuntimeError("No new topic available")
     en, hi = random.choice(seeds)
     return "seed", en, hi
+
+
+# --------------------------------------------------------------------------- TRUE-STORY topics that really have trusted sources
+TOPIC_MODE = os.environ.get("TOPIC_MODE", "story")  # "story" = real documented stories with trusted sources (default); "science" = the old nature / science categories
+TRUSTED_ONLY = os.environ.get("TRUSTED_ONLY", "1") != "0"  # source cards come only from trusted organisations
+TRUSTED_MIN = int(os.environ.get("TRUSTED_MIN", "3"))  # a topic needs at least this many DIFFERENT trusted organisations covering it
+TRUSTED_DOMAINS = {
+    "wikipedia.org", "britannica.com", "bbc.com", "bbc.co.uk", "reuters.com", "apnews.com", "theguardian.com", "nytimes.com", "washingtonpost.com",
+    "wsj.com", "economist.com", "npr.org", "pbs.org", "cnn.com", "aljazeera.com", "time.com", "newyorker.com", "theatlantic.com", "smithsonianmag.com",
+    "si.edu", "nationalgeographic.com", "history.com", "nasa.gov", "noaa.gov", "nih.gov", "ncbi.nlm.nih.gov", "who.int", "un.org", "unesco.org", "icrc.org",
+    "nature.com", "science.org", "sciencedirect.com", "springer.com", "jstor.org", "cell.com", "thelancet.com", "bmj.com", "pnas.org", "plos.org",
+    "thehindu.com", "indianexpress.com", "hindustantimes.com", "timesofindia.indiatimes.com", "ndtv.com", "livemint.com", "pib.gov.in", "loc.gov",
+    "archives.gov", "fbi.gov", "cia.gov", "scientificamerican.com", "newscientist.com", "vox.com", "bloomberg.com", "ft.com", "forbes.com",
+}
+TRUSTED_SUFFIX = (".edu", ".gov", ".gov.in", ".nic.in", ".ac.uk", ".ac.in", ".edu.au", ".gov.uk", ".int")
+STORY_CATEGORIES = [
+    "real documented cases studied by universities or scientists that still puzzle experts",
+    "real survival stories with official investigations or news coverage",
+    "real historical mysteries that investigators or historians have documented in detail",
+    "real scientific or medical discoveries and the people behind them, covered by journals and encyclopedias",
+    "real disasters, rescues and rare events documented by governments and major news agencies",
+    "real crimes or investigations with court or official records",
+    "real expeditions, explorers and unusual journeys documented by museums and geographic societies",
+    "real inventions or breakthroughs that happened by accident or against the odds",
+]
+
+
+def is_trusted(url):
+    """url or plain host name (grounding results give the site name as a title, e.g. "britannica.com")."""
+    u = (url or "").strip().lower()
+    host = _dom(u) if "/" in u else (u[4:] if u.startswith("www.") else u)
+    if not host or " " in host:
+        return False
+    return host in TRUSTED_DOMAINS or any(host.endswith("." + d) for d in TRUSTED_DOMAINS) or host.endswith(TRUSTED_SUFFIX)
+
+
+def trusted_domains_for(topic_en):
+    """How many DIFFERENT trusted organisations have a page about this topic (found with a real web search)?"""
+    before = len(GROUND_SRC)
+    try:
+        gemini(f"Find the best web pages (encyclopedias, universities, major news agencies, governments, journals) about this real story: {topic_en}. Summarise the verified facts in 5 lines.",
+               search=True, temperature=0.1, optional=True)
+    except Exception as e:  # noqa
+        log("  trusted-source check failed:", str(e)[:100])
+        return set()
+    found = set()
+    for x in GROUND_SRC[before:]:
+        ttl = (x.get("title") or "").strip().lower()
+        host = ttl if re.fullmatch(r"[a-z0-9][a-z0-9.\-]*\.[a-z]{2,}", ttl) else _dom(x.get("uri", ""))  # grounding links are redirect addresses; the title is the site name
+        if is_trusted(host):
+            found.add(host[4:] if host.startswith("www.") else host)
+    return found
+
+
+def pick_story_topic(done):
+    cat = random.choice(STORY_CATEGORIES)
+    covered = [v.get("topic_en", "") for v in done.get("videos", [])][-300:]
+    prompt = f"""You plan videos for a Hindi true-story documentary YouTube channel for general viewers in India.
+Category: {cat}
+Suggest 10 REAL, specific stories that actually happened. Each must have a well-known name, place and year, be gripping in 5-10 minutes, and be
+documented by SEVERAL trusted organisations (universities, encyclopedias such as Britannica / Wikipedia, major news agencies such as BBC / Reuters / AP,
+governments, scientific journals, museums) so that real source pages exist. No rumours, no legends without records, no invented cases.
+Do NOT repeat or rephrase any of these already-covered topics: {json.dumps(covered, ensure_ascii=False)}
+Return JSON: [{{"topic_en": "...", "topic_hi": "...", "organisations": ["names of 3+ trusted organisations that documented it"]}}]"""
+    try:
+        items = gemini_json(prompt, temperature=1.0)
+    except Exception as e:  # noqa
+        log("Story topic generation failed:", str(e)[:120])
+        return None
+    best = None
+    tried = 0
+    for it in items if isinstance(items, list) else []:
+        t = (it.get("topic_en") or "").strip()
+        if not t or is_dup(t, done):
+            continue
+        tried += 1
+        if tried > 6:
+            break
+        found = trusted_domains_for(t)
+        log(f"  story candidate: {t[:70]} | trusted organisations found: {len(found)} {sorted(found)[:5]}")
+        if best is None or len(found) > best[0]:
+            best = (len(found), t, it.get("topic_hi") or t)
+        if len(found) >= TRUSTED_MIN:
+            return "story", t, (it.get("topic_hi") or t)
+    if best and best[0] >= 1:
+        log(f"  no story reached {TRUSTED_MIN} trusted organisations; the best one ({best[0]}) is used")
+        return "story", best[1], best[2]
+    return None
+
+
+def pick_topic_any(done):
+    if TOPIC_MODE == "story" and GEMINI_KEY:
+        r = pick_story_topic(done)
+        if r:
+            return r
+        log("No story with trusted sources was found: the normal science topic is used")
+    return pick_topic(done)
 
 
 # --------------------------------------------------------------------------- research + script
@@ -2426,11 +2588,15 @@ FONT_NAMES = {
     "title": ["Khand-Bold.ttf", "YatraOne-Regular.ttf", "Mukta-ExtraBold.ttf", "Hind-Bold.ttf"],
     "thumb": ["Mukta-ExtraBold.ttf", "Hind-Bold.ttf", "Mukta-Bold.ttf"],
     "serif": ["PT_Serif-Web-Bold.ttf", "PTSerif-Bold.ttf"],
+    "geo": ["Poppins-Bold.ttf", "Poppins-SemiBold.ttf"],
+    "geom": ["Poppins-Medium.ttf", "Poppins-Regular.ttf", "Poppins-Bold.ttf"],
     "type": ["SpecialElite-Regular.ttf"],
     "cond": ["BebasNeue-Regular.ttf", "Anton-Regular.ttf", "Khand-Bold.ttf"],
     "comic": ["Bangers-Regular.ttf"],
 }
 SYS_ROLE = {  # Latin-only fallbacks when the nicer font could not be downloaded
+    "geo": ["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", "/usr/share/fonts/**/NotoSans-Bold.ttf"],
+    "geom": ["/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", "/usr/share/fonts/**/NotoSans-Regular.ttf"],
     "serif": ["/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf", "/usr/share/fonts/**/NotoSerif-Bold.ttf", "/usr/share/fonts/**/LiberationSerif-Bold.ttf"],
     "type": ["/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf", "/usr/share/fonts/**/LiberationMono-Bold.ttf"],
     "cond": ["/usr/share/fonts/truetype/dejavu/DejaVuSansCondensed-Bold.ttf", "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf"],
@@ -4987,9 +5153,9 @@ def ov_sprite(kind, text, mark, pal):
 SRC_STYLES = ["banner", "paper", "dark", "doc", "strip", "box"]
 STYLE_CYCLE = ["strip", "box", "strip", "paper", "strip", "dark", "box", "doc", "banner"]  # small lower-left cards are the most common in the reference
 V2_KINDS = ("quote", "note", "year", "person", "stat", "verdict", "explain", "srclist", "action", "place", "name", "feature",
-            "measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl")
+            "measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab")
 OV_MAXT = {"quote": 4.4, "place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0, "name": 4.4, "place": 4.8, "feature": 7.6,
-         "measure": 6.0, "qmark": 5.0, "lens": 6.0, "beforeafter": 7.0, "compare": 7.6, "mark": 5.0, "chart": 7.6, "tline": 8.0, "hl": 5.0}
+         "measure": 6.0, "qmark": 5.0, "lens": 6.0, "beforeafter": 7.0, "compare": 7.6, "mark": 5.0, "chart": 7.6, "tline": 8.0, "hl": 5.0, "sidelabel": 5.0, "bigtext": 4.2, "tab": 3.8}
 _BLACK = {}
 
 
@@ -5010,7 +5176,7 @@ def _dom(url):
 
 def font_for(text, size, role):
     """English text may use the fancy Latin fonts; Hindi text always uses a Devanagari font."""
-    if role in ("serif", "type", "cond", "comic") and not all(ord(c) < 0x250 for c in (text or "")):
+    if role in ("serif", "type", "cond", "comic", "geo", "geom") and not all(ord(c) < 0x250 for c in (text or "")):
         role = "title"
     return load_font(size, role)
 
@@ -5216,39 +5382,38 @@ def build_card(style, body, title, dom, mark):
     if len(_CARDS) > 8:
         _CARDS.clear()
     body, title = _ascii(body), pretty_source(title)[:110]
-    dom = ""  # a web address is never written on the video: only the plain name of the source
+    dom = (dom or "").strip().lower()  # reference: "Source: podscripts.co" - the real address of the page the text was taken from
     mark = _ascii(mark)
     probe = ImageDraw.Draw(Image.new("L", (4, 4)))
-    if style == "banner":
-        fT, fB, fG = font_for("A", 33, "cond"), font_for("A", 28, "serif"), font_for("A", 24, "cond")
-        maxw = W - 150
+    if style == "banner":  # reference 8:45: no box; left aligned block at 5.5% of the width, yellow "Source:", bold white title, small grey body
+        fT, fB, fG = font_for("A", 34, "geo"), font_for("A", 25, "geom"), font_for("A", 27, "geo")
+        X0 = int(W * 0.055)
+        maxw = int(W * 0.75)
         body = _fit_text(probe, body, mark, fB, maxw, 3)
         words = body.split()
         idx = _mark_idx(words, mark)
         lines, _sp = _flow(probe, body, fB, maxw, 3)
         lh = int(fB.size * 1.5)
-        tag = ("SOURCE: " + dom.upper()) if dom else "SOURCE"
-        tw_ = probe.textlength(tag, font=fG)
-        head_h = 40
-        t_lines = wrap_text(probe, title.upper(), fT, maxw)[:2] if title else []
-        h = 70 + head_h + len(t_lines) * 40 + len(lines) * lh + 36
+        tag = ("Source: " + dom) if dom else "Source:"
+        head_h = 42
+        t_lines = wrap_text(probe, title, fT, maxw)[:2] if title else []
+        h = 70 + head_h + len(t_lines) * 44 + len(lines) * lh + 84
         bg = Image.new("RGBA", (W, h), (0, 0, 0, 0))
-        g = Image.linear_gradient("L").resize((W, h)).point(lambda v: int(min(1.0, v / 150.0) ** 1.3 * 215))
+        g = Image.linear_gradient("L").resize((W, h)).point(lambda v: int(min(1.0, v / 170.0) ** 1.4 * 150))
         scr = Image.new("RGBA", (W, h), (0, 0, 0, 255))
         scr.putalpha(g)
         bg.alpha_composite(scr)
         text = Image.new("RGBA", (W, h), (0, 0, 0, 0))
         dt = ImageDraw.Draw(text)
         y = 70
-        dt.rounded_rectangle([60, y, 60 + tw_ + 30, y + head_h - 6], radius=6, fill=(214, 28, 40, 255))
-        dt.text((75, y + head_h - 13), tag, font=fG, fill=(255, 255, 255, 255), anchor="ls")
+        dt.text((X0, y + head_h - 13), tag, font=fG, fill=(255, 213, 64, 255), anchor="ls", stroke_width=1, stroke_fill=(0, 0, 0, 255))
         y += head_h
         for tl_ in t_lines:
-            dt.text((62, y + 28), tl_, font=fT, fill=(255, 255, 255, 255), anchor="ls", stroke_width=2, stroke_fill=(0, 0, 0, 255))
-            y += 40
+            dt.text((X0, y + 30), tl_, font=fT, fill=(255, 255, 255, 255), anchor="ls", stroke_width=1, stroke_fill=(0, 0, 0, 255))
+            y += 44
         y += 6
-        _draw_words(dt, lines, fB, 62, y, lh, (255, 255, 255, 255), 2)
-        runs = _runs_of(lines, idx, 62, y, lh, fB.size)
+        _draw_words(dt, lines, fB, X0, y, lh, (226, 226, 226, 255), 2)
+        runs = _runs_of(lines, idx, X0, y, lh, fB.size)
         card = SrcCard(bg, text, runs, _hl_underline)
     elif style == "dark":
         fT, fB, fG = font_for("A", 44, "serif"), font_for("A", 30, "serif"), font_for("A", 26, "cond")
@@ -5722,7 +5887,7 @@ def draw_verdict(fr, ps, tl, t0, t1, a, ov):
 
 # =========================================================================== TECHNIQUES v4: measuring, question mark, magnifier lens, before/after slider, comparison panel,
 # VOX-style marker annotations, animated charts, multi-event timeline, highlight bar and the Vox paper-collage frame.  (Never remove: see PERMANENT_TECHNIQUES)
-NEW_KINDS = ("measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl")
+NEW_KINDS = ("measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab")
 VOX_CHART_COLS = [(0, 150, 170), (236, 84, 64), (58, 98, 200), (240, 160, 30), (112, 176, 66), (146, 86, 188)]
 HL_COLS = [((255, 64, 120), (255, 255, 255)), ((0, 190, 220), (10, 14, 24)), ((150, 226, 60), (10, 14, 24)), ((255, 255, 255), (10, 14, 24))]
 _VX = {}
@@ -6219,7 +6384,7 @@ def vox_collage(fr, q, ci, kind="chart"):
     return base.convert("RGB")
 
 
-ON_PHOTO = {"lens", "beforeafter", "measure", "qmark", "mark", "explain", "action", "feature", "verdict"}
+ON_PHOTO = {"lens", "beforeafter", "measure", "qmark", "mark", "explain", "action", "feature", "verdict", "sidelabel", "bigtext", "tab"}
 KW_COLS = [((236, 84, 64), (255, 255, 255)), ((0, 150, 170), (255, 255, 255)), ((58, 98, 200), (255, 255, 255)), ((250, 250, 244), (24, 26, 34)), ((240, 170, 30), (24, 26, 34))]
 
 
@@ -6288,11 +6453,96 @@ def draw_kw_corner(fr, kws, t, dur, subj_x, has_label, blocked):
     put(fr, spr, cx, H * 0.115, 0.85 + 0.15 * cl(q), a)
 
 
+# =========================================================================== reference overlays that were missing: two corner labels (NEW STYLE / OLD STYLE), big time-span text (3 MONTHS), news tab (BREAKING NEWS)
+def _lbl(text, size, fill=(255, 255, 255), stroke_fill=(0, 0, 0)):
+    key = ("lbl2", text, size, fill)
+    if key not in _VX:
+        _VX[key] = text_layer(text, font_for(text, size, "title"), fill=fill, stroke=max(2, int(size * 0.06)), stroke_fill=stroke_fill, shadow=(0, 6, 10, 0.8))
+    return _VX[key]
+
+
+def _stack(text, size, fill=(255, 255, 255)):
+    """Text of one or two words stacked on two lines (reference: NEW / STYLE, OLD / STYLE), returns a list of sprites."""
+    parts = str(text).split(None, 1)
+    return [_lbl(p_, size, fill) for p_ in parts] if parts else []
+
+
+def draw_sidelabel(fr, sh, tl, t0, t1, a, ov):
+    """Reference 9:18-9:21: two big condensed labels in the lower corners of a split picture: NEW STYLE (left) and OLD STYLE (right)."""
+    it = ov.get("it") or {}
+    pairs = [(it.get("a_hi") or it.get("text") or "", -1), (it.get("b_hi") or "", 1)]
+    q = e_back(cl((tl - t0) / 0.45))
+    out = 1 - cl((tl - (t1 - 0.35)) / 0.35)
+    size = int(H * 0.085)
+    for text, side in pairs:
+        sp = _stack(text, size)
+        if not sp:
+            continue
+        w = max(s_.width for s_ in sp)
+        h = sum(s_.height * 0.62 for s_ in sp)
+        cx = (W * 0.06 + w / 2) if side < 0 else (W * 0.94 - w / 2)
+        y = H * 0.885 - h
+        for s_ in sp:
+            put(fr, s_, cx + side * (1 - cl(q)) * 90, y + s_.height * 0.31, 0.8 + 0.2 * cl(q), a * out)
+            y += s_.height * 0.62
+
+
+def draw_bigtext(fr, sh, tl, t0, t1, a, ov):
+    """Reference 9:54: a time span or key number as big bold text, lower left (number in red, unit in white), small caption under it."""
+    it = ov.get("it") or {}
+    text = str(it.get("text") or "").strip()
+    if not text:
+        return
+    q = e_out(cl((tl - t0) / 0.5))
+    out = 1 - cl((tl - (t1 - 0.35)) / 0.35)
+    size = int(H * 0.13)
+    parts = text.split(None, 1)
+    big = [_lbl(parts[0], size, (232, 40, 52))]
+    if len(parts) > 1:
+        big.append(_lbl(parts[1], size, (255, 255, 255)))
+    gap = -int(size * 0.06)
+    tw = sum(s_.width for s_ in big) + gap * (len(big) - 1)
+    x = W * 0.06 - (1 - q) * 160
+    cy = H * 0.80
+    for s_ in big:
+        put(fr, s_, x + s_.width / 2, cy, 1.0, a * out * q)
+        x += s_.width + gap
+    sub = str(it.get("sub") or "").strip()
+    if sub:
+        sp = _lbl(sub, int(H * 0.034), (225, 225, 225))
+        put(fr, sp, W * 0.06 - (1 - q) * 160 + sp.width / 2, cy + size * 0.74, 1.0, a * out * q)
+
+
+def _tab_sprite(text):
+    key = ("tab", text)
+    if key not in _VX:
+        size = int(H * 0.036)
+        t = text_layer(text, font_for(text, size, "title"), fill=(255, 255, 255))
+        pw, ph = t.width + int(H * 0.05), t.height + int(H * 0.03)
+        sp = Image.new("RGBA", (pw + int(H * 0.03), ph), (0, 0, 0, 0))
+        d = ImageDraw.Draw(sp)
+        d.rectangle([0, 0, int(H * 0.03), ph], fill=(214, 28, 44, 255))
+        d.rectangle([int(H * 0.03), 0, sp.width, ph], fill=(18, 18, 20, 235))
+        sp.alpha_composite(t, (int(H * 0.03) + int(H * 0.025), (ph - t.height) // 2))
+        _VX[key] = sp
+    return _VX[key]
+
+
+def draw_tab(fr, sh, tl, t0, t1, a, ov):
+    """Reference 9:57: a dark news tab (BREAKING NEWS) slides in at the right edge when the narrator talks about a newspaper / news report."""
+    it = ov.get("it") or {}
+    text = str(it.get("text") or "BREAKING NEWS")
+    sp = _tab_sprite(text)
+    q = e_out(cl((tl - t0) / 0.35))
+    out = 1 - cl((tl - (t1 - 0.3)) / 0.3)
+    put(fr, sp, W - sp.width / 2 - 24 + (1 - q) * (sp.width + 40), H * 0.14, 1.0, a * out)
+
+
 def draw_new_kind(fr, sh, tl, t0, t1, a, ov):
     k = ov["kind"]
     try:
         {"measure": draw_measure, "qmark": draw_qmark, "lens": draw_lens, "beforeafter": draw_beforeafter, "compare": draw_compare, "mark": draw_mark,
-         "chart": draw_chart, "tline": draw_tline, "hl": draw_hl}[k](fr, sh, tl, t0, t1, a, ov)
+         "chart": draw_chart, "tline": draw_tline, "hl": draw_hl, "sidelabel": draw_sidelabel, "bigtext": draw_bigtext, "tab": draw_tab}[k](fr, sh, tl, t0, t1, a, ov)
     except Exception as e:  # noqa
         if not _VX.get("err_" + k):
             _VX["err_" + k] = 1
@@ -6356,9 +6606,9 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
 
 # =========================================================================== V3: guaranteed sources, auto word-detector, roll-out paper, keyframe-animated PNG
 ITEM_PRI = {"quote": 3, "note": 6, "srclist": 6, "feature": 6, "verdict": 5, "explain": 5, "action": 5, "name": 3, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2,
-            "measure": 4, "qmark": 3, "lens": 4, "beforeafter": 6, "compare": 5, "mark": 4, "chart": 6, "tline": 6, "hl": 5}
+            "measure": 4, "qmark": 3, "lens": 4, "beforeafter": 6, "compare": 5, "mark": 4, "chart": 6, "tline": 6, "hl": 5, "sidelabel": 5, "bigtext": 5, "tab": 3}
 ITEM_MIN = {"quote": 2.4, "year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "verdict": 3.4, "explain": 3.4, "srclist": 3.6, "action": 2.6, "name": 2.4, "feature": 5.0,
-            "measure": 3.0, "qmark": 2.2, "lens": 3.4, "beforeafter": 4.2, "compare": 5.0, "mark": 2.8, "chart": 5.0, "tline": 5.0, "hl": 2.8}
+            "measure": 3.0, "qmark": 2.2, "lens": 3.4, "beforeafter": 4.2, "compare": 5.0, "mark": 2.8, "chart": 5.0, "tline": 5.0, "hl": 2.8, "sidelabel": 3.0, "bigtext": 2.6, "tab": 2.2}
 
 
 def item_zones(it):
@@ -6369,6 +6619,12 @@ def item_zones(it):
         return {"B"}
     if k == "bubble":
         return {"T"}
+    if k == "sidelabel":
+        return {"SL"}  # corners: shares the screen with a source card
+    if k == "bigtext":
+        return {"BT"}
+    if k == "tab":
+        return {"TAB"}
     return {"M"}  # person, stat, title, verdict, explain
 
 
@@ -6526,7 +6782,9 @@ Return ONLY JSON: {{"matches":[...]}}
             sc = next((x for x in batch if ph.index(x) == i), None)
             sp_ = SRC_PARAS.get(str(r.get("src") or "").strip())
             fit = str(r.get("fit") or "").lower()
-            if sc is None or sp_ is None or fit not in ("direct", "related") or not (0 <= w < len(sc["narration_hi"].split())):
+            if sp_ is not None and TRUSTED_ONLY and not is_trusted(sp_.get("url", "")):
+                continue
+            if sc is None or sp_ is None or fit not in (("direct",) if STRICT_SOURCES else ("direct", "related")) or not (0 <= w < len(sc["narration_hi"].split())):
                 continue
             mk = clean_short(r.get("mark_en"), 70)
             if not mk or mk.lower() not in sp_["text"].lower():
@@ -6579,7 +6837,7 @@ Return ONLY JSON: {{"matches":[...]}}
                 continue
             sc = batch[i]
             sp_ = SRC_PARAS[str(sc["src"]).strip()]
-            if not (0 <= w < len(sc["narration_hi"].split())):
+            if (TRUSTED_ONLY and not is_trusted(sp_.get("url", ""))) or not (0 <= w < len(sc["narration_hi"].split())):
                 continue
             mk = clean_short(r.get("mark_en"), 70)
             if not mk or mk.lower() not in sp_["text"].lower():
@@ -7205,6 +7463,12 @@ def item_zones(it):
         return {"M", "BL", "BR"}
     if k == "measure":
         return {"M"} if it.get("orient") == "v" else {"BL", "BR"}
+    if k == "sidelabel":
+        return {"SL", "BL", "BR"}  # lower corners: never drawn over a source card / banner
+    if k == "bigtext":
+        return {"BL", "BR", "SL"}
+    if k == "tab":
+        return {"TAB"}
     return {"M"}
 
 
@@ -7263,7 +7527,7 @@ def schedule_items(items, dur):
 
 
 DRAW_LAYER = {"quote": 1, "action": 0, "explain": 0, "feature": 0, "verdict": 1, "stat": 1, "person": 2, "name": 2, "place": 2, "year": 3, "bubble": 3, "note": 4, "srclist": 4,
-              "lens": 0, "beforeafter": 0, "measure": 1, "qmark": 1, "mark": 1, "compare": 2, "chart": 2, "tline": 3, "hl": 3}
+              "lens": 0, "beforeafter": 0, "measure": 1, "qmark": 1, "mark": 1, "compare": 2, "chart": 2, "tline": 3, "hl": 3, "sidelabel": 2, "bigtext": 3, "tab": 3}
 
 
 # ---- year: always at the bottom (slider with ticks when the year is known, else a pill)
@@ -7512,7 +7776,7 @@ def cut_sentence_at(sc, w):
 # ---- sources tied to the names the narrator says
 def notes_for_entities(scenes):
     """When the narrator names a person / place / organisation that has a source paragraph (its own Wikipedia article), that paragraph is shown right then."""
-    if not SRC_PARAS:
+    if not SRC_PARAS or STRICT_SOURCES:  # a generic encyclopedia paragraph about a named place does not support what the narrator says
         return 0
     n = 0
     used = set()
@@ -9565,7 +9829,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     if sc.get("items") and wt_:
         rr = ctx["rnd"]
         for k_, it in enumerate(sc["items"]):
-            if it["kind"] not in ITEM_KINDS or (it["kind"] in ("explain", "action", "feature") and it.get("png_img") is None) or (it["kind"] == "beforeafter" and it.get("img2") is None):
+            if (REF_ONLY and it["kind"] in REF_BLOCK) or it["kind"] not in ITEM_KINDS or (it["kind"] in ("explain", "action", "feature") and it.get("png_img") is None) or (it["kind"] == "beforeafter" and it.get("img2") is None):
                 continue
             w_ = min(it["w"], len(wt_) - 1)
             t0_ = max(0.1, wt_[w_][0] - 0.08)
@@ -12609,7 +12873,7 @@ def pipeline():
             globals()["MAX_IMAGES"] = int(os.environ.get("MAX_IMAGES", "48"))
             CLIPS_MAX[0], POPUPS_MAX[0] = int(os.environ.get("MAX_CLIPS", "30")), int(os.environ.get("MAX_POPUPS", "0"))
     else:
-        cat, topic_en, topic_hi = pick_topic(done)
+        cat, topic_en, topic_hi = pick_topic_any(done)
     style = random.choice(STYLES)
     pal = random.choice(PALETTES)
     target = TEST_SEC or random.randint(MIN_SEC, MAX_SEC)
