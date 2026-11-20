@@ -59,12 +59,13 @@ GEMINI_TTS_MODELS = [m for m in os.environ.get(
 GEMINI_TTS_GAP = float(os.environ.get("GEMINI_TTS_GAP", "4"))
 WPM = float(os.environ.get("WPM_ESTIMATE", "130"))  # spoken Hindi words per minute (default estimate)
 MIN_SEC, MAX_SEC = 180, 300
-def _test_sec():
-    v = os.environ.get("TEST_SECONDS", "0").strip().lower()
+def _fixed_sec():
+    v = (os.environ.get("VIDEO_SECONDS") or os.environ.get("TEST_SECONDS") or "0").strip().lower()
     return int(v) if v.isdigit() else 0  # 0 / off / no / full / empty = normal 3-5 minute video
 
 
-TEST_SEC = _test_sec()  # >0 = short test video of about this many seconds
+FIXED_SEC = _fixed_sec()  # >0 = the video is made about this many seconds long, whatever the length of the story
+TEST_SEC = FIXED_SEC if 0 < FIXED_SEC < 120 else 0  # only really short videos use the cheap "test" limits
 UPLOAD_MODE = os.environ.get("UPLOAD_MODE", "telegram").strip().lower()
 SCENE_GAP = 0.18
 HOOK_GAP = 0.70
@@ -309,9 +310,9 @@ def gemini_json(prompt, temperature=0.8, optional=False):
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
 ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8,
-              "measure": 4.0, "qmark": 2.8, "lens": 4.2, "beforeafter": 5.0, "compare": 5.6, "mark": 3.4, "chart": 5.6, "tline": 6.0, "hl": 3.6, "sidelabel": 5.0, "bigtext": 4.0, "tab": 3.6}
+              "measure": 4.0, "qmark": 2.8, "lens": 4.2, "beforeafter": 5.0, "compare": 5.6, "mark": 3.4, "chart": 5.6, "tline": 16.0, "hl": 3.6, "sidelabel": 5.0, "bigtext": 4.0, "tab": 3.6, "glow": 5.0, "desk": 5.5}
 ITEM_SLOT = {"quote": "N", "bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P",
-             "measure": "N", "qmark": "N", "lens": "N", "beforeafter": "N", "compare": "N", "mark": "N", "chart": "N", "tline": "N", "hl": "N", "sidelabel": "N", "bigtext": "N", "tab": "N"}
+             "measure": "N", "qmark": "N", "lens": "N", "beforeafter": "N", "compare": "N", "mark": "N", "chart": "N", "tline": "N", "hl": "N", "sidelabel": "N", "bigtext": "N", "tab": "N", "glow": "N", "desk": "N"}
 
 DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
 
@@ -331,7 +332,8 @@ CAMERA (61-80): push in, pull out, pan, tilt, orbit, parallax, drone reveal, rac
 TEXT (81-100): kinetic type, text reveal, word highlight, lower third, chapter title, date & location title, callout -> items "title", "place" (location title), "year" (date title), "bubble" (quote), "note" (highlighted words).
 DIAGRAM (101-115): flowchart, steps, compare, layers, labels -> engine scene types steps / compare / merge / split / layers; not in photo scenes.
 VFX (116-135): grain, dust, fog, vignette, glitch, light leak, flash, split screen -> already added by the engine lightly; you only choose grade and transitions.
-TRANSITION (136-150): "trans" = fade, zoom, whip, wipe, circle, flash, glitch, cut. Zoom/whip match the camera direction; flash = shock or reveal; circle = focus on one thing; wipe = time passes / moving on; cut = same idea continues; fade = default.
+TRANSITION (136-150): "trans" = slide_l, slide_r, slide_u, slide_d, pandark, blurin, tint_red, tint_blue, blurzoom, dipblack, slash, tear, curl, shred, ink, fade, zoom, whip, wipe, circle, flash, glitch, cut.
+THE REFERENCE GRAMMAR (choose by what the story does, never at random): the next picture normally SLIDES in as ONE continuous move: slide_l = the camera drifts right, the next place comes in from the right; slide_r = the opposite; slide_u / slide_d only when someone looks up or down or something rises or falls. "pandark" = we step into a dark place, evening, fear. "blurin" = waking up, a memory, focus returning, a realisation. "tint_red" = shock, a scream, violence, a possession / supernatural moment. "tint_blue" = cold, death, hospital, night, sadness. "blurzoom" = a sudden event, panic, a fast jump forward. "dipblack" = months or years pass, a chapter ends, a death, the story turns. "slash" = two things compared or two places at once. "tear" / "curl" / "shred" = a document, newspaper, record or piece of evidence is revealed or put away. "ink" = darkness spreading: a curse, a rumour, a secret. "cut" = same scene, next beat. Never the same transition three times in a row. fade is only the last choice.
 
 === STEP 3: BEAT-BY-BEAT ANALYSIS (mandatory, this is what makes you accurate) ===
 Read the scene sentence by sentence and clause by clause. Split it into BEATS: every smallest separate thing the narrator says (each subject, each part, each action, number, date, place, claim, question, reaction). Return them in "beats": [{"w": word index where the beat starts, "says": "the beat in ~5 words", "tech": "catalogue number + name of the ONE best technique for exactly this beat"}]. Then build "mains", "kf" and "items" so that EVERY beat is visibly handled by its technique. A scene with fewer than 3 beats, or with a main that has no technique and no camera movement, is WRONG. Vary techniques: never the same camera move or transition twice in a row, and match them to the tone as described above.
@@ -1091,6 +1093,11 @@ def parse_new_item(kind, it, w):
     if kind == "tab":
         base["text"] = clean_short(it.get("text_hi"), 18) or "BREAKING NEWS"
         return base
+    if kind == "glow":
+        base["tone"] = str(it.get("tone") or "holy") if str(it.get("tone") or "holy") in ("holy", "danger", "cold") else "holy"
+        return base
+    if kind == "desk":
+        return base
     if kind == "beforeafter":
         a_ = clean_short(it.get("after_en"), 60)
         if not a_ or not a_.isascii():
@@ -1146,6 +1153,10 @@ def _free_word(have, w, kind, gap=3):
 
 STOP_HI = set("और या कि की के का को में से पर तक ने भी ही तो यह वह ये वो इस उस इन उन एक कुछ सब जो जब तब अब यहाँ वहाँ क्योंकि लेकिन मगर फिर बहुत बस हर कोई किसी अपने अपना अपनी उसके उसकी उनके उनकी इसके इसकी इनके तरह साथ बाद पहले बीच लिए वाला वाली वाले कर करके करना होता होती होते हुआ हुई हुए गया गई गए था थी थे है हैं हो सकता सकती सकते रहा रही रहे जाता जाती जाते आया आई आए लगा लगी लगे दिया दी दिए लिया ली लिए कहा कहते कहती बोला बोली जैसे ऐसे ऐसा ऐसी कैसे क्यों क्या कौन कहाँ कब तभी जहाँ वही यही सिर्फ़ सिर्फ केवल जैसा तक भर ज़रा जरा और्".split())
 VERB_END = ("ता", "ती", "ते", "या", "ये", "ना", "कर", "गा", "गी", "गे", "ेगा", "ेगी", "ेंगे", "ूँ", "ें", "ाओ", "ाई", "ाए", "ाया", "ाते", "ाती", "ाता", "ाना")
+HOLY_WORDS = ("संत", "साधु", "महात्मा", "महाराज", "पुजारी", "तांत्रिक", "बाबा", "देवी", "पवित्र", "चमत्कार")
+DANGER_WORDS = ("भूत", "प्रेत", "शैतान", "आत्मा", "चुड़ैल", "बुरी", "खौफ़", "ख़ौफ़")
+RESEARCH_WORDS = ("शोधकर्ता", "शोधकर्ताओं", "प्रोफेसर", "जांचकर्ता", "जांचकर्ताओं", "विश्वविद्यालय", "यूनिवर्सिटी")
+_DESK_DONE = [False]  # the desk collage appears once, at the first mention of the research (as in the reference)
 NEWS_WORDS = ("अख़बार", "अखबार", "अख़बारों", "अखबारों", "समाचार", "खबर", "ख़बर", "ख़बरें", "खबरें", "सुर्ख़ियाँ", "सुर्खियां", "सुर्खियाँ")
 TIME_UNITS = ("महीने", "महीना", "महीनों", "सालों", "साल", "दिन", "दिनों", "हफ़्ते", "हफ्ते", "घंटे", "घंटों", "मिनट", "सदी")
 Q_STRICT = ("क्यों", "कैसे", "आखिर", "रहस्य", "पहेली", "सवाल")
@@ -1224,6 +1235,13 @@ def det_techniques(scenes):
             elif t_ in MEAS_ALL and i >= 2 and (_tw(wds[i - 2]) in HI_NUMS or NUM_RE.match(_tw(wds[i - 2]) or "x")) and UNIT_RE.fullmatch(prev):
                 add({"w": i, "kind": "measure", "text": f"{_tw(wds[i-2])} {prev}", "orient": "v" if t_ in ("ऊँचा", "ऊंचा", "गहरा") else "h", "sub": t_}, 3)
             # QUESTION MARK = the narrator asks a real question or opens a mystery (ONE mark each time; as often as the story asks)
+            if t_ in HOLY_WORDS:
+                add({"w": i, "kind": "glow", "tone": "holy", "text": ""}, 25)
+            if t_ in DANGER_WORDS:
+                add({"w": i, "kind": "glow", "tone": "danger", "text": ""}, 25)
+            if t_ in RESEARCH_WORDS and not _DESK_DONE[0]:
+                _DESK_DONE[0] = True
+                add({"w": i, "kind": "desk", "text": ""}, 6)
             if t_ in NEWS_WORDS:
                 add({"w": i, "kind": "tab", "text": "BREAKING NEWS"}, 6)
             if has_num and t_ in TIME_UNITS:
@@ -1374,6 +1392,19 @@ def dedupe_texts(scenes):
 
 def techniques_prompt(topic, listing):
     return f"""Film editor task for a Hindi documentary in the VOX explainer style. Hindi narration, every word numbered (index:word). Video topic: {topic}
+REFERENCE OVERLAY GRAMMAR (every overlay says WHY it appears; there is NO limit on how often an overlay may appear, use it EVERY time its reason happens):
+- note (source card): every time the narrator reports what a study, investigator, newspaper, record or witness says. It appears on the first word of that claim and shows the real text that states it. One card per claim.
+- tline (year slider): every time a year or date is spoken; it appears just before the year word and slides to it.
+- name: the first time a person is named or introduced; it types the name next to that person.
+- bubble: when a person's own spoken words are retold in the first person; the bubble shows exactly those words.
+- quote: one striking sentence someone said or wrote, in big brush letters beside the face.
+- verdict: a myth against a fact, true against false, wrong against right.
+- sidelabel: two states are contrasted (old / new, before / after).
+- bigtext: a time span or count that is the point (three months, seven days).
+- tab: a newspaper, report or news item is mentioned.
+- lens: only when the narrator asks the viewer to look closely at one small physical detail.
+- qmark: only when the narrator raises a real question or a mystery.
+- place / map: when a village, city or journey is named for the first time.
 Find every moment where one of these on-screen techniques fits what is REALLY being said (each exactly on its word, never two on one word, up to 5 per scene, use them generously):
 - "measure": a size / length / height / depth / weight / distance / duration is said. {{"w":..,"kind":"measure","text_hi":"value + unit as spoken, e.g. ३० मीटर","orient":"h" or "v" (v for height / depth),"sub_hi":"what is measured, 1-2 words"}}
 - "qmark": ONE question mark, only when the narrator really asks an open question or opens a mystery the viewer should wonder about (क्यों, कैसे, आखिर...). Every time it happens (no limit), never on a plain statement. {{"w":..,"kind":"qmark"}}
@@ -1387,6 +1418,8 @@ Find every moment where one of these on-screen techniques fits what is REALLY be
 - "sidelabel": the narrator contrasts two states (old/new, before/after, then/now): two short labels (1-2 words each) in the lower corners. {{"w":..,"kind":"sidelabel","a_hi":"new / after state","b_hi":"old / before state"}}
 - "bigtext": a time span or key number that is the point of the sentence (तीन महीने, 7 दिन, 1985). Big text in the lower left. {{"w":..,"kind":"bigtext","text_hi":"number + unit, max 3 words","sub_hi":"optional short caption"}}
 - "tab": the narrator talks about a newspaper / news report / headline: a news tab. {{"w":..,"kind":"tab","text_hi":"BREAKING NEWS or a short Hindi tag"}}
+- "glow": a coloured rim of light around the main person while the narrator speaks of a revered, holy, dangerous or possessed person. {{"w":..,"kind":"glow","tone":"holy (yellow-green) | danger (red) | cold (teal)"}}
+- "desk": the narrator introduces the investigation / the researcher / the study as a whole: a wooden research desk with pages and photos. Use it ONCE for the first mention of the research. {{"w":..,"kind":"desk"}}
 Never invent facts or numbers. If nothing fits a scene return an empty list.
 Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
 {listing}"""
@@ -1674,6 +1707,11 @@ Return JSON: [{{"topic_en": "...", "topic_hi": "..."}}]"""
 
 # --------------------------------------------------------------------------- TRUE-STORY topics that really have trusted sources
 TOPIC_MODE = os.environ.get("TOPIC_MODE", "story")  # "story" = real documented stories with trusted sources (default); "science" = the old nature / science categories
+STORY_STYLE = TOPIC_MODE == "story" or bool(os.environ.get("CUSTOM_STORY", "").strip())  # the channel is a TRUE-STORY channel: every prompt below speaks about real documented stories
+CH_DESC = "Hindi true-story documentary (real, documented cases)" if STORY_STYLE else "Hindi nature & science explainer"
+FALLBACK_SCENE = "a dramatic cinematic scene from the story, natural light" if STORY_STYLE else "a dramatic cinematic nature scene"
+if STORY_STYLE:
+    DIRECTOR_RULES = DIRECTOR_RULES.replace("a Hindi nature/science documentary", "a " + CH_DESC)
 TRUSTED_ONLY = os.environ.get("TRUSTED_ONLY", "1") != "0"  # source cards come only from trusted organisations
 TRUSTED_MIN = int(os.environ.get("TRUSTED_MIN", "3"))  # a topic needs at least this many DIFFERENT trusted organisations covering it
 TRUSTED_DOMAINS = {
@@ -1906,6 +1944,10 @@ def research(topic):
         "the key well-established scientific facts (origins, mechanisms, widely accepted figures with rounded numbers, the most surprising true facts)",
         "the best explanatory articles (NASA, Smithsonian, National Geographic, Britannica, BBC, university pages) - what they say step by step",
         "dates, numbers, places, named scientists / studies and any recent discovery that changed what we know",
+    ] if not STORY_STYLE else [
+        "the verified facts of this real story: who, where, exactly when, and what happened step by step according to official records, investigators or researchers",
+        "the best reports from trusted organisations (universities, Britannica, Wikipedia, BBC, Reuters, AP, national newspapers, government and museum pages) - what each one reports",
+        "exact names, dates, places, numbers, quoted findings, what investigators concluded and which parts are still debated or unexplained",
     ]
     texts, titles_all = [], []
     for ang in angles:
@@ -1985,6 +2027,14 @@ Every scene also has "grade" (colour grading that fits the scene: warm for fire/
 "mood" of the whole video's background music: one of mystery, epic, wonder, calm, tense, life, space.
 """
 
+if STORY_STYLE:  # true-story version of the rules (the reference channel: gripping, documented, never invented)
+    SCRIPT_RULES = SCRIPT_RULES.replace("like an engaging documentary narrator. Short sentences. One idea per scene.", "like a gripping documentary STORYTELLER who keeps the viewer on edge. Short sentences. One moment of the story per scene, told in the order it happened.")
+    SCRIPT_RULES = SCRIPT_RULES.replace("built on a TRUE surprising fact or question, does NOT reveal the answer, ends by promising it", "built on the most striking REAL moment of the story (a person, a place, a year), does NOT reveal how it ends, ends by promising it")
+    SCRIPT_RULES = SCRIPT_RULES.replace("- The viewer must truly UNDERSTAND the topic by the end: define every new term when first used, use one simple everyday analogy, go in a logical order.", "- Tell it as a story with real people, places and years: set the scene, build the tension, show what investigators / witnesses / records say, and end on the strongest documented fact or the unanswered question. Name every source organisation the first time its finding is used (e.g. \"वर्जीनिया यूनिवर्सिटी के शोधकर्ताओं के अनुसार\").")
+    SCRIPT_RULES = SCRIPT_RULES.replace('- Facts: only well-established science, rounded widely-accepted numbers. If something is debated say "वैज्ञानिकों का मानना है". Never invent names, dates, statistics or quotes. If unsure, leave it out.', '- Facts: ONLY what the real source passages report. Where it is a claim, a witness account or still debated, say so (\"जांचकर्ताओं के अनुसार\", \"रिपोर्ट्स के मुताबिक\", \"गाँववालों का दावा था\"). Never invent names, dates, dialogue, statistics or quotes. If unsure, leave it out.')
+    SCRIPT_RULES = SCRIPT_RULES.replace('- Neutral on religion and politics; never mention or mock any belief. Say "वैज्ञानिक मान्यता के अनुसार" for origin topics.', "- Neutral on religion and politics; report what happened and what the sources say, never mock or promote any belief.")
+
+
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
 TRANS_NAMES = ["pandark", "ink", "curl", "shred", "blurin", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
 TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
@@ -1993,10 +2043,10 @@ TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
 
 
 def build_script_prompt(topic, cat, style, target_sec, facts, words):
-    n_scenes = max(5 if TEST_SEC else 14, round(words / 21))
+    n_scenes = max(5 if TEST_SEC else (max(6, FIXED_SEC // 15) if FIXED_SEC else 14), round(words / 21))
     test_note = ("\nTEST MODE: this is a very short test video. Use only about 5-6 scenes, a hook of 15-18 words, no long recap. "
                  "Ignore the minimum counts below. Almost all scenes must be type photo; exactly ONE sketch scene (scene 3 or 4) is wanted; map or counter allowed once if natural; no merge/split/steps/compare/bars.\n") if TEST_SEC else ""
-    return f"""You are a script writer and film editor for a Hindi nature & science explainer YouTube channel.
+    return f"""You are a script writer and film editor for a {CH_DESC} YouTube channel.
 TOPIC: {topic}
 CATEGORY: {cat}
 STRUCTURE STYLE: {style[1]}
@@ -2148,7 +2198,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
         if typ in ("merge", "split", "steps", "compare", "kinetic") and os.environ.get("KEEP_EXPLAINERS") != "1":
             # cartoon explainer cards look cheap: every such scene becomes a real-photo scene (the director then edits it word by word)
             if typ == "kinetic":
-                raw_shots = [{"text_hi": "", "prompt_en": clean_short(sc.get("image_prompt_en"), 400) or "a dramatic cinematic nature scene", "query_en": ""}]
+                raw_shots = [{"text_hi": "", "prompt_en": clean_short(sc.get("image_prompt_en"), 400) or FALLBACK_SCENE, "query_en": ""}]
             else:
                 raw_shots = [{"text_hi": it["label_hi"] or "x", "prompt_en": it["prompt_en"], "query_en": it.get("query_en", "")} for it in sc["items"]]
             sc["shots"] = raw_shots or sc.get("shots")
@@ -2185,7 +2235,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
                                       if str(sh.get("note_hi") or "").strip() else None)), "fx": fr_(sh.get("focus_x")), "fy": fr_(sh.get("focus_y"))})
         if typ == "photo":
             if not shots:
-                shots = [{"text_hi": sc["narration_hi"], "prompt_en": base_prompt or "a dramatic wide nature landscape", "label_hi": ""}]
+                shots = [{"text_hi": sc["narration_hi"], "prompt_en": base_prompt or FALLBACK_SCENE, "label_hi": ""}]
             shots = shots[:8]
             nw = len(sc["narration_hi"].split())
             sw = sum(len(x["text_hi"].split()) for x in shots)
@@ -2200,7 +2250,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
         else:
             sc["shots"] = []
         if typ == "kinetic":
-            sc["image_prompt_en"] = base_prompt or "a dramatic cinematic nature scene"
+            sc["image_prompt_en"] = base_prompt or FALLBACK_SCENE
         else:
             sc["image_prompt_en"] = base_prompt
     for k in ("title_hi", "thumb_text_hi", "description_hi"):
@@ -2292,9 +2342,9 @@ SCENES:
 def write_script(topic, cat, style, target_sec, facts, wpm):
     words = int(target_sec / 60 * wpm)
     script = validate_script(gemini_json(build_script_prompt(topic, cat, style, target_sec, facts, words), 0.8))
-    review = f"""You are (1) a careful science editor, (2) a Hindi school teacher and (3) a documentary film editor.
-Improve this explainer-video script JSON:
-- Remove or soften any claim that is not widely accepted science; fix any factual doubt.
+    review = f"""You are (1) a careful {"fact-checking editor" if STORY_STYLE else "science editor"}, (2) a Hindi school teacher and (3) a documentary film editor.
+Improve this {"true-story" if STORY_STYLE else "explainer-video"} script JSON:
+- {"Remove or soften any claim, detail or quote that the real source passages do not report; keep disputed parts clearly worded as claims; never invent dialogue." if STORY_STYLE else "Remove or soften any claim that is not widely accepted science; fix any factual doubt."}
 - Replace difficult words with simple ones; make sure a 15-year-old understands everything on first listen.
 - Keep scene 1 a truthful suspense hook (25-30 words, type "photo") that does not reveal the answer.
 - Check that every picture matches the words spoken at that moment (each shot's prompt_en must show exactly what its text_hi says; a merge scene must really show A and B combining into the result named in the narration; counter/bars numbers must be correct and round). Fix types/items/labels/headlines/shots where they do not teach.
@@ -2849,7 +2899,7 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
 CF_STATE = {"dead": False, "used": 0}
 PILLS_ON = os.environ.get("PILLS", "0") == "1"
 SUBS_ON = os.environ.get("SUBTITLES", "0") == "1"  # subtitles are OFF: the visuals tell the story
-MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "14" if TEST_SEC else "48"))
+MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "14" if TEST_SEC else str(max(48, FIXED_SEC // 7))))
 
 
 def img_cloudflare(prompt, out, size=(1920, 1080), dims=None):
@@ -5153,9 +5203,9 @@ def ov_sprite(kind, text, mark, pal):
 SRC_STYLES = ["banner", "paper", "dark", "doc", "strip", "box"]
 STYLE_CYCLE = ["strip", "box", "strip", "paper", "strip", "dark", "box", "doc", "banner"]  # small lower-left cards are the most common in the reference
 V2_KINDS = ("quote", "note", "year", "person", "stat", "verdict", "explain", "srclist", "action", "place", "name", "feature",
-            "measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab")
+            "measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab", "glow", "desk")
 OV_MAXT = {"quote": 4.4, "place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0, "name": 4.4, "place": 4.8, "feature": 7.6,
-         "measure": 6.0, "qmark": 5.0, "lens": 6.0, "beforeafter": 7.0, "compare": 7.6, "mark": 5.0, "chart": 7.6, "tline": 8.0, "hl": 5.0, "sidelabel": 5.0, "bigtext": 4.2, "tab": 3.8}
+         "measure": 6.0, "qmark": 5.0, "lens": 6.0, "beforeafter": 7.0, "compare": 7.6, "mark": 5.0, "chart": 7.6, "tline": 18.0, "hl": 5.0, "sidelabel": 5.0, "bigtext": 4.2, "tab": 3.8, "glow": 6.0, "desk": 6.5}
 _BLACK = {}
 
 
@@ -5887,7 +5937,7 @@ def draw_verdict(fr, ps, tl, t0, t1, a, ov):
 
 # =========================================================================== TECHNIQUES v4: measuring, question mark, magnifier lens, before/after slider, comparison panel,
 # VOX-style marker annotations, animated charts, multi-event timeline, highlight bar and the Vox paper-collage frame.  (Never remove: see PERMANENT_TECHNIQUES)
-NEW_KINDS = ("measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab")
+NEW_KINDS = ("measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab", "glow", "desk")
 VOX_CHART_COLS = [(0, 150, 170), (236, 84, 64), (58, 98, 200), (240, 160, 30), (112, 176, 66), (146, 86, 188)]
 HL_COLS = [((255, 64, 120), (255, 255, 255)), ((0, 190, 220), (10, 14, 24)), ((150, 226, 60), (10, 14, 24)), ((255, 255, 255), (10, 14, 24))]
 _VX = {}
@@ -6384,7 +6434,7 @@ def vox_collage(fr, q, ci, kind="chart"):
     return base.convert("RGB")
 
 
-ON_PHOTO = {"lens", "beforeafter", "measure", "qmark", "mark", "explain", "action", "feature", "verdict", "sidelabel", "bigtext", "tab"}
+ON_PHOTO = {"lens", "beforeafter", "measure", "qmark", "mark", "explain", "action", "feature", "verdict", "sidelabel", "bigtext", "tab", "glow", "desk"}
 KW_COLS = [((236, 84, 64), (255, 255, 255)), ((0, 150, 170), (255, 255, 255)), ((58, 98, 200), (255, 255, 255)), ((250, 250, 244), (24, 26, 34)), ((240, 170, 30), (24, 26, 34))]
 
 
@@ -6538,11 +6588,108 @@ def draw_tab(fr, sh, tl, t0, t1, a, ov):
     put(fr, sp, W - sp.width / 2 - 24 + (1 - q) * (sp.width + 40), H * 0.14, 1.0, a * out)
 
 
+# ---- reference overlays, part 2: coloured glow around a revered / dangerous person (489s, 6:00) and the research DESK collage (3:09-3:15)
+def draw_glow(fr, sh, tl, t0, t1, a, ov):
+    """A soft coloured rim of light around the main person: yellow-green for holy / revered people, red for danger or possession, teal for cold scenes."""
+    it = ov.get("it") or {}
+    col = {"holy": (190, 232, 60), "danger": (238, 40, 40), "cold": (60, 176, 206)}.get(str(it.get("tone") or "holy"), (190, 232, 60))
+    q = e_out(cl((tl - t0) / 0.55)) * (1 - cl((tl - (t1 - 0.5)) / 0.5)) * a
+    if q <= 0.01:
+        return
+    np = _np()
+    cx, cy = _subj(sh)
+    key = ("glow", W, H, round(cx, 2), round(cy, 2))
+    if key not in _VX:
+        if len([k for k in _VX if isinstance(k, tuple) and k and k[0] == "glow"]) > 6:
+            for k in [k for k in _VX if isinstance(k, tuple) and k and k[0] == "glow"][:3]:
+                _VX.pop(k, None)
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        r = np.sqrt(((xx - cx * W) / (W * 0.20)) ** 2 + ((yy - cy * H) / (H * 0.46)) ** 2)
+        _VX[key] = np.exp(-((r - 1.0) / 0.34) ** 2).astype(np.float32)
+    ring = _VX[key]
+    arr = np.asarray(fr).astype(np.float32)
+    add = ring[..., None] * np.array(col, np.float32) * 0.8 * q
+    out = 255 - (255 - arr) * (255 - add) / 255  # screen blend: light spills over the edge
+    fr.paste(Image.fromarray(out.clip(0, 255).astype(np.uint8)))
+
+
+def _desk_assets():
+    key = ("desk", W, H)
+    if key in _VX:
+        return _VX[key]
+    np = _np()
+    rng = np.random.default_rng(3)
+    base = np.zeros((H, W, 3), np.float32)
+    ph = H // 6 + 1
+    for p in range(7):
+        base[p * ph:(p + 1) * ph] = np.array([84, 54, 32], np.float32) * rng.uniform(0.8, 1.12)
+    phase = rng.uniform(0, 6.28, (H, 1)).astype(np.float32)
+    base += (np.sin(np.arange(W)[None, :] / (W / 55.0) + phase) * 7)[..., None]
+    base += rng.normal(0, 3.5, (H, W, 1)).astype(np.float32)
+    for p in range(1, 7):
+        base[max(0, p * ph - 1):p * ph + 1] *= 0.42
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    base *= (1 - 0.6 * (((xx / W - 0.5) ** 2 + (yy / H - 0.5) ** 2) * 2.3))[..., None]
+    wood = Image.fromarray(base.clip(0, 255).astype(np.uint8), "RGB")
+
+    def paper(w, h, seed):
+        im = Image.new("RGBA", (w, h), (244, 240, 229, 255))
+        d = ImageDraw.Draw(im)
+        r = random.Random(seed)
+        d.rectangle([int(w * 0.10), int(h * 0.06), int(w * 0.78), int(h * 0.06) + max(3, int(h * 0.014))], fill=(50, 50, 50, 255))
+        y = int(h * 0.12)
+        while y < h * 0.93:
+            x2 = int(w * (0.80 + r.random() * 0.10))
+            d.rectangle([int(w * 0.10), y, x2, y + max(2, int(h * 0.010))], fill=(118, 118, 118, 255))
+            if r.random() < 0.16:
+                d.rectangle([int(w * 0.10), y - 2, int(w * 0.10) + int((x2 - w * 0.10) * 0.7), y + max(4, int(h * 0.016))], fill=(255, 232, 70, 130))
+            if r.random() < 0.10:
+                d.line([(int(w * 0.10), y + int(h * 0.02)), (int(w * 0.10) + int((x2 - w * 0.10) * 0.5), y + int(h * 0.02))], fill=(210, 40, 50, 255), width=2)
+            y += int(h * 0.033)
+        return im
+    pw, phh = int(W * 0.25), int(H * 0.66)
+    a_ = {"wood": wood, "p1": paper(pw, phh, 1), "p2": paper(pw, phh, 2)}
+    _VX[key] = a_
+    return a_
+
+
+def _polaroid(img, w):
+    h = int(w * 1.0)
+    pad, bot = int(w * 0.06), int(w * 0.22)
+    sp = Image.new("RGBA", (w + 2 * pad, h + pad + bot), (246, 244, 238, 255))
+    sp.paste(img.convert("RGB").resize((w, h), Image.BILINEAR), (pad, pad))
+    return sp
+
+
+def draw_desk(fr, sh, tl, t0, t1, a, ov):
+    """Reference 3:09-3:15: the research desk - dark wooden table, two printed pages and two photos lying on it. The pages slide in, the photos drop onto the table."""
+    A_ = _desk_assets()
+    q = e_out(cl((tl - t0) / 0.6))
+    out = cl((tl - (t1 - 0.45)) / 0.45)
+    bg_a = min(1.0, (tl - t0) / 0.3) * (1 - out) * a
+    if bg_a <= 0.01:
+        return
+    src = fr.copy()
+    fr.paste(Image.blend(src, A_["wood"], cl(bg_a)))
+    ex = out * W * 0.4  # leaving: everything slides out to the right
+    for sp, fx, fy, ang, dl in ((A_["p2"], 0.74, 0.50, 3.0, 0.08), (A_["p1"], 0.58, 0.52, -4.0, 0.0)):
+        qq = e_out(cl((tl - t0 - dl) / 0.6))
+        r_ = sp.rotate(ang + (1 - qq) * 9, resample=Image.BICUBIC, expand=True)
+        put(fr, r_, W * fx + (1 - qq) * W * 0.45 + ex, H * fy + (1 - qq) * H * 0.2, 1.0, min(1.0, qq * 1.6) * (1 - out))
+    for (x0, x1), fx, fy, ang, dl in (((0.0, 0.5), 0.17, 0.30, -8.0, 0.35), ((0.5, 1.0), 0.15, 0.70, 6.0, 0.5)):
+        qq = e_out(cl((tl - t0 - dl) / 0.35))
+        if qq <= 0.01:
+            continue
+        crop = src.crop((int(W * x0), int(H * 0.1), int(W * x1), int(H * 0.9)))
+        pol = _polaroid(crop, int(W * 0.15)).rotate(ang, resample=Image.BICUBIC, expand=True)
+        put(fr, pol, W * fx - ex, H * fy, 1.0 + (1 - qq) * 0.18, qq * (1 - out))
+
+
 def draw_new_kind(fr, sh, tl, t0, t1, a, ov):
     k = ov["kind"]
     try:
         {"measure": draw_measure, "qmark": draw_qmark, "lens": draw_lens, "beforeafter": draw_beforeafter, "compare": draw_compare, "mark": draw_mark,
-         "chart": draw_chart, "tline": draw_tline, "hl": draw_hl, "sidelabel": draw_sidelabel, "bigtext": draw_bigtext, "tab": draw_tab}[k](fr, sh, tl, t0, t1, a, ov)
+         "chart": draw_chart, "tline": draw_tline, "hl": draw_hl, "sidelabel": draw_sidelabel, "bigtext": draw_bigtext, "tab": draw_tab, "glow": draw_glow, "desk": draw_desk}[k](fr, sh, tl, t0, t1, a, ov)
     except Exception as e:  # noqa
         if not _VX.get("err_" + k):
             _VX["err_" + k] = 1
@@ -6606,9 +6753,9 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
 
 # =========================================================================== V3: guaranteed sources, auto word-detector, roll-out paper, keyframe-animated PNG
 ITEM_PRI = {"quote": 3, "note": 6, "srclist": 6, "feature": 6, "verdict": 5, "explain": 5, "action": 5, "name": 3, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2,
-            "measure": 4, "qmark": 3, "lens": 4, "beforeafter": 6, "compare": 5, "mark": 4, "chart": 6, "tline": 6, "hl": 5, "sidelabel": 5, "bigtext": 5, "tab": 3}
+            "measure": 4, "qmark": 3, "lens": 4, "beforeafter": 6, "compare": 5, "mark": 4, "chart": 6, "tline": 6, "hl": 5, "sidelabel": 5, "bigtext": 5, "tab": 3, "glow": 2, "desk": 6}
 ITEM_MIN = {"quote": 2.4, "year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "verdict": 3.4, "explain": 3.4, "srclist": 3.6, "action": 2.6, "name": 2.4, "feature": 5.0,
-            "measure": 3.0, "qmark": 2.2, "lens": 3.4, "beforeafter": 4.2, "compare": 5.0, "mark": 2.8, "chart": 5.0, "tline": 5.0, "hl": 2.8, "sidelabel": 3.0, "bigtext": 2.6, "tab": 2.2}
+            "measure": 3.0, "qmark": 2.2, "lens": 3.4, "beforeafter": 4.2, "compare": 5.0, "mark": 2.8, "chart": 5.0, "tline": 5.0, "hl": 2.8, "sidelabel": 3.0, "bigtext": 2.6, "tab": 2.2, "glow": 3.0, "desk": 4.5}
 
 
 def item_zones(it):
@@ -7469,6 +7616,10 @@ def item_zones(it):
         return {"BL", "BR", "SL"}
     if k == "tab":
         return {"TAB"}
+    if k == "glow":
+        return {"GLOW"}  # the light around a person can sit under any card
+    if k == "desk":
+        return {"FULL"}
     return {"M"}
 
 
@@ -7527,7 +7678,7 @@ def schedule_items(items, dur):
 
 
 DRAW_LAYER = {"quote": 1, "action": 0, "explain": 0, "feature": 0, "verdict": 1, "stat": 1, "person": 2, "name": 2, "place": 2, "year": 3, "bubble": 3, "note": 4, "srclist": 4,
-              "lens": 0, "beforeafter": 0, "measure": 1, "qmark": 1, "mark": 1, "compare": 2, "chart": 2, "tline": 3, "hl": 3, "sidelabel": 2, "bigtext": 3, "tab": 3}
+              "lens": 0, "beforeafter": 0, "measure": 1, "qmark": 1, "mark": 1, "compare": 2, "chart": 2, "tline": 3, "hl": 3, "sidelabel": 2, "bigtext": 3, "tab": 3, "glow": 2, "desk": 3}
 
 
 # ---- year: always at the bottom (slider with ticks when the year is known, else a pill)
@@ -9811,6 +9962,17 @@ BOT_VERSION = "round-11 plain + cast"
 TR_NEW = set(TR15) - {"zoom", "whip", "glitch", "flash", "wipe"}
 
 
+WATERMARK = os.environ.get("WATERMARK", "1") != "0"  # reference: a tiny grey "Generative AI" at the lower left of every AI picture (WATERMARK=0 switches it off)
+
+
+def draw_watermark(fr):
+    key = ("wm", W, H)
+    if key not in _VX:
+        _VX[key] = text_layer("Generative AI", font_for("Generative AI", max(14, int(H * 0.021)), "geom"), fill=(235, 235, 235))
+    sp = _VX[key]
+    put(fr, sp, W * 0.012 + sp.width / 2, H * 0.957, 1.0, 0.45)
+
+
 def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     shots = build_shots(sc, dur, speech_dur, ctx, sc.get("tone"))
     dust = Dust(ctx["rnd"].random())
@@ -9921,6 +10083,11 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                 if not _VX.get("err_kwc"):
                     _VX["err_kwc"] = 1
                     log("keyword sticker failed once:", type(e_).__name__, str(e_)[:100])
+        if WATERMARK and (CAST["on"] or STORY_STYLE):
+            try:
+                draw_watermark(fr)
+            except Exception:  # noqa
+                pass
         return fr
     return draw
 
@@ -11260,7 +11427,7 @@ def build_sketches(scenes, topic=""):
             n_ok += 1
             continue
         sc["type"] = "photo"
-        sc["shots"] = [{"text_hi": sc["narration_hi"], "prompt_en": clean_short(sc.get("sketch_brief_en"), 300) or "a dramatic wide nature scene", "label_hi": "",
+        sc["shots"] = [{"text_hi": sc["narration_hi"], "prompt_en": clean_short(sc.get("sketch_brief_en"), 300) or FALLBACK_SCENE, "label_hi": "",
                         "query_en": "", "entity_en": "", "motion": False, "clip_en": "", "popup_en": "", "ov": None, "fx": None, "fy": None}]
     log(f"sketch scenes drawn: {n_ok}")
 
@@ -11952,7 +12119,7 @@ T_YEL, T_RED, T_WHITE, T_BLK, T_GREEN = (255, 214, 0), (222, 24, 32), (255, 255,
 
 
 def thumb_plan_prompt(script, topic_en, avoid):
-    return f"""You design YouTube thumbnails for a Hindi science / nature documentary channel. Study the story and plan ONE thumbnail picture that makes people curious (curiosity gap, never a lie).
+    return f"""You design YouTube thumbnails for a {CH_DESC} channel. Study the story and plan ONE thumbnail picture that makes people curious (curiosity gap, never a lie).
 STORY: {topic_en}
 HINDI TITLE: {script.get('title_hi')}
 STORY HOOK (Hindi): {script['scenes'][0]['narration_hi'][:300]}
@@ -12765,7 +12932,7 @@ def make_visuals(scenes, imgdir):
                     sh["image"] = prev_img  # same picture, camera moves to the part being spoken about
                     continue
                 if not sh["prompt_en"].strip():
-                    sh["prompt_en"] = "a dramatic wide nature landscape"
+                    sh["prompt_en"] = FALLBACK_SCENE
                 if prev_img and CF_STATE["used"] >= MAX_IMAGES and not PIXABAY_KEY:
                     sh["image"] = prev_img  # free-quota saver: reuse the previous picture with a new camera move
                     continue
@@ -12820,7 +12987,7 @@ def strip_everything(scenes, topic_en="", convert=True):
             sc.pop(k, None)
         if convert and sc.get("type") != "photo":
             sc["type"] = "photo"
-            sc["shots"] = [{"text_hi": sc["narration_hi"], "prompt_en": (sc.get("image_prompt_en") or topic_en or "a calm cinematic nature scene")[:400], "query_en": ""}]
+            sc["shots"] = [{"text_hi": sc["narration_hi"], "prompt_en": (sc.get("image_prompt_en") or topic_en or FALLBACK_SCENE)[:400], "query_en": ""}]
         sc["shots"] = [{k: v for k, v in (sh or {}).items() if k in KEEP} for sh in sc.get("shots") or []]
         for sh in sc["shots"]:
             sh["trans"] = ""
@@ -12870,14 +13037,14 @@ def pipeline():
         log("CUSTOM_STORY is set: using the owner's own", "story" if own_story else "topic")
         if own_story:  # a full story is never cut to the short test length
             globals()["TEST_SEC"] = 0
-            globals()["MAX_IMAGES"] = int(os.environ.get("MAX_IMAGES", "48"))
+            globals()["MAX_IMAGES"] = int(os.environ.get("MAX_IMAGES", str(max(48, FIXED_SEC // 7))))
             CLIPS_MAX[0], POPUPS_MAX[0] = int(os.environ.get("MAX_CLIPS", "30")), int(os.environ.get("MAX_POPUPS", "0"))
     else:
         cat, topic_en, topic_hi = pick_topic_any(done)
     style = random.choice(STYLES)
     pal = random.choice(PALETTES)
-    target = TEST_SEC or random.randint(MIN_SEC, MAX_SEC)
-    if own_story:  # length follows the owner's story, not the test length
+    target = FIXED_SEC or random.randint(MIN_SEC, MAX_SEC)
+    if own_story and not FIXED_SEC:  # no length selected: the length follows the owner's story
         target = int(min(900, max(30, len(own_story.split()) / float(wpms.get("gemini" if (TTS_PROVIDER in ("auto", "gemini") and GEMINI_KEY) else "edge", WPM)) * 60)))
     use_g = TTS_PROVIDER in ("auto", "gemini") and bool(GEMINI_KEY)
     wpm = float(wpms.get("gemini" if use_g else "edge", WPM))
@@ -12887,7 +13054,10 @@ def pipeline():
     if own_story:
         research_story(own_story, topic_en)  # only to find real sources for the on-screen source captions; the story itself is never changed
         facts, sources = ("THE OWNER'S OWN STORY. Follow it faithfully: keep its facts, names, order and meaning, and only polish the wording into natural spoken Hindi "
-                          "and cut it into scenes. Do not add new facts.\n" + own_story[:12000]), []
+                          "and cut it into scenes. Do not add new facts.\n"
+                          + (f"LENGTH: the video must be about {target} seconds. If the story is longer than that, keep the most important events in their real order and drop minor details; "
+                             f"if it is shorter, tell it slower with more of its own detail (never invent facts).\n" if FIXED_SEC else "")
+                          + own_story[:12000]), []
     else:
         facts, sources = research(topic_en)
     try:
@@ -12900,7 +13070,7 @@ def pipeline():
         log("ensure_sources failed:", str(e)[:100])
     if not own_story and passages_block():
         facts = (facts or "") + "\n\n" + passages_block()
-    script = own_story_script(own_story, topic_en) if own_story else write_script(topic_en, cat, style, target, facts, wpm)
+    script = own_story_script(own_story, topic_en) if (own_story and not FIXED_SEC) else write_script(topic_en, cat, style, target, facts, wpm)
     scenes = script["scenes"]
     mood = script["mood"] or MOOD_MAP.get(cat, "wonder")
     kinds = {}
@@ -12912,19 +13082,37 @@ def pipeline():
     voice = make_voice_auto(scenes, tdir)
     total = ffprobe_dur(voice)
     log(f"voice ({VOICE_USED[0]}) length {fmt_time(total)} (target {fmt_time(target)})")
-    lo_ok, hi_ok = ((target * 0.5, target * 1.8) if own_story else (TEST_SEC * 0.4, TEST_SEC * 2.2) if TEST_SEC else (MIN_SEC - 30, MAX_SEC + 45))
-    if not own_story and not (lo_ok <= total <= hi_ok):
-        new_words = int(word_count(script) * target / total)
-        log(f"length far off-range, rescaling script to ~{new_words} words")
-        try:
-            script = rescale_script(script, new_words)
-            scenes = script["scenes"]
-            shutil.rmtree(tdir, ignore_errors=True)
-            voice = make_voice_auto(scenes, tdir)
-            total = ffprobe_dur(voice)
-            log(f"new voice length {fmt_time(total)}")
-        except Exception as e:  # noqa
-            log("rescale failed, continuing:", e)
+    if FIXED_SEC:
+        for attempt in (1, 2):
+            if abs(total - target) <= target * 0.06:
+                break
+            new_words = int(word_count(script) * target / max(total, 1))
+            log(f"selected length {fmt_time(target)}, voice is {fmt_time(total)}: rescaling the script to ~{new_words} words (try {attempt})")
+            try:
+                script = rescale_script(script, new_words)
+                scenes = script["scenes"]
+                shutil.rmtree(tdir, ignore_errors=True)
+                voice = make_voice_auto(scenes, tdir)
+                total = ffprobe_dur(voice)
+                log(f"new voice length {fmt_time(total)}")
+            except Exception as e:  # noqa
+                log("rescale failed, continuing:", e)
+                break
+        log(f"final voice length {fmt_time(total)} for the selected {fmt_time(target)} ({(total - target) / target * 100:+.1f}%)")
+    else:
+        lo_ok, hi_ok = ((target * 0.5, target * 1.8) if own_story else (TEST_SEC * 0.4, TEST_SEC * 2.2) if TEST_SEC else (MIN_SEC - 30, MAX_SEC + 45))
+        if not own_story and not (lo_ok <= total <= hi_ok):
+            new_words = int(word_count(script) * target / total)
+            log(f"length far off-range, rescaling script to ~{new_words} words")
+            try:
+                script = rescale_script(script, new_words)
+                scenes = script["scenes"]
+                shutil.rmtree(tdir, ignore_errors=True)
+                voice = make_voice_auto(scenes, tdir)
+                total = ffprobe_dur(voice)
+                log(f"new voice length {fmt_time(total)}")
+            except Exception as e:  # noqa
+                log("rescale failed, continuing:", e)
     story_context(topic_en, own_story, script)
     build_sketches(scenes, topic_en)
     director_pass(scenes, topic_en + (("\nSTORY CONTEXT (keep EVERY picture inside it; relatives and neighbours are people of this culture, never animals or objects): " + STORY_CTX["text"]) if STORY_CTX["on"] else ""))
