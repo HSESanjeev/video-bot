@@ -962,8 +962,8 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 # CINEMA_MODE (default on): the calm, Netflix-documentary restraint. One idea on screen at a time, no stickers / paper collage unless a chart or timeline truly needs it,
 # the real picture does the work. Set the variable CINEMA_MODE=0 to bring back the busy "every technique everywhere" look (all technique code is kept).
 CINEMA_MODE = os.environ.get("CINEMA_MODE", "1") != "0"
-CALM_MAX_ITEMS = 3
-CALM_GAP = 2.4
+CALM_MAX_ITEMS = 999  # no limit: an animation appears every time the narration calls for it
+CALM_GAP = 1.0  # only the SAME kind of animation twice within one second is treated as a duplicate
 CALM_PRI = {"note": 10, "srclist": 10, "person": 9, "name": 9, "place": 9, "title": 9, "year": 8, "stat": 8, "verdict": 8, "explain": 7, "action": 7, "feature": 7, "compare": 7, "chart": 7, "tline": 7,
             "measure": 6, "beforeafter": 6, "lens": 5, "mark": 4, "quote": 4, "bubble": 3, "qmark": 3, "hl": 2}
 PERMANENT_TECHNIQUES = {
@@ -1146,7 +1146,7 @@ def det_techniques(scenes):
                 return False
             if any(isinstance(x, dict) and x.get("w") == rec["w"] and x.get("kind") in NEW_KINDS for x in have):
                 return False
-            if cnt[k] >= (1 if k in ("qmark", "lens") else 3 if k == "mark" else 2):
+            if cnt[k] >= 999:
                 return False
             have.append(rec)
             cnt[k] += 1
@@ -1165,13 +1165,13 @@ def det_techniques(scenes):
                 add({"w": i, "kind": "measure", "text": f"{prev} {t_}", "orient": "v" if t_ in ("ऊँचा", "ऊंचा", "ऊँची", "ऊंची", "गहरा", "गहरी", "ऊँचाई", "गहराई") else "h", "sub": ""}, 3)
             elif t_ in MEAS_ALL and i >= 2 and (_tw(wds[i - 2]) in HI_NUMS or NUM_RE.match(_tw(wds[i - 2]) or "x")) and UNIT_RE.fullmatch(prev):
                 add({"w": i, "kind": "measure", "text": f"{_tw(wds[i-2])} {prev}", "orient": "v" if t_ in ("ऊँचा", "ऊंचा", "गहरा") else "h", "sub": t_}, 3)
-            # QUESTION MARK = the narrator asks a real question or opens a mystery (one mark, never more than one per scene, far from the next one)
+            # QUESTION MARK = the narrator asks a real question or opens a mystery (ONE mark each time; as often as the story asks)
             if "?" in w_ or t_ in Q_STRICT:
-                add({"w": i, "kind": "qmark", "text": ""}, 40)
+                add({"w": i, "kind": "qmark", "text": ""}, 5)
             # MAGNIFIER = the narrator tells the viewer to look closely at a small physical detail ("बारीकी से देखें", "गौर से", "माइक्रोस्कोप"), never a random small word
             nxt_ = _tw(wds[i + 1]) if i + 1 < len(wds) else ""
             if t_ in LENS_STRICT or (t_ in LENS_LOOK and (nxt_.startswith("से") or nxt_.startswith("देख"))):
-                add({"w": i, "kind": "lens", "text": ""}, 60)
+                add({"w": i, "kind": "lens", "text": ""}, 5)
             if t_ in MARK_ALL:
                 add({"w": i, "kind": "mark", "text": "", "shape": ("circle", "arrow", "underline")[(si + n["mark"]) % 3]}, 8)
             if t_ in BA_PRE and pre_i is None:
@@ -1241,7 +1241,7 @@ TXT_PRI = {"person": 9, "name": 9, "place": 8, "title": 8, "year": 7, "stat": 7,
 
 
 def calm_pass(scenes):
-    """Restraint: at most CALM_MAX_ITEMS overlays per scene and never two starting within CALM_GAP seconds; the most meaningful ones survive."""
+    """No frequency limits: every animation the narration asks for stays; only the same kind twice within CALM_GAP seconds (a duplicate) is removed."""
     if not CINEMA_MODE:
         return 0
     dropped = 0
@@ -1261,7 +1261,7 @@ def calm_pass(scenes):
         for x in cand:
             if len(keep) >= CALM_MAX_ITEMS:
                 break
-            if any(abs(t_of(x) - t_of(k)) < CALM_GAP for k in keep):
+            if any(k.get("kind") == x.get("kind") and abs(t_of(x) - t_of(k)) < CALM_GAP for k in keep):
                 continue
             keep.append(x)
         dropped += len(its) - len(keep)
@@ -1314,8 +1314,8 @@ def techniques_prompt(topic, listing):
     return f"""Film editor task for a Hindi documentary in the VOX explainer style. Hindi narration, every word numbered (index:word). Video topic: {topic}
 Find every moment where one of these on-screen techniques fits what is REALLY being said (each exactly on its word, never two on one word, up to 5 per scene, use them generously):
 - "measure": a size / length / height / depth / weight / distance / duration is said. {{"w":..,"kind":"measure","text_hi":"value + unit as spoken, e.g. ३० मीटर","orient":"h" or "v" (v for height / depth),"sub_hi":"what is measured, 1-2 words"}}
-- "qmark": ONE question mark, only when the narrator really asks an open question or opens a mystery the viewer should wonder about (क्यों, कैसे, आखिर...). At most once in 60 seconds, never on a statement. {{"w":..,"kind":"qmark"}}
-- "lens": magnifier, ONLY when the narrator tells the viewer to look closely at a small physical detail or a line of a document (बारीकी से देखें, गौर से, ध्यान से). Never on an ordinary word like small / near / eye. At most once in 2 minutes. {{"w":..,"kind":"lens","fx":0.1-0.9,"fy":0.1-0.9}} (position of the detail on the picture)
+- "qmark": ONE question mark, only when the narrator really asks an open question or opens a mystery the viewer should wonder about (क्यों, कैसे, आखिर...). Every time it happens (no limit), never on a plain statement. {{"w":..,"kind":"qmark"}}
+- "lens": magnifier, ONLY when the narrator tells the viewer to look closely at a small physical detail or a line of a document (बारीकी से देखें, गौर से, ध्यान से). Never on an ordinary word like small / near / eye. Every time the narrator says it (no limit). {{"w":..,"kind":"lens","fx":0.1-0.9,"fy":0.1-0.9}} (position of the detail on the picture)
 - "beforeafter": then vs now, a change, a before and an after of the SAME thing. {{"w":..,"kind":"beforeafter","after_en":"1-4 English words naming the REAL photo that shows the AFTER state","label_a_hi":"पहले","label_b_hi":"बाद में"}} (the picture already on screen is the before)
 - "compare": two things compared with numbers or qualities. {{"w":..,"kind":"compare","a_hi":"first","b_hi":"second","rows":[{{"label_hi":"what is compared","a_hi":"value of A as spoken","b_hi":"value of B as spoken","na":number or 0,"nb":number or 0}}]}} 1-3 rows, values only as the narrator says them.
 - "mark": the important thing on screen that the narrator points at. {{"w":..,"kind":"mark","shape":"circle"|"underline"|"arrow","text_hi":"1-3 word label or empty"}}
@@ -1824,7 +1824,7 @@ Every scene also has "grade" (colour grading that fits the scene: warm for fire/
 """
 
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
-TRANS_NAMES = ["pandark", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
+TRANS_NAMES = ["pandark", "ink", "curl", "shred", "blurin", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
 TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
 MOOD_NAMES = ["mystery", "epic", "wonder", "calm", "tense", "life", "space"]
 TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
@@ -4116,7 +4116,7 @@ def make_explainer(sc, dur, pal, events):
 # --------------------------------------------------------------------------- compositor: camera, effects, transitions, subtitles
 _C = {}
 TONE_TRANS = ["fade", "zoom", "whip", "wipe", "circle"]
-TRANS_SFX = {"tint_red": ("impact", 0.5), "tint_blue": ("whoosh_soft", 0.7), "blurzoom": ("whoosh_down", 0.5), "dipblack": ("whoosh_soft", 0.5), "slash": ("whoosh", 0.6), "tear": ("whoosh_soft", 0.9), "slide_l": ("whoosh", 0.6), "slide_r": ("whoosh", 0.6), "slide_u": ("whoosh", 0.6), "slide_d": ("whoosh", 0.6), "whip": ("whoosh", 0.6), "wipe": ("whoosh_soft", 0.8), "circle": ("whoosh_soft", 0.8), "zoom": ("whoosh_down", 0.5),
+TRANS_SFX = {"ink": ("whoosh_soft", 0.8), "curl": ("whoosh_soft", 0.7), "shred": ("whoosh", 0.7), "blurin": ("whoosh_soft", 0.5), "tint_red": ("impact", 0.5), "tint_blue": ("whoosh_soft", 0.7), "blurzoom": ("whoosh_down", 0.5), "dipblack": ("whoosh_soft", 0.5), "slash": ("whoosh", 0.6), "tear": ("whoosh_soft", 0.9), "slide_l": ("whoosh", 0.6), "slide_r": ("whoosh", 0.6), "slide_u": ("whoosh", 0.6), "slide_d": ("whoosh", 0.6), "whip": ("whoosh", 0.6), "wipe": ("whoosh_soft", 0.8), "circle": ("whoosh_soft", 0.8), "zoom": ("whoosh_down", 0.5),
              "flash": ("impact", 0.55), "glitch": ("glitch", 0.9), "fade": (None, 0)}
 CAMS = ["push", "pull", "pan_lr", "pan_rl", "tilt_up", "tilt_down", "orbit", "handheld", "push_tl", "push_br"]
 SW, SH = 1920, 1080
@@ -4321,13 +4321,13 @@ def pan_dark(prev, cur, p):
 
 
 # ---- more reference transitions (seen in the 10-minute reference): dip to black, red/blue colour-wash cut, zoom-blur cut, diagonal slash, paper tear
-TRANS_DUR = {"dipblack": 0.8, "tint_red": 0.7, "tint_blue": 0.7, "blurzoom": 0.5, "slash": 0.6, "tear": 0.7}
+TRANS_DUR = {"ink": 0.9, "curl": 0.85, "shred": 0.8, "blurin": 0.7, "dipblack": 0.8, "tint_red": 0.7, "tint_blue": 0.7, "blurzoom": 0.5, "slash": 0.6, "tear": 0.7}
 TRANS_BY_TONE = {  # which transition suits which feeling of the story (reference: slides and dark slides most, wash / blur on shocks, black between chapters)
-    "suspense": ["slide_l", "pandark", "tint_red", "blurzoom", "slide_r", "dipblack", "tear"],
-    "serious": ["slide_l", "pandark", "dipblack", "slide_d", "tint_blue", "slide_r", "tear"],
-    "excited": ["slide_l", "slide_r", "blurzoom", "slide_u", "slash", "slide_d", "tint_red"],
+    "suspense": ["slide_l", "pandark", "tint_red", "blurzoom", "slide_r", "dipblack", "tear", "blurin", "ink", "shred"],
+    "serious": ["slide_l", "pandark", "dipblack", "slide_d", "tint_blue", "slide_r", "tear", "blurin", "ink", "curl"],
+    "excited": ["slide_l", "slide_r", "blurzoom", "slide_u", "slash", "slide_d", "tint_red", "shred"],
     "wonder": ["slide_l", "slide_u", "slide_r", "pandark", "slash", "dipblack"],
-    "calm": ["slide_r", "pandark", "slide_l", "slide_u", "dipblack", "tear"]}
+    "calm": ["slide_r", "pandark", "slide_l", "slide_u", "dipblack", "tear", "blurin", "curl"]}
 
 
 def _wash(img, col, a):
@@ -4409,6 +4409,91 @@ def _edge_fx(prev, cur, p, jagged, white):
     return Image.fromarray(out.clip(0, 255).astype(np.uint8), "RGB")
 
 
+def ink_blob(prev, cur, p):
+    """Reference 8:06: a dark teal ink blob spreads over the picture from a corner; the next picture is what the blob leaves behind."""
+    np = _np()
+    key = ("ink", W, H)
+    if key not in _C:
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        d = np.sqrt(((xx - W * 0.92) / W) ** 2 + ((yy - H * 0.12) / W) ** 2)
+        rng = np.random.default_rng(5)
+        nz = np.zeros((H, W), np.float32)
+        for fq in (3, 7, 15):
+            ph = rng.uniform(0, 6.28, 4)
+            nz += (np.sin(xx / W * fq * 6.28 + ph[0]) * np.sin(yy / H * fq * 4.4 + ph[1]) + np.sin((xx + yy) / W * fq * 3.1 + ph[2])) / fq
+        _C[key] = d + 0.11 * nz
+    f = _C[key]
+    p = cl(p)
+    t = e_io(p) * 1.55 - 0.12
+    a_arr = np.asarray(prev).astype(np.float32)
+    b_arr = np.asarray(cur).astype(np.float32)
+    ink = np.array([10, 34, 38], np.float32)
+    band = np.clip(1 - np.abs(f - t) / 0.07, 0, 1)[..., None]
+    out = np.where((f < t)[..., None], b_arr, a_arr)
+    out = out * (1 - 0.92 * band) + ink * 0.92 * band
+    return Image.fromarray(out.clip(0, 255).astype(np.uint8), "RGB")
+
+
+def page_curl(prev, cur, p):
+    """Reference 9:00: the corner of the page lifts and curls away; the next picture lies under it."""
+    np = _np()
+    key = ("curl", W, H)
+    if key not in _C:
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        _C[key] = ((W - xx) + (H - yy) * 0.9) / (W + 0.9 * H)  # 0 at the bottom-right corner, 1 at the top-left
+    u = _C[key]
+    p = cl(p)
+    e = e_io(p) * 1.5 - 0.05  # fold line position along u
+    a_arr = np.asarray(prev).astype(np.float32)
+    b_arr = np.asarray(cur).astype(np.float32)
+    w = 0.09  # width of the curled flap
+    under = u < e - w          # already peeled away: the next picture
+    flap = (u >= e - w) & (u < e)  # the back of the page, lighter, curling over
+    shade = np.clip((u - (e - w)) / w, 0, 1)[..., None]
+    back = a_arr * 0.30 + np.array([238, 234, 222], np.float32) * 0.70
+    back = back * (0.86 + 0.14 * shade)
+    sh_ = 1 - 0.40 * np.exp(-np.clip(e - w - u, 0, None) / 0.05)[..., None]  # shadow on the picture beneath
+    base = np.where(under[..., None], b_arr * sh_, a_arr * (1 - 0.18 * np.clip((u - e) / 0.08, 0, 1)[..., None] * 0 + 0))
+    out = np.where(flap[..., None], back, base)
+    return Image.fromarray(out.clip(0, 255).astype(np.uint8), "RGB")
+
+
+def paper_shred(prev, cur, p):
+    """Reference 9:15: the picture breaks into paper strips that drop away one after another and uncover the next picture."""
+    np = _np()
+    p = cl(p)
+    n = 28
+    rng = np.random.default_rng(23)
+    dl = rng.uniform(0, 0.55, n)
+    a_arr = np.asarray(prev)
+    out = np.array(np.asarray(cur))
+    sw = int(math.ceil(W / n))
+    for i in range(n):
+        x0, x1 = i * sw, min(W, (i + 1) * sw)
+        q = cl((p - dl[i]) / (1 - dl[i]))
+        sh_ = int((q * q) * H * 1.15)
+        if sh_ >= H:
+            continue
+        out[sh_:H, x0:x1] = a_arr[0:H - sh_, x0:x1]
+        if sh_ > 2:
+            out[max(0, sh_ - 3):sh_, x0:x1] = (240, 236, 224)
+    return Image.fromarray(out, "RGB")
+
+
+def blur_in(prev, cur, p):
+    """Reference 2:22 and 3:44: the cut lands on a soft, slightly bright, out-of-focus picture that pulls into focus (rack focus)."""
+    np = _np()
+    p = cl(p)
+    q = cl((p - 0.12) / 0.88)
+    k = 1 + int(11 * (1 - e_out(q)) ** 2)
+    b = cur.resize((max(8, W // k), max(8, H // k)), Image.BILINEAR).resize((W, H), Image.BILINEAR) if k > 1 else cur
+    arr = np.asarray(b).astype(np.float32) * (1 + 0.28 * (1 - e_out(q)))
+    out = Image.fromarray(arr.clip(0, 255).astype(np.uint8), "RGB")
+    if p < 0.12:
+        return Image.blend(prev, out, e_io(p / 0.12))
+    return out
+
+
 def slide_push(prev, cur, p, d):
     """Reference 0:32-0:40: picture A and picture B move together as ONE continuous slide (no fade, no darkness). B arrives a little enlarged and settles
     while the slide decelerates; only a light motion blur at the fastest moment. d = l / r / u / d = the direction A leaves."""
@@ -4450,6 +4535,14 @@ def blend_trans(prev, cur, p, kind):
         return tint_cut(prev, cur, p, (30, 90, 150))
     if kind == "blurzoom":
         return blur_zoom(prev, cur, p)
+    if kind == "blurin":
+        return blur_in(prev, cur, p)
+    if kind == "ink":
+        return ink_blob(prev, cur, p)
+    if kind == "curl":
+        return page_curl(prev, cur, p)
+    if kind == "shred":
+        return paper_shred(prev, cur, p)
     if kind == "dipblack":
         return dip_black(prev, cur, p)
     if kind == "slash":
@@ -5334,10 +5427,23 @@ def draw_note(fr, ps, tl, ov, t0, t1, a):
         spr = card.frame(p)
         put(fr, spr, W / 2, H - spr.height / 2 + (1 - q) * spr.height * 0.3, 1.0, a)
     elif style in ("strip", "box"):  # slides in from the left, slides out again; the rest of the picture stays free
-        qin = e_out(cl((tl - t0) / 0.45))
-        qout = 1 - e_out(cl((tl - (t1 - 0.4)) / 0.4))
-        spr = card.frame(e_out(cl((tl - t0 - 0.5) / 1.0)))
-        put(fr, spr, 30 + spr.width / 2 - (1 - min(qin, qout)) * (spr.width + 60), H - 30 - spr.height / 2, 1.0, 1.0)
+        # reference (0:02-0:03 and 0:09): a grey torn-paper shape appears first, the card RISES into it from the lower left, tilted, and settles;
+        # at the end it is torn away down-left (tilting more) and the grey shape is left behind for a moment
+        spr = card.frame(e_out(cl((tl - t0 - 0.45) / 1.0)))
+        bx, by = 30 + spr.width / 2, H - 30 - spr.height / 2
+        qin = e_out(cl((tl - t0 - 0.12) / 0.5))
+        fall = cl((tl - (t1 - 0.45)) / 0.38) ** 2
+        grey_a = 0.8 * cl((tl - t0) / 0.1) * (1 - cl((tl - t0 - 0.5) / 0.25)) + 0.8 * cl((tl - (t1 - 0.4)) / 0.1) * (1 - cl((tl - (t1 - 0.02)) / 0.3))
+        if grey_a > 0.01:
+            sil = Image.new("RGBA", spr.size, (176, 176, 176, 255))
+            sil.putalpha(spr.convert("RGBA").split()[-1])
+            put(fr, sil, bx, by, 1.0, min(1.0, grey_a))
+        if qin > 0.01 and fall < 0.999:
+            ang = -7 * (1 - qin) + 16 * fall
+            rs = spr.convert("RGBA").rotate(ang, resample=Image.BICUBIC, expand=True)
+            cx_ = bx - (1 - qin) * spr.width * 0.30 - fall * spr.width * 0.7
+            cy_ = by + (1 - qin) * spr.height * 1.5 + fall * H * 0.45
+            put(fr, rs, cx_, cy_, 1.0, min(1.0, qin * 2.2) * (1 - 0.5 * fall))
     elif style == "paper":
         qin = e_out(cl((tl - t0) / 0.85))  # the paper UNROLLS from the top ... and rolls back up at the end
         qout = 1 - e_out(cl((tl - (t1 - 0.65)) / 0.6))
@@ -5780,11 +5886,9 @@ def _lens_sprite(R):
     ang = math.radians(48)
     hx, hy = c + math.cos(ang) * R * 1.0, c + math.sin(ang) * R * 1.0
     ex, ey = c + math.cos(ang) * R * 1.95, c + math.sin(ang) * R * 1.95
-    d.line([(hx, hy), (ex, ey)], fill=(30, 22, 18, 255), width=int(R * 0.22))
-    d.line([(hx, hy), (ex, ey)], fill=(120, 84, 52, 255), width=int(R * 0.14))
-    d.ellipse([c - R - 12, c - R - 12, c + R + 12, c + R + 12], fill=(60, 64, 72, 255))
-    d.ellipse([c - R - 5, c - R - 5, c + R + 5, c + R + 5], fill=(205, 210, 220, 255))
-    d.ellipse([c - R + 4, c - R + 4, c + R - 4, c + R - 4], fill=(0, 0, 0, 0))
+    # reference look: NO handle - a round window on the detail with a thin white ring
+    d.ellipse([c - R - 6, c - R - 6, c + R + 6, c + R + 6], fill=(250, 250, 250, 255))
+    d.ellipse([c - R + 1, c - R + 1, c + R - 1, c + R - 1], fill=(0, 0, 0, 0))
     _VX[key] = (sp, c)
     return _VX[key]
 
@@ -5795,11 +5899,11 @@ def draw_lens(fr, sh, tl, t0, t1, a, ov):
     fx, fy = it.get("fx"), it.get("fy")
     fx = sx if fx is None else fx
     fy = sy if fy is None else fy
-    R = 168
-    cx = min(max(fx * W + 14 * math.sin(tl * 1.7), R + 20), W - R - 120)
+    R = 140  # reference: the round window is about 22% of the frame width
+    cx = min(max(fx * W + 14 * math.sin(tl * 1.7), R + 20), W - R - 40)
     cy = min(max(fy * H + 9 * math.cos(tl * 1.3), R + 20), H - R - 90)
     q = e_back(cl((tl - t0) / 0.5))
-    z = 2.4
+    z = 2.2
     src = fr.copy()
     bw = int(2 * R / z)
     box = (int(cx - bw / 2), int(cy - bw / 2), int(cx + bw / 2), int(cy + bw / 2))
