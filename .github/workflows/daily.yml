@@ -2,9 +2,10 @@ name: video-bot
 
 on:
   schedule:
-    # 03:00 IST on Tue, Thu, Sat, Sun = 21:30 UTC on Mon, Wed, Fri, Sat (cron runs in UTC).
-    # For every day at 03:00 IST use: "30 21 * * *"
-    - cron: "30 21 * * 1,3,5,6"
+    # 01:00 AM IST on Tue, Thu, Sat, Sun = 19:30 UTC on Mon, Wed, Fri, Sat (GitHub cron runs in UTC; IST = UTC + 5:30).
+    # For EVERY day at 01:00 AM IST use: "30 19 * * *"
+    # (GitHub may start a scheduled run 5-30 minutes late when it is busy - that is normal. :30 is used on purpose: the full hour is the busiest.)
+    - cron: "30 19 * * 1,3,5,6"
   workflow_dispatch:
     inputs:
       mode:
@@ -18,13 +19,15 @@ on:
         default: ""
         type: string
       video_seconds:
-        description: "Video length: 30 = quick test (seconds). Type full = normal 3-5 minute video"
+        description: "Video length in SECONDS: the video is made this long, whatever the story length (30 = quick test, 600 = 10 minutes)"
         required: false
-        default: "30"
-        type: string
+        default: "600"
+        type: choice
+        options: ["30", "60", "120", "180", "240", "300", "420", "600", "900", "1200"]
 
 permissions:
   contents: write
+  actions: write
 
 concurrency:
   group: video-bot
@@ -90,14 +93,22 @@ jobs:
           # telegram = video comes to you on Telegram (safe default)
           # youtube  = bot uploads to YouTube as private (only after YouTube API audit passes)
           UPLOAD_MODE: ${{ vars.UPLOAD_MODE || 'telegram' }}
-          # short test videos while testing (seconds). Set Variable TEST_SECONDS = 0 for normal 3-5 minute videos.
-          TEST_SECONDS: ${{ github.event.inputs.video_seconds || vars.TEST_SECONDS || '30' }}
+          # video length in seconds: the length picked when you press "Run workflow"; the AUTOMATIC 01:00 AM runs use Variable VIDEO_SECONDS (default 600 = 10 minutes)
+          VIDEO_SECONDS: ${{ github.event.inputs.video_seconds || vars.VIDEO_SECONDS || vars.TEST_SECONDS || '600' }}
           # your own topic or full story (Variable CUSTOM_STORY). Value 0 or empty = automatic topic as usual
           CUSTOM_STORY: ${{ github.event.inputs.custom_story || vars.CUSTOM_STORY }}
           # speed guards (the job is cancelled after 240 min): optional Gemini calls pause when Gemini is slow, picture work stops early
           OPTIONAL_LLM_MAX: ${{ vars.OPTIONAL_LLM_MAX || '150' }}
           LOCAL_SD_MAX: ${{ vars.LOCAL_SD_MAX || '30' }}
           MAX_EXPLAIN_PNG: ${{ vars.MAX_EXPLAIN_PNG || '30' }}
+          # TRUE-STORY channel (reference-video look). Change a Variable only if you want to go back:
+          #   TOPIC_MODE = story (real documented stories with trusted sources) | science (the old nature / science topics)
+          TOPIC_MODE: ${{ vars.TOPIC_MODE || 'story' }}
+          PLAIN: ${{ vars.PLAIN || '0' }}                       # 0 = editing techniques ON (cards, year slider, labels, transitions); 1 = plain pictures only
+          CAST: ${{ vars.CAST || '1' }}                         # 1 = same people / same village in every picture (AI-only pictures for stories)
+          REF_ONLY: ${{ vars.REF_ONLY || '1' }}                 # 1 = only overlays that exist in the reference video
+          TRUSTED_ONLY: ${{ vars.TRUSTED_ONLY || '1' }}         # 1 = source cards only from trusted organisations
+          STRICT_SOURCES: ${{ vars.STRICT_SOURCES || '1' }}     # 1 = a source card only when its text supports what the narrator says
         run: |
           if [ "${{ github.event.inputs.mode }}" = "check" ]; then
             python bot.py --check
@@ -125,3 +136,12 @@ jobs:
           git commit -m "state: new video done" || echo "nothing to commit"
           git pull --rebase || true
           git push || true
+
+      - name: Keep the automatic schedule switched on
+        if: always() && github.event_name == 'schedule'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # GitHub switches scheduled workflows off after 60 days without repository activity; this re-enables it if that ever happened
+          WF="$(basename "${GITHUB_WORKFLOW_REF%%@*}")"
+          gh api -X PUT "/repos/${GITHUB_REPOSITORY}/actions/workflows/${WF}/enable" || echo "could not call enable (ignored)"
