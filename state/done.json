@@ -746,6 +746,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-21T15:37:49+00:00",
+   "topic_en": "The discovery of Penicillin by Alexander Fleming at St. Mary's Hospital, London (1928)",
+   "title_hi": "पेनिसिलिन: एक छोटी सी गलती जिसने करोड़ों जान बचाईं",
+   "category": "story",
+   "style": "myth",
+   "theme": "sky",
+   "mood": "wonder",
+   "seconds": 51,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
