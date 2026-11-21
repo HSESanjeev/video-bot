@@ -277,7 +277,27 @@ def gemini(prompt, json_mode=False, temperature=0.8, search=False, image=None, o
             GOV["slow"] = 0
 
 
+class GeminiQuotaError(RuntimeError):
+    """Gemini cannot be used any more in this run (daily quota used up for every model / key, or the run time budget is over): stop at once instead of waiting for hours."""
+
+
+_DAYLIM = set()  # (key number, model) pairs whose DAILY quota is used up in this run
+RUN_START = time.time()
+RUN_BUDGET_SEC = int(os.environ.get("RUN_BUDGET_MIN", "200")) * 60  # Gemini work must end by then: the workflow is cancelled at 350 minutes and the picture / video rendering still needs ~1 hour
+
+
+def _retry_delay(text):
+    m = re.search(r'"retryDelay":\s*"(\d+(?:\.\d+)?)s"', text or "") or re.search(r"retry in (\d+(?:\.\d+)?)s", text or "", re.I)
+    return float(m.group(1)) if m else 0.0
+
+
+def _is_daily(text):
+    return bool(re.search(r"PerDay|per day|daily", text or "", re.I))
+
+
 def _gemini_raw(prompt, json_mode, temperature, search, image, optional):
+    if time.time() - RUN_START > RUN_BUDGET_SEC:
+        raise GeminiQuotaError(f"the run time budget of {RUN_BUDGET_SEC // 60} minutes is over")
     parts_ = [{"text": prompt}]
     if image:
         parts_.append({"inline_data": {"mime_type": "image/jpeg", "data": image}})
@@ -287,43 +307,68 @@ def _gemini_raw(prompt, json_mode, temperature, search, image, optional):
         body["generationConfig"]["responseMimeType"] = "application/json"
     if search:
         body["tools"] = [{"google_search": {}}]
+    GOV["calls"] = GOV.get("calls", 0) + 1
+    if GOV["calls"] % 25 == 0:
+        log(f"Gemini calls so far: {GOV['calls']} (rate-limit hits: {GOV.get('hits', 0)})")
     last = None
-    for model in ([optional_model()] if optional else gemini_models()):
-        for attempt in range((1 if optional else 2) + max(0, len(GEMINI_KEYS) - 1)):
-            try:
-                r = requests.post(f"{GBASE}/models/{model}:generateContent",
-                                  headers={"x-goog-api-key": gkey()}, json=body, timeout=60 if optional else 240)
-                if r.status_code in (429, 500, 503):
-                    last = f"{model} HTTP {r.status_code}"
-                    if r.status_code == 429 and rotate_key(429, r.text):
-                        continue  # a backup key is ready: try it at once
-                    time.sleep(3 if optional else 15 * (attempt + 1))
-                    continue
-                if r.status_code in (400, 403, 404):
-                    last = f"{model} HTTP {r.status_code}: {r.text[:300]}"
-                    if r.status_code == 403 and rotate_key(403, r.text):
+    models = [optional_model()] if optional else gemini_models()
+    nkeys = max(1, len(GEMINI_KEYS))
+    for rnd in range(1 if optional else 2):
+        waits = [0.0]
+        for model in models:
+            for attempt in range(nkeys):
+                gkey()
+                if (_KEYS["cur"], model) in _DAYLIM:
+                    break  # this model's daily quota is gone for this key
+                try:
+                    r = requests.post(f"{GBASE}/models/{model}:generateContent",
+                                      headers={"x-goog-api-key": gkey()}, json=body, timeout=60 if optional else 240)
+                    if r.status_code == 429:
+                        last = f"{model} HTTP 429"
+                        GOV["hits"] = GOV.get("hits", 0) + 1
+                        waits.append(_retry_delay(r.text))
+                        if _is_daily(r.text):
+                            _DAYLIM.add((_KEYS["cur"], model))
+                        if rotate_key(429, r.text):
+                            continue  # a backup key is ready: same model, next key at once
+                        break  # next model at once (no sleeping between models)
+                    if r.status_code in (500, 503):
+                        last = f"{model} HTTP {r.status_code}"
+                        time.sleep(2 if optional else 6)
                         continue
-                    break
-                r.raise_for_status()
-                j = r.json()
-                cand = (j.get("candidates") or [{}])[0]
-                parts = cand.get("content", {}).get("parts", [])
-                text = "".join(p.get("text", "") for p in parts).strip()
-                if not text:
-                    last = f"{model} empty response ({cand.get('finishReason')})"
-                    continue
-                titles = []
-                for ch in cand.get("groundingMetadata", {}).get("groundingChunks", []):
-                    t = (ch.get("web") or {}).get("title")
-                    u = (ch.get("web") or {}).get("uri")
-                    if u and all(u != x["uri"] for x in GROUND_SRC):
-                        GROUND_SRC.append({"title": t or "", "uri": u})
-                    if t and t not in titles:
-                        titles.append(t)
-                return text, titles
-            except requests.RequestException as e:
-                last = f"{model} {type(e).__name__}"
-                time.sleep(3 if optional else 10)
+                    if r.status_code in (400, 403, 404):
+                        last = f"{model} HTTP {r.status_code}: {r.text[:300]}"
+                        if r.status_code == 403 and rotate_key(403, r.text):
+                            continue
+                        break
+                    r.raise_for_status()
+                    j = r.json()
+                    cand = (j.get("candidates") or [{}])[0]
+                    parts = cand.get("content", {}).get("parts", [])
+                    text = "".join(p.get("text", "") for p in parts).strip()
+                    if not text:
+                        last = f"{model} empty response ({cand.get('finishReason')})"
+                        continue
+                    titles = []
+                    for ch in cand.get("groundingMetadata", {}).get("groundingChunks", []):
+                        t = (ch.get("web") or {}).get("title")
+                        u = (ch.get("web") or {}).get("uri")
+                        if u and all(u != x["uri"] for x in GROUND_SRC):
+                            GROUND_SRC.append({"title": t or "", "uri": u})
+                        if t and t not in titles:
+                            titles.append(t)
+                    return text, titles
+                except requests.RequestException as e:
+                    last = f"{model} {type(e).__name__}"
+                    time.sleep(2 if optional else 5)
+        if optional:
+            break
+        if all(((ki, m) in _DAYLIM) or (_KEYS["dead"].get(ki, 0) > time.time() + 600) for ki in range(nkeys) for m in models):  # a key that rests for hours = its daily quota is gone
+            raise GeminiQuotaError("the DAILY Gemini quota is used up for every model and key (" + str(last) + "): add a backup key from another project or enable billing")
+        if rnd == 0 and last and "429" in last:
+            wait = min(max(waits) or 20.0, 65.0)
+            log(f"Gemini limit hit on every model: waiting {wait:.0f}s once, then one more round")
+            time.sleep(wait)
     raise RuntimeError(f"Gemini failed: {last}")
 
 
@@ -379,7 +424,7 @@ TEXT (81-100): kinetic type, text reveal, word highlight, lower third, chapter t
 DIAGRAM (101-115): flowchart, steps, compare, layers, labels -> engine scene types steps / compare / merge / split / layers; not in photo scenes.
 VFX (116-135): grain, dust, fog, vignette, glitch, light leak, flash, split screen -> already added by the engine lightly; you only choose grade and transitions.
 TRANSITION (136-150): "trans" = slide_l, slide_r, slide_u, slide_d, pandark, blurin, tint_red, tint_blue, blurzoom, dipblack, slash, tear, curl, shred, ink, fade, zoom, whip, wipe, circle, flash, glitch, cut.
-THE REFERENCE GRAMMAR (choose by what the story does, never at random): the next picture normally SLIDES in as ONE continuous move: slide_l = the camera drifts right, the next place comes in from the right; slide_r = the opposite; slide_u / slide_d only when someone looks up or down or something rises or falls. "pandark" = we step into a dark place, evening, fear. "blurin" = waking up, a memory, focus returning, a realisation. "tint_red" = shock, a scream, violence, a possession / supernatural moment. "tint_blue" = cold, death, hospital, night, sadness. "blurzoom" = a sudden event, panic, a fast jump forward. "dipblack" = months or years pass, a chapter ends, a death, the story turns. "slash" = two things compared or two places at once. "tear" / "curl" / "shred" = a document, newspaper, record or piece of evidence is revealed or put away. "ink" = darkness spreading: a curse, a rumour, a secret. "cut" = same scene, next beat. Never the same transition three times in a row. fade is only the last choice.
+THE REFERENCE GRAMMAR (choose by what the story does, never at random): the next picture normally SLIDES in as ONE continuous move: slide_l = the camera drifts right, the next place comes in from the right; slide_r = the opposite; slide_u / slide_d only when someone looks up or down or something rises or falls. "pandark" = we step into a dark place, evening, fear. "blurin" = waking up, a memory, focus returning, a realisation. "tint_red" = shock, a scream, violence, a possession / supernatural moment. "tint_blue" = cold, death, hospital, night, sadness. "blurzoom" = a sudden event, panic, a fast jump forward. "dipblack" = months or years pass, a chapter ends, a death, the story turns. "split" = two things happen at the same time or are contrasted ("meanwhile", "she was cooking ... elsewhere"): the next picture pushes in as a slanted panel beside the first. "slash" = two things compared or two places at once. "tear" / "curl" / "shred" = a document, newspaper, record or piece of evidence is revealed or put away. "ink" = darkness spreading: a curse, a rumour, a secret. "cut" = same scene, next beat. Never the same transition three times in a row. fade is only the last choice.
 
 === STEP 3: BEAT-BY-BEAT ANALYSIS (mandatory, this is what makes you accurate) ===
 Read the scene sentence by sentence and clause by clause. Split it into BEATS: every smallest separate thing the narrator says (each subject, each part, each action, number, date, place, claim, question, reaction). Return them in "beats": [{"w": word index where the beat starts, "says": "the beat in ~5 words", "tech": "catalogue number + name of the ONE best technique for exactly this beat"}]. Then build "mains", "kf" and "items" so that EVERY beat is visibly handled by its technique. A scene with fewer than 3 beats, or with a main that has no technique and no camera movement, is WRONG. Vary techniques: never the same camera move or transition twice in a row, and match them to the tone as described above.
@@ -1061,7 +1106,7 @@ def _tw(w):
 STRICT_SOURCES = os.environ.get("STRICT_SOURCES", "1") != "0"
 _SUPPORT = {}
 _GEM_LIMITED = [False]
-NOTE_CHECK_MAX = int(os.environ.get("NOTE_CHECK_MAX", "30"))  # at most this many verification calls per video (Gemini limits)
+NOTE_CHECK_MAX = int(os.environ.get("NOTE_CHECK_MAX", "12"))  # at most this many verification calls per video (Gemini limits)
 
 
 def note_supports(narr_hi, para_en):
@@ -2130,7 +2175,7 @@ if STORY_STYLE:  # true-story version of the rules (the reference channel: gripp
 
 
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
-TRANS_NAMES = ["pandark", "ink", "curl", "shred", "blurin", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
+TRANS_NAMES = ["pandark", "split", "ink", "curl", "shred", "blurin", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
 TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
 MOOD_NAMES = ["mystery", "epic", "wonder", "calm", "tense", "life", "space"]
 TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
@@ -4463,7 +4508,7 @@ def make_explainer(sc, dur, pal, events):
 # --------------------------------------------------------------------------- compositor: camera, effects, transitions, subtitles
 _C = {}
 TONE_TRANS = ["fade", "zoom", "whip", "wipe", "circle"]
-TRANS_SFX = {"ink": ("whoosh_soft", 0.8), "curl": ("whoosh_soft", 0.7), "shred": ("whoosh", 0.7), "blurin": ("whoosh_soft", 0.5), "tint_red": ("impact", 0.5), "tint_blue": ("whoosh_soft", 0.7), "blurzoom": ("whoosh_down", 0.5), "dipblack": ("whoosh_soft", 0.5), "slash": ("whoosh", 0.6), "tear": ("whoosh_soft", 0.9), "slide_l": ("whoosh", 0.6), "slide_r": ("whoosh", 0.6), "slide_u": ("whoosh", 0.6), "slide_d": ("whoosh", 0.6), "whip": ("whoosh", 0.6), "wipe": ("whoosh_soft", 0.8), "circle": ("whoosh_soft", 0.8), "zoom": ("whoosh_down", 0.5),
+TRANS_SFX = {"split": ("whoosh", 0.6), "ink": ("whoosh_soft", 0.8), "curl": ("whoosh_soft", 0.7), "shred": ("whoosh", 0.7), "blurin": ("whoosh_soft", 0.5), "tint_red": ("impact", 0.5), "tint_blue": ("whoosh_soft", 0.7), "blurzoom": ("whoosh_down", 0.5), "dipblack": ("whoosh_soft", 0.5), "slash": ("whoosh", 0.6), "tear": ("whoosh_soft", 0.9), "slide_l": ("whoosh", 0.6), "slide_r": ("whoosh", 0.6), "slide_u": ("whoosh", 0.6), "slide_d": ("whoosh", 0.6), "whip": ("whoosh", 0.6), "wipe": ("whoosh_soft", 0.8), "circle": ("whoosh_soft", 0.8), "zoom": ("whoosh_down", 0.5),
              "flash": ("impact", 0.55), "glitch": ("glitch", 0.9), "fade": (None, 0)}
 CAMS = ["push", "pull", "pan_lr", "pan_rl", "tilt_up", "tilt_down", "orbit", "handheld", "push_tl", "push_br"]
 SW, SH = 1920, 1080
@@ -4668,13 +4713,13 @@ def pan_dark(prev, cur, p):
 
 
 # ---- more reference transitions (seen in the 10-minute reference): dip to black, red/blue colour-wash cut, zoom-blur cut, diagonal slash, paper tear
-TRANS_DUR = {"ink": 0.9, "curl": 0.85, "shred": 0.8, "blurin": 0.7, "dipblack": 0.8, "tint_red": 0.7, "tint_blue": 0.7, "blurzoom": 0.5, "slash": 0.6, "tear": 0.7}
+TRANS_DUR = {"split": 0.85, "ink": 0.9, "curl": 0.85, "shred": 0.8, "blurin": 0.7, "dipblack": 0.8, "tint_red": 0.7, "tint_blue": 0.7, "blurzoom": 0.5, "slash": 0.6, "tear": 0.7}
 TRANS_BY_TONE = {  # which transition suits which feeling of the story (reference: slides and dark slides most, wash / blur on shocks, black between chapters)
-    "suspense": ["slide_l", "pandark", "tint_red", "blurzoom", "slide_r", "dipblack", "tear", "blurin", "ink", "shred"],
-    "serious": ["slide_l", "pandark", "dipblack", "slide_d", "tint_blue", "slide_r", "tear", "blurin", "ink", "curl"],
-    "excited": ["slide_l", "slide_r", "blurzoom", "slide_u", "slash", "slide_d", "tint_red", "shred"],
-    "wonder": ["slide_l", "slide_u", "slide_r", "pandark", "slash", "dipblack"],
-    "calm": ["slide_r", "pandark", "slide_l", "slide_u", "dipblack", "tear", "blurin", "curl"]}
+    "suspense": ["split", "slide_l", "pandark", "tint_red", "blurzoom", "slide_r", "dipblack", "tear", "blurin", "ink", "shred"],
+    "serious": ["split", "slide_l", "pandark", "dipblack", "slide_d", "tint_blue", "slide_r", "tear", "blurin", "ink", "curl"],
+    "excited": ["split", "slide_l", "slide_r", "blurzoom", "slide_u", "slash", "slide_d", "tint_red", "shred"],
+    "wonder": ["split", "slide_l", "slide_u", "slide_r", "pandark", "slash", "dipblack"],
+    "calm": ["split", "slide_r", "pandark", "slide_l", "slide_u", "dipblack", "tear", "blurin", "curl"]}
 
 
 def _wash(img, col, a):
@@ -4827,6 +4872,36 @@ def paper_shred(prev, cur, p):
     return Image.fromarray(out, "RGB")
 
 
+def split_in(prev, cur, p):
+    """Reference 5:33 (333.6-335 s): the next picture slides in from the right as a PANEL with a slanted edge and a thin white line, pushing the first picture
+    to the left: for a moment both pictures are on screen side by side (two things at the same time / a contrast), then B takes the whole frame."""
+    np = _np()
+    key = ("split", W, H)
+    if key not in _C:
+        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+        _C[key] = (xx, yy / H)
+    xx, yn = _C[key]
+    p = cl(p)
+    e = e_io(p)
+    slope = 0.18 * W
+    base = W * 1.22 - 1.55 * W * e  # slanted edge: the top of the edge leans right ("/")
+    edge = base - slope * yn
+    ax = -int(e * 0.12 * W)
+    a_img = prev.copy()
+    a_img.paste(prev, (ax, 0))
+    bx = int(base * 0.45 * (1 - e))
+    b_img = cur.copy()
+    b_img.paste(cur, (bx, 0))
+    a_arr = np.asarray(a_img).astype(np.float32)
+    b_arr = np.asarray(b_img).astype(np.float32)
+    m = xx >= edge
+    shade = 1 - 0.35 * min(1.0, e * 6) * np.exp(-np.clip(edge - xx, 0, None) / 60.0)[..., None]  # shadow of the panel on the first picture
+    out = np.where(m[..., None], b_arr, a_arr * shade)
+    line = np.abs(xx - edge) < 2.6
+    out = np.where(line[..., None], np.array([250, 250, 250], np.float32), out)
+    return Image.fromarray(out.clip(0, 255).astype(np.uint8), "RGB")
+
+
 def blur_in(prev, cur, p):
     """Reference 2:22 and 3:44: the cut lands on a soft, slightly bright, out-of-focus picture that pulls into focus (rack focus)."""
     np = _np()
@@ -4886,6 +4961,8 @@ def blend_trans(prev, cur, p, kind):
         return blur_in(prev, cur, p)
     if kind == "ink":
         return ink_blob(prev, cur, p)
+    if kind == "split":
+        return split_in(prev, cur, p)
     if kind == "curl":
         return page_curl(prev, cur, p)
     if kind == "shred":
@@ -5453,8 +5530,43 @@ class SrcCard:
         self.w, self.h = bg.size
         self._c = {}
 
-    def frame(self, p, extra_q=0.0):
-        key = (int(round(cl(p) * 14)), int(round(cl(extra_q) * 5)))
+    def _revealed(self, rv):
+        """The text layer with only the first part of its words showing: line after line, each line wiped left to right (a fast typewriter)."""
+        if rv >= 0.995:
+            return self.text
+        np = _np()
+        a_ = np.asarray(self.text.getchannel("A"))
+        rows = np.where(a_.max(axis=1) > 8)[0]
+        if len(rows) == 0:
+            return self.text
+        bands, start, prev = [], rows[0], rows[0]
+        for y in rows[1:]:
+            if y - prev > 4:
+                bands.append((start, prev))
+                start = y
+            prev = y
+        bands.append((start, prev))
+        pos = rv * len(bands)
+        mask = np.zeros_like(a_)
+        for k, (y0, y1) in enumerate(bands):
+            f = cl(pos - k)
+            if f <= 0:
+                break
+            cols = np.where(a_[y0:y1 + 1].max(axis=0) > 8)[0]
+            if len(cols) == 0:
+                continue
+            x_end = int(cols[0] + (cols[-1] - cols[0] + 1) * f)
+            mask[y0:y1 + 1, :x_end] = 255
+        t = self.text.copy()
+        t.putalpha(Image.fromarray((np.asarray(t.getchannel("A")).astype(np.uint16) * mask // 255).astype(np.uint8)))
+        return t
+
+    def frame(self, p, extra_q=0.0, rv=1.0):
+        rvq = int(round(cl(rv) * 12))
+        rv = rvq / 12.0  # the cached picture and the typed amount always agree (12 steps)
+        if rv < 0.8:
+            p = 0.0  # the underline / highlight is drawn only after the words are typed in
+        key = (int(round(cl(p) * 14)), int(round(cl(extra_q) * 5)), rvq)
         if key in self._c:
             return self._c[key]
         im = self.bg.copy()
@@ -5471,7 +5583,7 @@ class SrcCard:
                     break
                 self.hl_fn(d, (r[0], r[1], r[0] + w_ * part, r[3]), part)
             im.alpha_composite(lay)
-        im.alpha_composite(self.text)
+        im.alpha_composite(self._revealed(cl(rv)))
         if self.extra is not None and extra_q > 0.01:
             ex = self.extra
             if extra_q < 0.99:
@@ -5743,6 +5855,7 @@ def _vignette_dim(fr, k):
 
 
 def draw_note(fr, ps, tl, ov, t0, t1, a):
+    _rv = cl((tl - t0 - 0.15) / 1.3)  # reference: the text of a card is typed in line after line within ~1.3 s, then stays
     it = ov.get("it") or {}
     style = it.get("style") or "banner"
     body = it.get("text") if it else ov.get("text", "").rpartition("|")[0]
@@ -5758,7 +5871,7 @@ def draw_note(fr, ps, tl, ov, t0, t1, a):
         qin = e_out(cl((tl - t0) / 0.6))
         qout = 1 - e_out(cl((tl - (t1 - 0.45)) / 0.4))
         pp_ = e_out(cl((tl - t0 - 0.35) / 1.0))
-        spr = card.frame(pp_, cl((pp_ - 0.8) / 0.2)) if style == "paper" else card.frame(pp_)
+        spr = card.frame(pp_, cl((pp_ - 0.8) / 0.2), _rv) if style == "paper" else card.frame(pp_, 0.0, _rv)
         box_h = 405 if it.get("with_ov") else 600
         sk = min(1.0, W * 0.64 / spr.width, box_h / spr.height)
         if sk < 0.999:
@@ -5770,12 +5883,12 @@ def draw_note(fr, ps, tl, ov, t0, t1, a):
     p = e_out(cl((tl - t0 - 0.55) / 1.15))
     q = e_out(cl((tl - t0) / 0.55))
     if style == "banner":
-        spr = card.frame(p)
+        spr = card.frame(p, 0.0, _rv)
         put(fr, spr, W / 2, H - spr.height / 2 + (1 - q) * spr.height * 0.3, 1.0, a)
     elif style in ("strip", "box"):  # slides in from the left, slides out again; the rest of the picture stays free
         # reference (0:02-0:03 and 0:09): a grey torn-paper shape appears first, the card RISES into it from the lower left, tilted, and settles;
         # at the end it is torn away down-left (tilting more) and the grey shape is left behind for a moment
-        spr = card.frame(e_out(cl((tl - t0 - 0.45) / 1.0)))
+        spr = card.frame(e_out(cl((tl - t0 - 0.45) / 1.0)), 0.0, _rv)
         bx, by = 30 + spr.width / 2, H - 30 - spr.height / 2
         qin = e_out(cl((tl - t0 - 0.12) / 0.5))
         fall = cl((tl - (t1 - 0.45)) / 0.38) ** 2
@@ -5796,7 +5909,7 @@ def draw_note(fr, ps, tl, ov, t0, t1, a):
         qr = min(qin, qout)
         _dim(fr, 0.52 * min(1.0, qr * 2.5))
         p = e_out(cl((tl - t0 - 0.9) / 1.15))
-        spr = card.frame(p, cl((p - 0.8) / 0.2))
+        spr = card.frame(p, cl((p - 0.8) / 0.2), _rv)
         put_roll(fr, spr, W / 2, H * 0.5, qr, 1.0, (232, 222, 196))
         ph_ = ps.get("img")
         if ph_ is not None and qr > 0.97:  # polaroid of the current picture drops into the free margin of the card, like a clipped photo
@@ -5805,7 +5918,7 @@ def draw_note(fr, ps, tl, ov, t0, t1, a):
             put(fr, pol, W / 2 + spr.width * 0.5 - 128, H * 0.5 - spr.height * 0.10 - (1 - cl(qq)) * 360, 0.62 + 0.38 * cl(qq), cl((qout - 0.9) * 10))
     elif style == "dark":
         _dim(fr, 0.66 * a)
-        spr = card.frame(p)
+        spr = card.frame(p, 0.0, _rv)
         side = ov.get("side") or "right"
         cx = W * (0.30 if side == "left" else 0.70)
         put(fr, spr, min(max(cx, spr.width / 2 + 24), W - spr.width / 2 - 24), H * 0.5 + (1 - q) * 30, 1.0, a)
@@ -5815,7 +5928,7 @@ def draw_note(fr, ps, tl, ov, t0, t1, a):
         qr = min(qin, qout)
         _dim(fr, 0.6 * min(1.0, qr * 2.5))
         p = e_out(cl((tl - t0 - 0.9) / 1.15))
-        spr = card.frame(p)
+        spr = card.frame(p, 0.0, _rv)
         push = 1.0 + 0.05 * cl((tl - t0) / max(1.0, t1 - t0))
         fit = min(1.0, (W - 60) / spr.width, (H - 30) / spr.height)
         put_roll(fr, spr, W / 2, H * 0.5, qr, push * fit, (236, 234, 224))
@@ -6853,7 +6966,7 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
         draw_quote(fr, tl, t0, a, ov)
         return True
     if k == "name":
-        draw_name(fr, tl, t0, a, ov)
+        draw_name(fr, tl, t0, a, ov, sh)
         return True
     if k == "srclist":
         draw_srclist(fr, sh, tl, t0, t1, a, ov)
@@ -7925,11 +8038,41 @@ def draw_place(fr, tl, t0, a, ov):
     put(fr, spr, 54 + spr.width / 2 - (1 - q) * 380, H - 56 - spr.height / 2, 1.0, a)
 
 
-def draw_name(fr, tl, t0, a, ov):
+def _name_card(text, n, size):
+    key = ("nm2", text, n, size)
+    if key in _CARDS:
+        return _CARDS[key]
+    f = font_for(text, size, "title")
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    full_w = int(probe.textlength(text, font=f)) + 60
+    h = int(size * 1.45)
+    im = Image.new("RGBA", (full_w + 20, h), (0, 0, 0, 0))
+    pre = text[:n]
+    w_pre = int(probe.textlength(pre, font=f))
+    d = ImageDraw.Draw(im)
+    d.rounded_rectangle([2, int(h * 0.56), 2 + w_pre + 52, int(h * 0.56) + int(size * 0.46)], radius=4, fill=(226, 32, 44, 255))  # red brush strip grows with the letters
+    lay = text_layer(pre, f, fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(0, 4, 6, 0.8))
+    im.alpha_composite(lay, (14, max(0, (h - lay.height) // 2 - int(size * 0.22))))
+    _CARDS[key] = im
+    return im
+
+
+def draw_name(fr, tl, t0, a, ov, sh=None):
+    """Reference 8:35 (SUMITRA): the name is typed letter by letter (about 0.06 s per letter) on a red strip, white condensed capitals, next to the person at chest height."""
     it = ov.get("it") or {}
-    spr = name_sprite(it.get("text") or "", it.get("sub") or "")
-    q = e_out(cl((tl - t0) / 0.5))
-    put(fr, spr, W - 54 - spr.width / 2 + (1 - q) * 380, H - 56 - spr.height / 2, 1.0, a)
+    text = str(it.get("text") or "").strip()
+    if not text:
+        return
+    if text.isascii():
+        text = text.upper()
+    text = text[:16]
+    size = int(H * 0.098)
+    n = max(1, min(len(text), 1 + int((tl - t0) / 0.06)))
+    spr = _name_card(text, n, size)
+    full = _name_card(text, len(text), size)
+    sx = _subj(sh)[0] if sh else 0.5
+    cx = min(max(sx * W + 0.16 * W, full.width / 2 + 0.04 * W), W - full.width / 2 - 0.04 * W)
+    put(fr, spr, cx - full.width / 2 + spr.width / 2, H * 0.71, 1.0, a)
 
 
 # ---- feature call-out: the subject's picture, straight arrows from its parts to round pictures at the side
@@ -12848,8 +12991,8 @@ def cast_plan(scenes, topic=""):
     bible = "\n".join(f"{cid}: {c['name']} - {c['desc']}" for cid, c in CAST["chars"].items())
     places = "\n".join(f"{lid}: {d}" for lid, d in CAST["locs"].items())
     n = 0
-    for a in range(0, len(rows), 12):
-        part = rows[a:a + 12]
+    for a in range(0, len(rows), 20):
+        part = rows[a:a + 20]
         listing = "\n".join(f"S{i}.{k}: {sh.get('text_hi', '')}" for i, k, sh in part)
         prompt = f"""Hindi narration sentences of a true-story documentary (topic: {topic}). For each sentence decide the ONE picture that shows what the sentence says.
 CHARACTERS (use only these ids):
