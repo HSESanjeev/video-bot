@@ -72,7 +72,49 @@ HOOK_GAP = 0.70
 SFX_ON = os.environ.get("SFX", "0") == "1"  # sound effects are off by default
 ALLOW_POLLI = os.environ.get("ALLOW_POLLINATIONS", "") == "1"  # watermarked + very slow, off by default
 
-GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "")
+def _load_keys():
+    """GEMINI_API_KEY plus backups GEMINI_API_KEY_2 / _3 / _4 (or GEMINI_API_KEYS = "k1,k2,k3"). Duplicates and empty ones are ignored."""
+    raw = [os.environ.get(n, "") for n in ("GEMINI_API_KEY", "GEMINI_API_KEY_2", "GEMINI_API_KEY_3", "GEMINI_API_KEY_4", "GEMINI_API_KEYS")]
+    out = []
+    for r_ in raw:
+        for k_ in re.split(r"[,\s;]+", r_ or ""):
+            if k_.strip() and k_.strip() not in out:
+                out.append(k_.strip())
+    return out
+
+
+GEMINI_KEYS = _load_keys()
+GEMINI_KEY = GEMINI_KEYS[0] if GEMINI_KEYS else ""
+_KEYS = {"cur": 0, "dead": {}}  # which key is in use / until when a limited key rests
+
+
+def gkey():
+    """The Gemini key to use now: the current one, or (if it is resting) the first backup that is ready."""
+    if not GEMINI_KEYS:
+        return ""
+    now = time.time()
+    ok = [i for i in range(len(GEMINI_KEYS)) if _KEYS["dead"].get(i, 0) <= now]
+    cur = _KEYS["cur"] if _KEYS["cur"] in ok else (ok[0] if ok else min(range(len(GEMINI_KEYS)), key=lambda i: _KEYS["dead"].get(i, 0)))
+    _KEYS["cur"] = cur
+    return GEMINI_KEYS[cur]
+
+
+def rotate_key(status, text=""):
+    """The current key hit its limit (429) or is refused (403): let it rest and switch to a backup key. True = another key is ready."""
+    if len(GEMINI_KEYS) < 2:
+        return False
+    daily = bool(re.search(r"PerDay|per day|daily", text or "", re.I))
+    refused = status == 403 and bool(re.search(r"API key|leaked|PERMISSION|denied", text or "", re.I))
+    cool = 86400 if refused else (3 * 3600 if daily else 75)
+    old = _KEYS["cur"]
+    _KEYS["dead"][old] = time.time() + cool
+    now = time.time()
+    ok = [i for i in range(len(GEMINI_KEYS)) if i != old and _KEYS["dead"].get(i, 0) <= now]
+    if not ok:
+        return False
+    _KEYS["cur"] = ok[0]
+    log(f"Gemini key {old + 1} is {'refused' if refused else 'limited'} (HTTP {status}): switched to backup key {ok[0] + 1} of {len(GEMINI_KEYS)}")
+    return True
 PEXELS_KEY = os.environ.get("PEXELS_API_KEY", "")
 PIXABAY_KEY = os.environ.get("PIXABAY_API_KEY", "")
 POLLI_KEY = os.environ.get("POLLINATIONS_KEY", "")
@@ -168,7 +210,7 @@ def gemini_models():
     if os.environ.get("GEMINI_MODEL"):
         _models_cache = [os.environ["GEMINI_MODEL"]]
         return _models_cache
-    r = requests.get(f"{GBASE}/models", headers={"x-goog-api-key": GEMINI_KEY},
+    r = requests.get(f"{GBASE}/models", headers={"x-goog-api-key": gkey()},
                      params={"pageSize": 200}, timeout=30)
     r.raise_for_status()
     names = [m["name"].split("/")[-1] for m in r.json().get("models", [])
@@ -247,16 +289,20 @@ def _gemini_raw(prompt, json_mode, temperature, search, image, optional):
         body["tools"] = [{"google_search": {}}]
     last = None
     for model in ([optional_model()] if optional else gemini_models()):
-        for attempt in range(1 if optional else 2):
+        for attempt in range((1 if optional else 2) + max(0, len(GEMINI_KEYS) - 1)):
             try:
                 r = requests.post(f"{GBASE}/models/{model}:generateContent",
-                                  headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=60 if optional else 240)
+                                  headers={"x-goog-api-key": gkey()}, json=body, timeout=60 if optional else 240)
                 if r.status_code in (429, 500, 503):
                     last = f"{model} HTTP {r.status_code}"
+                    if r.status_code == 429 and rotate_key(429, r.text):
+                        continue  # a backup key is ready: try it at once
                     time.sleep(3 if optional else 15 * (attempt + 1))
                     continue
                 if r.status_code in (400, 403, 404):
                     last = f"{model} HTTP {r.status_code}: {r.text[:300]}"
+                    if r.status_code == 403 and rotate_key(403, r.text):
+                        continue
                     break
                 r.raise_for_status()
                 j = r.json()
@@ -429,7 +475,7 @@ def apply_special(sc, d):
             items.append({"label_hi": clean_short(x.get("label_hi"), 40), "query_en": q_, "entity_en": clean_short(x.get("entity_en"), 70),
                           "prompt_en": clean_short(x.get("prompt_en"), 300) or ("a realistic photo of " + q_), "t": max(0.0, wt[w][0] - 0.05)})
             lastw = w
-        if len(items) >= 2:
+        if len(items) >= 2 and not STORY_STYLE:  # a story channel never uses real-photo split screens (stock photos of strangers)
             items[0]["t"] = 0.0
             sc["type"], sc["items"] = "multi", items[:3]
             sc["vs"] = bool(d.get("vs")) and len(items) == 2  # old/new, before/after, myth/fact: red & black comparison with magnifier circles
@@ -1014,6 +1060,8 @@ def _tw(w):
 
 STRICT_SOURCES = os.environ.get("STRICT_SOURCES", "1") != "0"
 _SUPPORT = {}
+_GEM_LIMITED = [False]
+NOTE_CHECK_MAX = int(os.environ.get("NOTE_CHECK_MAX", "30"))  # at most this many verification calls per video (Gemini limits)
 
 
 def note_supports(narr_hi, para_en):
@@ -1024,6 +1072,8 @@ def note_supports(narr_hi, para_en):
     key = (narr_hi[:240], para_en[:240])
     if key in _SUPPORT:
         return _SUPPORT[key]
+    if len(_SUPPORT) >= NOTE_CHECK_MAX:  # budget used up: the director's own "direct" match decides
+        return True
     prompt = f"""Narration (Hindi - what the narrator says right now):
 {narr_hi}
 
@@ -1752,6 +1802,8 @@ def trusted_domains_for(topic_en):
                search=True, temperature=0.1, optional=True)
     except Exception as e:  # noqa
         log("  trusted-source check failed:", str(e)[:100])
+        if "429" in str(e):
+            _GEM_LIMITED[0] = True  # stop asking Gemini for the other candidates: the free Wikipedia check is used
         return set()
     found = set()
     for x in GROUND_SRC[before:]:
@@ -1760,6 +1812,43 @@ def trusted_domains_for(topic_en):
         if is_trusted(host):
             found.add(host[4:] if host.startswith("www.") else host)
     return found
+
+
+STORY_SEED = [  # well documented real stories (each has an encyclopedia article and many news / university sources): used when Gemini cannot propose topics
+    ("Apollo 13", "अपोलो 13 का बचाव"), ("Chernobyl disaster", "चेर्नोबिल हादसा"), ("Tunguska event", "तुंगुस्का का विस्फोट"), ("Mary Celeste", "मैरी सेलेस्ट: खाली जहाज़ का रहस्य"),
+    ("Dyatlov Pass incident", "डायटलोव पास हादसा"), ("2010 Copiapó mining accident", "चिली के 33 खनिकों का बचाव"), ("Bhopal disaster", "भोपाल गैस त्रासदी"),
+    ("Thai cave rescue 2018", "थाईलैंड की गुफा का बचाव"), ("Endurance expedition Shackleton", "शैकलटन की एंड्योरेंस यात्रा"), ("Operation Mincemeat", "ऑपरेशन मिंसमीट"),
+    ("Dancing plague of 1518", "1518 का नाचने वाला प्लेग"), ("Uruguayan Air Force Flight 571", "एंडीज़ का विमान हादसा"), ("Hindenburg disaster", "हिंडनबर्ग हादसा"),
+    ("Krakatoa 1883 eruption", "क्राकाटोआ का विस्फोट"), ("Disappearance of Amelia Earhart", "अमेलिया इयरहार्ट का रहस्य"), ("1996 Mount Everest disaster", "एवरेस्ट 1996 की त्रासदी"),
+    ("Cottingley Fairies", "कॉटिंगली की परियाँ"), ("Piltdown Man", "पिल्टडाउन मानव का धोखा"), ("Kursk submarine disaster", "कुर्स्क पनडुब्बी हादसा"), ("Lost Colony of Roanoke", "रोअनोक की खोई बस्ती"),
+]
+
+
+def trusted_domains_wiki(topic_en):
+    """Free check (no Gemini quota): the Wikipedia article about the story and how many DIFFERENT trusted organisations it cites (BBC, Britannica, universities, governments, journals...)."""
+    try:
+        api = "https://en.wikipedia.org/w/api.php"
+        r = requests.get(api, params={"action": "query", "list": "search", "srsearch": topic_en, "srlimit": 1, "format": "json"}, headers=WIKI_UA, timeout=20).json()
+        hits = (r.get("query") or {}).get("search") or []
+        if not hits:
+            return set()
+        title = hits[0]["title"]
+        found = {"wikipedia.org"}
+        params = {"action": "query", "prop": "extlinks", "titles": title, "ellimit": "max", "format": "json"}
+        for _ in range(4):
+            j = requests.get(api, params=params, headers=WIKI_UA, timeout=20).json()
+            for pg in ((j.get("query") or {}).get("pages") or {}).values():
+                for el in pg.get("extlinks") or []:
+                    u = el.get("*") or el.get("url") or ""
+                    if is_trusted(u):
+                        found.add(_dom(u))
+            if "continue" not in j:
+                break
+            params.update(j["continue"])
+        return found
+    except Exception as e:  # noqa
+        log("  wikipedia source check failed:", type(e).__name__, str(e)[:80])
+        return set()
 
 
 def pick_story_topic(done):
@@ -1775,8 +1864,8 @@ Return JSON: [{{"topic_en": "...", "topic_hi": "...", "organisations": ["names o
     try:
         items = gemini_json(prompt, temperature=1.0)
     except Exception as e:  # noqa
-        log("Story topic generation failed:", str(e)[:120])
-        return None
+        log("Story topic generation failed (Gemini limit?), a documented story from the built-in list is used:", str(e)[:100])
+        items = [{"topic_en": a, "topic_hi": b} for a, b in random.sample(STORY_SEED, len(STORY_SEED))]
     best = None
     tried = 0
     for it in items if isinstance(items, list) else []:
@@ -1786,15 +1875,20 @@ Return JSON: [{{"topic_en": "...", "topic_hi": "...", "organisations": ["names o
         tried += 1
         if tried > 6:
             break
-        found = trusted_domains_for(t)
+        found = trusted_domains_wiki(t)
+        if len(found) < TRUSTED_MIN and not _GEM_LIMITED[0]:
+            found |= trusted_domains_for(t)
         log(f"  story candidate: {t[:70]} | trusted organisations found: {len(found)} {sorted(found)[:5]}")
         if best is None or len(found) > best[0]:
             best = (len(found), t, it.get("topic_hi") or t)
         if len(found) >= TRUSTED_MIN:
             return "story", t, (it.get("topic_hi") or t)
-    if best and best[0] >= 1:
-        log(f"  no story reached {TRUSTED_MIN} trusted organisations; the best one ({best[0]}) is used")
+    if best:
+        log(f"  no story reached {TRUSTED_MIN} trusted organisations; the best one ({best[0]}) is still used (this is a story channel)")
         return "story", best[1], best[2]
+    for a, b in random.sample(STORY_SEED, len(STORY_SEED)):
+        if not is_dup(a, done):
+            return "story", a, b
     return None
 
 
@@ -2043,7 +2137,7 @@ TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
 
 
 def build_script_prompt(topic, cat, style, target_sec, facts, words):
-    n_scenes = max(5 if TEST_SEC else (max(6, FIXED_SEC // 15) if FIXED_SEC else 14), round(words / 21))
+    n_scenes = max(5 if TEST_SEC else (max(6, int(target_sec) // 15) if FIXED_SEC else 14), round(words / 21))
     test_note = ("\nTEST MODE: this is a very short test video. Use only about 5-6 scenes, a hook of 15-18 words, no long recap. "
                  "Ignore the minimum counts below. Almost all scenes must be type photo; exactly ONE sketch scene (scene 3 or 4) is wanted; map or counter allowed once if natural; no merge/split/steps/compare/bars.\n") if TEST_SEC else ""
     return f"""You are a script writer and film editor for a {CH_DESC} YouTube channel.
@@ -2195,7 +2289,9 @@ def validate_script(s, verbatim=False, min_scenes=None):
                 typ = "photo"
         else:
             typ = "photo"
-        if typ in ("merge", "split", "steps", "compare", "kinetic") and os.environ.get("KEEP_EXPLAINERS") != "1":
+        if STORY_STYLE and typ in ("counter", "bars", "sketch"):
+            typ = "photo"  # story mode: only story pictures and maps
+        if (typ in ("merge", "split", "steps", "compare", "kinetic") or (STORY_STYLE and typ == "multi")) and os.environ.get("KEEP_EXPLAINERS") != "1":
             # cartoon explainer cards look cheap: every such scene becomes a real-photo scene (the director then edits it word by word)
             if typ == "kinetic":
                 raw_shots = [{"text_hi": "", "prompt_en": clean_short(sc.get("image_prompt_en"), 400) or FALLBACK_SCENE, "query_en": ""}]
@@ -2339,7 +2435,40 @@ SCENES:
     return script
 
 
+LONG_SCRIPT_SEC = 240  # a longer video is written in parts of about PART_SEC seconds each
+PART_SEC = 150
+
+
+def write_script_long(topic, cat, style, target_sec, facts, wpm):
+    k = max(2, math.ceil(target_sec / PART_SEC))
+    part_sec = target_sec / k
+    words = int(part_sec / 60 * wpm)
+    scenes, first, told = [], None, []
+    for i in range(1, k + 1):
+        note = (f"\nLONG VIDEO: this is PART {i} of {k} of ONE continuous video (the parts are joined, the viewer must not notice a seam). "
+                + ("Start with the hook." if i == 1 else "Do NOT write a hook, greeting or intro: continue exactly where the story stopped. ")
+                + (" Do NOT conclude or recap yet: end this part on the next unresolved moment." if i < k else " This is the LAST part: bring the story to its strongest documented ending.")
+                + (("\nSTORY SO FAR (already told, never repeat any of it): " + " ".join(told[-8:])) if told else ""))
+        part = None
+        for attempt in (1, 2):
+            try:
+                part = validate_script(gemini_json(build_script_prompt(topic, cat, style, part_sec, facts, words) + note, 0.8), min_scenes=5)
+                break
+            except Exception as e:  # noqa
+                log(f"script part {i}/{k} failed (try {attempt}): {str(e)[:100]}")
+        if part is None:
+            raise ValueError(f"script part {i} could not be written")
+        first = first or part
+        scenes += part["scenes"]
+        told += [sc["narration_hi"] for sc in part["scenes"]]
+        log(f"script part {i}/{k}: {len(part['scenes'])} scenes, {sum(len(sc['narration_hi'].split()) for sc in part['scenes'])} words")
+    first["scenes"] = scenes
+    return first
+
+
 def write_script(topic, cat, style, target_sec, facts, wpm):
+    if target_sec > LONG_SCRIPT_SEC:
+        return write_script_long(topic, cat, style, target_sec, facts, wpm)
     words = int(target_sec / 60 * wpm)
     script = validate_script(gemini_json(build_script_prompt(topic, cat, style, target_sec, facts, words), 0.8))
     review = f"""You are (1) a careful {"fact-checking editor" if STORY_STYLE else "science editor"}, (2) a Hindi school teacher and (3) a documentary film editor.
@@ -2423,13 +2552,15 @@ def tts_gemini(text, out_path, tone=None):
             _tts_last[0] = time.time()
             try:
                 r = requests.post(f"{GBASE}/models/{model}:generateContent",
-                                  headers={"x-goog-api-key": GEMINI_KEY}, json=body, timeout=180)
+                                  headers={"x-goog-api-key": gkey()}, json=body, timeout=180)
             except requests.RequestException as e:
                 last = f"{model} {type(e).__name__}"
                 time.sleep(8)
                 continue
             if r.status_code == 429:
                 last = f"{model} quota (HTTP 429)"
+                if rotate_key(429, r.text):
+                    continue  # a backup key is ready
                 if attempt < 1:
                     time.sleep(35)
                     continue
@@ -6653,7 +6784,7 @@ def _desk_assets():
     return a_
 
 
-def _polaroid(img, w):
+def _desk_polaroid(img, w):
     h = int(w * 1.0)
     pad, bot = int(w * 0.06), int(w * 0.22)
     sp = Image.new("RGBA", (w + 2 * pad, h + pad + bot), (246, 244, 238, 255))
@@ -6681,7 +6812,7 @@ def draw_desk(fr, sh, tl, t0, t1, a, ov):
         if qq <= 0.01:
             continue
         crop = src.crop((int(W * x0), int(H * 0.1), int(W * x1), int(H * 0.9)))
-        pol = _polaroid(crop, int(W * 0.15)).rotate(ang, resample=Image.BICUBIC, expand=True)
+        pol = _desk_polaroid(crop, int(W * 0.15)).rotate(ang, resample=Image.BICUBIC, expand=True)
         put(fr, pol, W * fx - ex, H * fy, 1.0 + (1 - qq) * 0.18, qq * (1 - out))
 
 
@@ -12761,7 +12892,7 @@ def img_gemini_ref(prompt, out, ref_paths, size=(1920, 1080)):
             if with_ratio:
                 gc["imageConfig"] = {"aspectRatio": "16:9"}
             try:
-                r = requests.post(f"{GBASE}/models/{model}:generateContent", headers={"x-goog-api-key": GEMINI_KEY},
+                r = requests.post(f"{GBASE}/models/{model}:generateContent", headers={"x-goog-api-key": gkey()},
                                   json={"contents": [{"parts": parts}], "generationConfig": gc}, timeout=150)
             except requests.RequestException as e:
                 note_fail("gemini-image", type(e).__name__)
@@ -12771,6 +12902,8 @@ def img_gemini_ref(prompt, out, ref_paths, size=(1920, 1080)):
                 continue  # this model does not know imageConfig: retry without
             if not r.ok:
                 note_fail("gemini-image", f"HTTP {r.status_code} {re.sub(chr(10), ' ', r.text or '')[:110]}")
+                if r.status_code == 429 and rotate_key(429, r.text):
+                    break  # next picture tries the backup key; this one falls back to Cloudflare
                 CAST["gem_fail"] += 1
                 if r.status_code in (403, 404) or CAST["gem_fail"] >= 3 and CAST["gem_ok"] == 0 or CAST["gem_fail"] >= 8:
                     CAST["gem_dead"] = True
