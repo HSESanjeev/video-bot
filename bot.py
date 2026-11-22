@@ -1743,6 +1743,8 @@ def director_pass(scenes, topic=""):
     finalize_overlays(scenes, topic)
     allsh = [sh for sc in scenes for sh in sc.get("shots", [])] if todo else []
     techs = sorted({t.strip() for sh in allsh for t in (sh.get("tech") or "").split(",") if t.strip().isdigit()}, key=int)
+    if STORY_STYLE:
+        techs = [REF_TECH_NAMES.get(int(t), t) for t in techs]  # names from the reference catalogue instead of bare numbers
     nbeats = sum(len(sc.get("beats", [])) for sc in scenes)
     DIRECTOR_REPORT[0] = (f"Director: {ok}/{len(todo)} scenes planned | beats {nbeats} | keyframe moves {sum(1 for sh in allsh if sh.get('kf'))} | "
                           f"video clips planned {sum(1 for sh in allsh if sh.get('motion') and sh.get('clip_en'))} | transitions {sum(1 for sh in allsh if sh.get('trans'))} | cams {sum(1 for sh in allsh if sh.get('cam'))} | "
@@ -1808,8 +1810,34 @@ TOPIC_MODE = os.environ.get("TOPIC_MODE", "story")  # "story" = real documented 
 STORY_STYLE = TOPIC_MODE == "story" or bool(os.environ.get("CUSTOM_STORY", "").strip())  # the channel is a TRUE-STORY channel: every prompt below speaks about real documented stories
 CH_DESC = "Hindi true-story documentary (real, documented cases)" if STORY_STYLE else "Hindi nature & science explainer"
 FALLBACK_SCENE = "a dramatic cinematic scene from the story, natural light" if STORY_STYLE else "a dramatic cinematic nature scene"
+REF_TECH_NAMES = {
+    1: "camera: slow push-in", 2: "camera: pull-out", 3: "camera: pan left", 4: "camera: pan right", 5: "camera: tilt up", 6: "camera: tilt down",
+    7: "camera: extreme close-up push", 8: "camera: handheld drift",
+    9: "slide (left)", 10: "slide (right)", 11: "slide (up)", 12: "slide (down)", 13: "slide into the dark", 14: "rack-focus blur-in", 15: "red wash cut",
+    16: "blue wash cut", 17: "zoom-blur cut", 18: "dip to black", 19: "slanted slash", 20: "paper tear", 21: "page curl", 22: "paper shred", 23: "ink blob",
+    24: "split panel", 25: "hard cut",
+    30: "source card (torn strip)", 31: "source banner", 32: "dark side panel", 33: "document page + highlight", 34: "year slider", 35: "typed name label",
+    36: "speech bubble", 37: "quote text", 38: "verdict circles", 39: "magnifier inset", 40: "side labels (new / old)", 41: "big time text", 42: "news tab",
+    43: "glow around a person", 44: "research desk", 45: "terrain map (pins, avatars, arrow)",
+    50: "grade: warm", 51: "grade: B&W + red (dread)", 52: "grade: red wash (shock)", 53: "grade: cold blue", 54: "grade: sepia archive", 55: "grade: dark vignette",
+}
+REF_CATALOGUE = (
+    "=== CATALOGUE of the techniques SEEN in the reference video (use these numbers in \"tech\") ===\n"
+    "CAMERA (1-8): 1 slow push-in, 2 pull-out, 3 pan left, 4 pan right, 5 tilt up, 6 tilt down, 7 extreme close-up push (eyes, mouth), 8 handheld drift -> \"cam\": push, pull, pan_lr, pan_rl, tilt_up, tilt_down, orbit, handheld, push_tl, push_br; every picture keeps moving slowly.\n"
+    "TRANSITIONS (9-25): 9 slide_l, 10 slide_r, 11 slide_u, 12 slide_d, 13 pandark, 14 blurin, 15 tint_red, 16 tint_blue, 17 blurzoom, 18 dipblack, 19 slash, 20 tear, 21 curl, 22 shred, 23 ink, 24 split, 25 cut -> use the REFERENCE GRAMMAR below.\n"
+    "OVERLAYS (30-45): 30 source card (torn strip) and 31 source banner = every time a study / investigator / newspaper / record / witness is quoted (note); 32 dark side panel and 33 document page with highlight (note styles); "
+    "34 year slider = every spoken year or date (year); 35 typed name label = first introduction of a person (name); 36 speech bubble = retold first-person words (bubble); 37 quote text (quote); 38 verdict circles = myth / fact (verdict); "
+    "39 magnifier inset = look closely at a small detail (lens); 40 side labels = old / new (sidelabel); 41 big time text = a time span (bigtext); 42 news tab = newspaper (tab); 43 glow around a revered / dangerous person (glow); "
+    "44 research desk = the investigation is introduced (desk); 45 terrain map with pins, avatars and arrow = two named places or a journey (terrain scene).\n"
+    "GRADE (50-55): 50 warm, 51 bwred (dread, supernatural), 52 redwash (shock), 53 cold blue (night, death), 54 sepia (archive, past), 55 dark vignette -> \"grade\".\n"
+    "Never use counters, bars, charts, flowcharts, cartoons or sketches: this is a true-story film made of story pictures, source cards, maps and these overlays.\n"
+)
+
 if STORY_STYLE:
     DIRECTOR_RULES = DIRECTOR_RULES.replace("a Hindi nature/science documentary", "a " + CH_DESC)
+    _i0 = DIRECTOR_RULES.index("=== CATALOGUE of the 150 techniques")
+    _i1 = DIRECTOR_RULES.index("TRANSITION (136-150):")
+    DIRECTOR_RULES = DIRECTOR_RULES[:_i0] + REF_CATALOGUE + DIRECTOR_RULES[_i1:].replace("TRANSITION (136-150):", "TRANSITIONS (9-25), details:", 1)
 TRUSTED_ONLY = os.environ.get("TRUSTED_ONLY", "1") != "0"  # source cards come only from trusted organisations
 TRUSTED_MIN = int(os.environ.get("TRUSTED_MIN", "3"))  # a topic needs at least this many DIFFERENT trusted organisations covering it
 TRUSTED_DOMAINS = {
