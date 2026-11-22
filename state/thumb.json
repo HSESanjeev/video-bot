@@ -1,12 +1,4 @@
 {
- "layout": "side",
- "accent": 0,
- "styles": [
-  "top_title",
-  "banner_zoom",
-  "hero_right",
-  "top_title",
-  "banner_zoom",
-  "hero_right"
- ]
+ "layout": "bottom",
+ "accent": 4
 }

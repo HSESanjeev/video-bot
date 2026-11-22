@@ -798,6 +798,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-22T13:27:20+00:00",
+   "topic_en": "The 1972 Andes Flight Disaster: 72 Days of Survival in the Mountains",
+   "title_hi": "एंडीज विमान हादसा: 72 दिन मौत से जंग",
+   "category": "story",
+   "style": "myth",
+   "theme": "sunrise",
+   "mood": "tense",
+   "seconds": 59,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
