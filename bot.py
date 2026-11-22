@@ -57,7 +57,8 @@ GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 GEMINI_TTS_MODELS = [m for m in os.environ.get(
     "GEMINI_TTS_MODELS", "gemini-3.1-flash-tts-preview,gemini-2.5-flash-preview-tts").split(",") if m.strip()]
 GEMINI_TTS_GAP = float(os.environ.get("GEMINI_TTS_GAP", "4"))
-WPM = float(os.environ.get("WPM_ESTIMATE", "130"))  # spoken Hindi words per minute (default estimate)
+WPM = float(os.environ.get("WPM_ESTIMATE", "220"))  # spoken Hindi words per minute: about 220 words are one minute of video (measured by the owner)
+WPM_MIN, WPM_MAX = 190.0, 250.0  # a saved value outside this range comes from a odd short test video and is ignored
 MIN_SEC, MAX_SEC = 180, 300
 def _fixed_sec():
     v = (os.environ.get("VIDEO_SECONDS") or os.environ.get("TEST_SECONDS") or "0").strip().lower()
@@ -885,12 +886,14 @@ def director_extras(scenes, topic=""):
     for a in range(0, len(ph), 4):
         batch = ph[a:a + 4]
         listing = "\n".join(f"SCENE {i}: {_numbered(sc)}" for i, sc in batch)
+        story_map = (" For this TRUE-STORY video: use \"terrain\" every time the narrator names TWO real places (villages, towns, districts) or a distance / a journey between them, "
+                     "and use \"map\" when ONE real place of the story is named for the first time. Never use \"split\" (no real-photo split screens).") if STORY_STYLE else ""
         prompt = f"""Film editor task. Hindi narration, every word numbered (index:word). Video topic: {topic}
 For EACH scene decide ONLY these two things:
 (1) "split": the narrator names or lists 2 or 3 SEPARATE subjects in this scene (two animals, two cities, two universities, before/after...). Add "vs": true next to "split" when it is exactly TWO subjects that are an explicit contrast (old vs new, before vs after, then vs now, myth vs fact, wrong vs right): the screen then becomes a bright-vs-red-black comparison. Return a list of 2-3 {{"w": word index where that subject is first spoken (the first item's w may be its own word), "label_hi": "name as spoken", "query_en": "1-3 English words for a real photo of exactly it", "entity_en": "exact Wikipedia article title or empty", "prompt_en": "realistic photo of it"}}.
 (2) "terrain": the narrator names EXACTLY TWO real places (a start and an end: villages, cities, districts, parks, less than ~1000 km apart) as a journey, distance or 'from X to Y'. Return {{"pins":[{{"label_hi":"start place as spoken","lat":..,"lon":..}},{{"label_hi":"end place as spoken","lat":..,"lon":..}}],"regions":[{{"label_hi":"district/state around","lat":..,"lon":..}}]}} with CORRECT coordinates; never guess unknown places. (If the scene names THREE or more places use "map" below instead.)
 (3) "map": the narrator names 1-5 real places (a named country/state/city/forest only: NOT "the world", "Earth", "planet" or "universe", which show a photo of Earth instead) (country, state, forest, city) where the story happens and no split/terrain applies. Return {{"pins":[{{"label_hi":"place as spoken","lat":..,"lon":..}}]}} with correct coordinates (never guess).
-Use null when it does not apply. Do not force it. Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"vs":false,"terrain":null,"map":null}}]}}
+Use null when it does not apply. Do not force it.{story_map} Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"vs":false,"terrain":null,"map":null}}]}}
 {listing}"""
         try:
             out = gemini_json_opt(prompt, 0.2)
@@ -11025,6 +11028,32 @@ def real_terrain_ground(pts, regs, CW, CH, to_px, lon_lat_of):
 TERRAIN_COLS = [(84, 134, 50), (178, 118, 44), (112, 108, 98), (122, 142, 68), (150, 98, 58), (96, 120, 88)]
 
 
+MAP_AVATARS = os.environ.get("MAP_AVATARS", "1") != "0"
+_AVATAR_CACHE = {}
+
+
+def _avatar_sprite(path, d=132):
+    """Round portrait with an orange ring and a soft shadow (reference map pins)."""
+    key = (str(path), d)
+    if key in _AVATAR_CACHE:
+        return _AVATAR_CACHE[key]
+    im = Image.open(path).convert("RGB")
+    w_, h_ = im.size
+    sq = min(w_, h_)
+    im = im.crop(((w_ - sq) // 2, max(0, int((h_ - sq) * 0.15)), (w_ - sq) // 2 + sq, max(0, int((h_ - sq) * 0.15)) + sq)).resize((d, d), Image.LANCZOS)
+    ring = 10
+    sp = Image.new("RGBA", (d + 2 * ring + 12, d + 2 * ring + 12), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(sp)
+    c = sp.width // 2
+    dr.ellipse([c - d // 2 - ring + 5, c - d // 2 - ring + 7, c + d // 2 + ring + 5, c + d // 2 + ring + 7], fill=(0, 0, 0, 90))
+    dr.ellipse([c - d // 2 - ring, c - d // 2 - ring, c + d // 2 + ring, c + d // 2 + ring], fill=(240, 138, 40, 255))
+    m = Image.new("L", (d, d), 0)
+    ImageDraw.Draw(m).ellipse([0, 0, d - 1, d - 1], fill=255)
+    sp.paste(im, (c - d // 2, c - d // 2), m)
+    _AVATAR_CACHE[key] = sp
+    return sp
+
+
 def make_terrain_draw(sc, dur, speech_dur, pal, events):
     """Tilted satellite-style terrain map: coloured regions with white borders and big place names lying on the ground,
     two tagged places, an animated arc arrow between them and the distance written along it; the camera follows each point."""
@@ -11056,7 +11085,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         names.append(None)
     def lon_lat_of(px, py):
         return lon0 + ((px - CW / 2) / sc_ + xc) / kx, lat0 - ((py - CH / 2) / sc_ + yc)
-    real = real_terrain_ground(pts, regs, CW, CH, to_px, lon_lat_of) if os.environ.get("REAL_MAP", "0") == "1" else None
+    real = real_terrain_ground(pts, regs, CW, CH, to_px, lon_lat_of) if os.environ.get("REAL_MAP", "1" if STORY_STYLE else "0") == "1" else None
     if real:  # region names come from the real polygons that contain the named points
         img, polys = real
         for r_i, r_ in enumerate(regs):
@@ -11252,6 +11281,12 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
             put(fr, soft_circle(22, (255, 255, 255), 0.5), x, y, ring * sz, 0.6 * (1 - (q % 1.4) / 1.4) * cl(q * 3))
             put(fr, pin_img, x, y - 10 * sz, sz * e_back(q / 0.4), cl(q * 6))
             put(fr, tags[i], x, y - (62 + lerp(-40, 0, e_out(q / 0.35))) * sz, sz, cl((q - 0.1) * 4))
+            if MAP_AVATARS and CAST.get("order") and i < len(CAST["order"]) and CAST["order"][i] in CAST.get("refs", {}):
+                try:  # the main people of the story stand at their places: first pin = the main person, second pin = the second person
+                    av_ = _avatar_sprite(CAST["refs"][CAST["order"][i]])
+                    put(fr, av_, x, y - (62 + 30 + av_.height / 2 + lerp(-30, 0, e_out(q / 0.45))) * sz, sz * e_back(cl(q / 0.5)), cl((q - 0.05) * 4) * (1 - cl((q - 2.2) / 0.5)))  # the portrait pops up with its place, then leaves so that close pins do not pile up
+                except Exception:  # noqa
+                    pass
         if NP == 2 and t > t_text:  # distance is written only when exactly two places were named
             x, y = sp(*kpos)
             put(fr, ktxt_sp, x, y, max(0.7, min(1.4, k * 1.1)) * (0.9 + 0.1 * e_out(cl((t - t_text) / 0.4))), cl((t - t_text) * 4))
@@ -13154,6 +13189,7 @@ def cast_refs(scenes, imgdir):
               f"{CAST['chars'][cid]['name']}: {CAST['chars'][cid]['desc']}. {CAST['style']}")
         if gen_image_cast(pr, p):
             CAST["refs"][cid] = p
+    CAST["order"] = [c for c in sorted(freq, key=lambda c: -freq[c])[:CAST_REF_MAX] if c in CAST["refs"]]
     log(f"cast: reference portraits made for {sorted(CAST['refs'])}")
 
 
@@ -13378,6 +13414,9 @@ def pipeline():
         target = int(min(900, max(30, len(own_story.split()) / float(wpms.get("gemini" if (TTS_PROVIDER in ("auto", "gemini") and GEMINI_KEY) else "edge", WPM)) * 60)))
     use_g = TTS_PROVIDER in ("auto", "gemini") and bool(GEMINI_KEY)
     wpm = float(wpms.get("gemini" if use_g else "edge", WPM))
+    if not (WPM_MIN <= wpm <= WPM_MAX):
+        log(f"saved speaking speed {wpm:.0f} words/min is outside {WPM_MIN:.0f}-{WPM_MAX:.0f}: {WPM:.0f} is used")
+        wpm = WPM
     log(f"TOPIC: {topic_en} | category={cat} | style={style[0]} | theme={pal['name']} | target={target}s | wpm={wpm:.0f}")
 
     GROUND_SRC.clear()
@@ -13455,7 +13494,9 @@ def pipeline():
         CAST["on"] = False
         log("cast failed, normal pictures are used:", type(e).__name__, str(e)[:120])
     prov = "gemini" if VOICE_USED[0].startswith("gemini") else "edge"
-    wpms[prov] = round(word_count(script) / (total / 60), 1)
+    measured = round(word_count(script) / (total / 60), 1)
+    if WPM_MIN <= measured <= WPM_MAX:  # only a normal full-length video teaches the speed
+        wpms[prov] = measured
     save_json(WPM_FILE, wpms)
 
     imgdir = WORK / "img"
