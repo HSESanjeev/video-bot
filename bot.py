@@ -400,8 +400,8 @@ def gemini_json(prompt, temperature=0.8, optional=False):
 
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
-ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "note": 6.6, "place": 3.8, "year": 4.6, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8,
-              "measure": 4.0, "qmark": 2.8, "lens": 4.2, "beforeafter": 5.0, "compare": 5.6, "mark": 3.4, "chart": 5.6, "tline": 16.0, "hl": 3.6, "sidelabel": 5.0, "bigtext": 4.0, "tab": 3.6, "glow": 5.0, "desk": 5.5}
+ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "note": 6.6, "place": 3.8, "year": 16.0, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8,
+              "measure": 4.0, "qmark": 2.8, "lens": 4.2, "beforeafter": 5.0, "compare": 5.6, "mark": 3.4, "chart": 5.6, "tline": 6.0, "hl": 3.6, "sidelabel": 5.0, "bigtext": 4.0, "tab": 3.6, "glow": 5.0, "desk": 5.5}
 ITEM_SLOT = {"quote": "N", "bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P",
              "measure": "N", "qmark": "N", "lens": "N", "beforeafter": "N", "compare": "N", "mark": "N", "chart": "N", "tline": "N", "hl": "N", "sidelabel": "N", "bigtext": "N", "tab": "N", "glow": "N", "desk": "N"}
 
@@ -1065,7 +1065,7 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 CINEMA_MODE = os.environ.get("CINEMA_MODE", "1") != "0"
 # REFERENCE ONLY: overlays that never appear in the 10-minute reference video are switched off (REF_ONLY=0 brings them back)
 REF_ONLY = os.environ.get("REF_ONLY", "1") != "0"
-REF_BLOCK = {"mark", "hl", "srclist", "stat", "measure", "chart", "feature", "explain", "action"}  # red circle / red-line text, pink caption bar, SOURCES list, big red stat, ruler, chart, pop-up cards
+REF_BLOCK = {"mark", "hl", "srclist", "stat", "measure", "chart", "feature", "explain", "action", "qmark", "compare", "beforeafter", "tline"}  # red circle / red-line text, pink caption bar, SOURCES list, big red stat, ruler, chart, pop-up cards
 CALM_MAX_ITEMS = 999  # no limit: an animation appears every time the narration calls for it
 CALM_GAP = 1.0  # only the SAME kind of animation twice within one second is treated as a duplicate
 CALM_PRI = {"note": 10, "srclist": 10, "person": 9, "name": 9, "place": 9, "title": 9, "year": 8, "stat": 8, "verdict": 8, "explain": 7, "action": 7, "feature": 7, "compare": 7, "chart": 7, "tline": 7,
@@ -2497,7 +2497,11 @@ def write_script_long(topic, cat, style, target_sec, facts, wpm):
         part = None
         for attempt in (1, 2):
             try:
-                part = validate_script(gemini_json(build_script_prompt(topic, cat, style, part_sec, facts, words) + note, 0.8), min_scenes=5)
+                more = "" if attempt == 1 else f"\nIMPORTANT: your previous answer was too short. This part must have AT LEAST {words} spoken words (about {max(6, words // 24)} scenes)."
+                part = validate_script(gemini_json(build_script_prompt(topic, cat, style, part_sec, facts, words) + note + more, 0.8), min_scenes=5)
+                if sum(len(sc["narration_hi"].split()) for sc in part["scenes"]) < words * 0.8 and attempt == 1:
+                    log(f"script part {i}/{k} is short ({sum(len(sc['narration_hi'].split()) for sc in part['scenes'])} of {words} words): asking again")
+                    continue
                 break
             except Exception as e:  # noqa
                 log(f"script part {i}/{k} failed (try {attempt}): {str(e)[:100]}")
@@ -2511,11 +2515,42 @@ def write_script_long(topic, cat, style, target_sec, facts, wpm):
     return first
 
 
+def expand_script(script, target_words, facts=""):
+    """The model wrote a script that is too SHORT for the chosen video length: it is lengthened with more real detail from the source passages (never invented), in the same order."""
+    cur = word_count(script)
+    prompt = (f"This {'true-story' if STORY_STYLE else 'explainer'} script (JSON) has only {cur} words, but the video must be about {target_words} words long when spoken. "
+              f"LENGTHEN it to AT LEAST {target_words} words: add more scenes and more detail of the story, in the real order, mostly BEFORE the last scene; "
+              "use ONLY facts from the source passages below (never invent names, dates, quotes or events); keep the hook and the strong ending; "
+              "keep every existing field and the exact JSON shape (each scene 15-32 spoken words, text_hi parts of the shots must add up to narration_hi). Return ONLY the full JSON.\n"
+              + (f"SOURCE PASSAGES:\n{str(facts)[:9000]}\n" if facts else "")
+              + "SCRIPT:\n" + json.dumps(script, ensure_ascii=False))
+    return validate_script(gemini_json(prompt, 0.5))
+
+
+def ensure_length(script, target_words, facts=""):
+    """Up to 3 tries until the script has at least ~90% of the words the chosen length needs."""
+    for attempt in range(1, 4):
+        cur = word_count(script)
+        if cur >= target_words * 0.9:
+            break
+        log(f"script has {cur} words, the selected length needs ~{target_words}: lengthening (try {attempt})")
+        try:
+            new = expand_script(script, target_words, facts)
+            if word_count(new) > cur:
+                script = new
+        except Exception as e:  # noqa
+            log("lengthening failed:", str(e)[:100])
+            break
+    return script
+
+
 def write_script(topic, cat, style, target_sec, facts, wpm):
     if target_sec > LONG_SCRIPT_SEC:
         return write_script_long(topic, cat, style, target_sec, facts, wpm)
     words = int(target_sec / 60 * wpm)
     script = validate_script(gemini_json(build_script_prompt(topic, cat, style, target_sec, facts, words), 0.8))
+    if FIXED_SEC:
+        script = ensure_length(script, words, facts)
     review = f"""You are (1) a careful {"fact-checking editor" if STORY_STYLE else "science editor"}, (2) a Hindi school teacher and (3) a documentary film editor.
 Improve this {"true-story" if STORY_STYLE else "explainer-video"} script JSON:
 - {"Remove or soften any claim, detail or quote that the real source passages do not report; keep disputed parts clearly worded as claims; never invent dialogue." if STORY_STYLE else "Remove or soften any claim that is not widely accepted science; fix any factual doubt."}
@@ -2523,13 +2558,17 @@ Improve this {"true-story" if STORY_STYLE else "explainer-video"} script JSON:
 - Keep scene 1 a truthful suspense hook (25-30 words, type "photo") that does not reveal the answer.
 - Check that every picture matches the words spoken at that moment (each shot's prompt_en must show exactly what its text_hi says; a merge scene must really show A and B combining into the result named in the narration; counter/bars numbers must be correct and round). Fix types/items/labels/headlines/shots where they do not teach.
 - Keep at least 60% of the scenes as type photo (real-photo documentary scenes) and keep the "sketch" scenes (with their sketch_brief_en, headline_hi, year_hi) where a mechanism is explained; no merge/split/steps/compare/bars/kinetic cards; map or multi (split-screen list of real photos) are welcome; and a grade + transition on every scene. Every shot must show what is spoken at that moment.
-- Keep roughly the same number of scenes (+/-2) and total narration length (+/-10%, now about {word_count(script)} words).
+- Keep roughly the same number of scenes (+/-2) and total narration length (never shorter, +/-10%, now about {word_count(script)} words).
 - Keep numbers in narration written in Hindi words, no English letters in narration, keep every field and the exact JSON shape.
 Return ONLY the improved JSON.
 
 {json.dumps(script, ensure_ascii=False)}"""
     try:
-        script = validate_script(gemini_json(review, 0.4))
+        reviewed = validate_script(gemini_json(review, 0.4))
+        if FIXED_SEC and word_count(reviewed) < word_count(script) * 0.9:
+            log(f"the review made the script shorter ({word_count(script)} -> {word_count(reviewed)} words): the longer draft is kept")
+        else:
+            script = reviewed
     except Exception as e:
         log("Review pass failed, keeping first draft:", e)
     return script
@@ -5412,8 +5451,8 @@ SRC_STYLES = ["banner", "paper", "dark", "doc", "strip", "box"]
 STYLE_CYCLE = ["strip", "box", "strip", "paper", "strip", "dark", "box", "doc", "banner"]  # small lower-left cards are the most common in the reference
 V2_KINDS = ("quote", "note", "year", "person", "stat", "verdict", "explain", "srclist", "action", "place", "name", "feature",
             "measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab", "glow", "desk")
-OV_MAXT = {"quote": 4.4, "place": 5.0, "year": 4.6, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0, "name": 4.4, "place": 4.8, "feature": 7.6,
-         "measure": 6.0, "qmark": 5.0, "lens": 6.0, "beforeafter": 7.0, "compare": 7.6, "mark": 5.0, "chart": 7.6, "tline": 18.0, "hl": 5.0, "sidelabel": 5.0, "bigtext": 4.2, "tab": 3.8, "glow": 6.0, "desk": 6.5}
+OV_MAXT = {"quote": 4.4, "place": 5.0, "year": 18.0, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0, "name": 4.4, "place": 4.8, "feature": 7.6,
+         "measure": 6.0, "qmark": 5.0, "lens": 6.0, "beforeafter": 7.0, "compare": 7.6, "mark": 5.0, "chart": 7.6, "tline": 8.0, "hl": 5.0, "sidelabel": 5.0, "bigtext": 4.2, "tab": 3.8, "glow": 6.0, "desk": 6.5}
 _BLACK = {}
 
 
@@ -10239,6 +10278,21 @@ TR_NEW = set(TR15) - {"zoom", "whip", "glitch", "flash", "wipe"}
 WATERMARK = os.environ.get("WATERMARK", "1") != "0"  # reference: a tiny grey "Generative AI" at the lower left of every AI picture (WATERMARK=0 switches it off)
 
 
+def name_ok(text):
+    """A name label is for a PERSON of the story (reference: SUMITRA, JAGDISH SINGH): it must be a character of the visual bible. Never a common word."""
+    t = re.sub(r"\s+", " ", str(text or "").strip().lower())
+    if not t:
+        return False
+    if not (STORY_STYLE and CAST.get("on")):
+        return not STORY_STYLE
+    for c in CAST["chars"].values():
+        for nm in (c.get("name"), c.get("name_hi")):
+            n_ = re.sub(r"\s+", " ", str(nm or "").strip().lower())
+            if n_ and (n_ in t or t in n_):
+                return True
+    return False
+
+
 def draw_watermark(fr):
     key = ("wm", W, H)
     if key not in _VX:
@@ -10265,7 +10319,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     if sc.get("items") and wt_:
         rr = ctx["rnd"]
         for k_, it in enumerate(sc["items"]):
-            if (REF_ONLY and it["kind"] in REF_BLOCK) or it["kind"] not in ITEM_KINDS or (it["kind"] in ("explain", "action", "feature") and it.get("png_img") is None) or (it["kind"] == "beforeafter" and it.get("img2") is None):
+            if (REF_ONLY and it["kind"] in REF_BLOCK) or (REF_ONLY and it["kind"] == "name" and not name_ok(it.get("text"))) or it["kind"] not in ITEM_KINDS or (it["kind"] in ("explain", "action", "feature") and it.get("png_img") is None) or (it["kind"] == "beforeafter" and it.get("img2") is None):
                 continue
             w_ = min(it["w"], len(wt_) - 1)
             t0_ = max(0.1, wt_[w_][0] - 0.08)
@@ -12922,7 +12976,7 @@ def _slug(s):
 def cast_build(topic, story, script):
     """One Gemini call: the visual bible of the story. Does nothing unless the story is about people (STORY_CTX) and a Gemini key exists."""
     CAST.update({"on": False, "style": "", "chars": {}, "locs": {}, "refs": {}, "gem_dead": False, "gem_fail": 0, "gem_ok": 0})
-    if not (CAST_ON and GEMINI_KEY and STORY_CTX.get("on")):
+    if not (CAST_ON and GEMINI_KEY and (STORY_CTX.get("on") or STORY_STYLE)):
         log("cast: off (science / nature topic, or CAST=0)")
         return CAST
     text = (story or "").strip() or " ".join(sc["narration_hi"] for sc in script["scenes"])
@@ -12933,7 +12987,7 @@ Story (Hindi or English):
 
 Return ONLY JSON:
 {{"style": "ONE English line (max 30 words): the look of every picture, e.g. 'muted warm film colours, soft window light, grainy 35mm documentary, rural Uttar Pradesh 1980s'",
- "characters": [{{"id": "short_lowercase_slug", "name_en": "name as in the story, English letters", "desc": "ONE English sentence of 25-40 words, always the same: age, build, skin tone, face shape, hair, the exact clothes with colours, one distinguishing feature. Everyday people of this culture and era."}}],
+ "characters": [{{"id": "short_lowercase_slug", "name_en": "name as in the story, English letters", "name_hi": "the same name in Devanagari", "desc": "ONE English sentence of 25-40 words, always the same: age, build, skin tone, face shape, hair, the exact clothes with colours, one distinguishing feature. Everyday people of this culture and era."}}],
  "locations": [{{"id": "short_lowercase_slug", "desc": "20-35 English words: building material, colours, objects, light. Same words will be pasted into every picture there."}}]}}
 Rules: only people who really appear or are named in the story, the main person first, at most 6 characters and 5 locations. Never write real famous people's names. No text or letters in any description."""
     try:
@@ -12944,7 +12998,7 @@ Rules: only people who really appear or are named in the story, the main person 
     chars, locs = {}, {}
     for c in (out.get("characters") or [])[:6]:
         if isinstance(c, dict) and _slug(c.get("id")) and len(str(c.get("desc") or "").split()) >= 8 and str(c["desc"]).isascii():
-            chars[_slug(c["id"])] = {"name": clean_short(c.get("name_en"), 30) or _slug(c["id"]), "desc": clean_short(c["desc"], 330)}
+            chars[_slug(c["id"])] = {"name": clean_short(c.get("name_en"), 30) or _slug(c["id"]), "name_hi": clean_short(c.get("name_hi"), 30), "desc": clean_short(c["desc"], 330)}
     for l_ in (out.get("locations") or [])[:5]:
         if isinstance(l_, dict) and _slug(l_.get("id")) and len(str(l_.get("desc") or "").split()) >= 6 and str(l_["desc"]).isascii():
             locs[_slug(l_["id"])] = clean_short(l_["desc"], 260)
@@ -13359,13 +13413,13 @@ def pipeline():
     total = ffprobe_dur(voice)
     log(f"voice ({VOICE_USED[0]}) length {fmt_time(total)} (target {fmt_time(target)})")
     if FIXED_SEC:
-        for attempt in (1, 2):
+        for attempt in (1, 2, 3):
             if abs(total - target) <= target * 0.06:
                 break
-            new_words = int(word_count(script) * target / max(total, 1))
+            new_words = int(word_count(script) * target / max(total, 1) * (1.04 if total < target else 1.0))
             log(f"selected length {fmt_time(target)}, voice is {fmt_time(total)}: rescaling the script to ~{new_words} words (try {attempt})")
             try:
-                script = rescale_script(script, new_words)
+                script = expand_script(script, new_words, facts) if total < target else rescale_script(script, new_words)
                 scenes = script["scenes"]
                 shutil.rmtree(tdir, ignore_errors=True)
                 voice = make_voice_auto(scenes, tdir)
