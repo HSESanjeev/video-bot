@@ -772,6 +772,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-22T00:59:45+00:00",
+   "topic_en": "The Accidental Invention of the Microwave Oven by Percy Spencer (Waltham, USA, 1945)",
+   "title_hi": "माइक्रोवेव का आविष्कार: एक चॉकलेट बार से बदली दुनिया",
+   "category": "story",
+   "style": "sawaal",
+   "theme": "mint",
+   "mood": "wonder",
+   "seconds": 84,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
