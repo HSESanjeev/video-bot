@@ -2292,8 +2292,60 @@ def clean_short(t, n):
     return t[:n].strip()
 
 
+def _find_scene_list(s):
+    """The model sometimes wraps the scenes ({"script": {...}}), returns a bare list, or uses another key: find the list of scene dicts."""
+    if isinstance(s, list) and s and all(isinstance(x, dict) for x in s):
+        return {"scenes": s}
+    if isinstance(s, dict):
+        if isinstance(s.get("scenes"), list):
+            return s
+        for v in s.values():
+            if isinstance(v, list) and v and all(isinstance(x, dict) and "narration_hi" in x for x in v):
+                out = dict(s)
+                out["scenes"] = v
+                return out
+            if isinstance(v, dict):
+                r = _find_scene_list(v)
+                if r is not None and isinstance(r.get("scenes"), list):
+                    return dict(s, scenes=r["scenes"], **{k: r[k] for k in ("title_hi", "thumb_text_hi") if k in r and k not in s})
+    return None
+
+
+def _explode_scenes(s, need, max_words=30):
+    """Too few scenes but enough words (the model wrote a few very long scenes): cut the narration at sentence ends into scenes of at most ~30 words. Photo scenes only."""
+    out = []
+    for sc in s["scenes"]:
+        nar = " ".join(str(sc.get("narration_hi", "")).split())
+        if sc.get("type") == "map" or len(nar.split()) <= max_words:
+            out.append(sc)
+            continue
+        parts = [p.strip() for p in re.split(r"(?<=[।\.\?\!])\s+", nar) if p.strip()]
+        chunks, cur = [], []
+        for p in parts:
+            if cur and len((" ".join(cur) + " " + p).split()) > max_words:
+                chunks.append(" ".join(cur))
+                cur = []
+            while len(p.split()) > max_words + 8:  # a very long sentence: cut at a comma or by words
+                w_ = p.split()
+                cut = next((i for i in range(max_words, 8, -1) if w_[i - 1].endswith(",")), max_words)
+                chunks.append(" ".join(w_[:cut]))
+                p = " ".join(w_[cut:])
+            cur.append(p)
+        if cur:
+            chunks.append(" ".join(cur))
+        for c in chunks:
+            out.append({"narration_hi": c, "tone": sc.get("tone") or "calm", "type": "photo", "items": []})
+    s = dict(s)
+    s["scenes"] = out
+    return s
+
+
 def validate_script(s, verbatim=False, min_scenes=None):
     need = min_scenes if min_scenes is not None else (4 if TEST_SEC else 8)
+    s = _find_scene_list(s) or s
+    if isinstance(s, dict) and isinstance(s.get("scenes"), list) and len(s["scenes"]) < need:
+        s = _explode_scenes(s, need)
+        log(f"script had too few scenes: the long scenes were cut into {len(s['scenes'])} scenes at sentence ends")
     if not isinstance(s, dict) or not isinstance(s.get("scenes"), list) or len(s["scenes"]) < need:
         raise ValueError("script has too few scenes")
     for idx, sc in enumerate(s["scenes"]):
@@ -2392,8 +2444,11 @@ def validate_script(s, verbatim=False, min_scenes=None):
             sc["image_prompt_en"] = base_prompt
     for k in ("title_hi", "thumb_text_hi", "description_hi"):
         s[k] = (s.get(k) or "").strip()
-    if not s["title_hi"]:
-        raise ValueError("no title")
+    if not s["title_hi"]:  # the model forgot the title: the first words of the story are used
+        s["title_hi"] = " ".join(s["scenes"][0]["narration_hi"].split()[:7])
+        log("script had no title: the first words of the story are used")
+    if not s["thumb_text_hi"]:
+        s["thumb_text_hi"] = " ".join(s["title_hi"].split()[:4])
     mood = str(s.get("mood") or "").lower().strip()
     s["mood"] = mood if mood in MOOD_NAMES else ""
     s["thumb_badge_hi"] = clean_short(s.get("thumb_badge_hi"), 14) or "जानिए"
@@ -2544,7 +2599,18 @@ def write_script(topic, cat, style, target_sec, facts, wpm):
     if target_sec > LONG_SCRIPT_SEC:
         return write_script_long(topic, cat, style, target_sec, facts, wpm)
     words = int(target_sec / 60 * wpm)
-    script = validate_script(gemini_json(build_script_prompt(topic, cat, style, target_sec, facts, words), 0.8))
+    script, last_err = None, ""
+    for attempt in (1, 2):
+        try:
+            more = "" if attempt == 1 else (f"\nIMPORTANT: your previous answer could not be used ({last_err}). Return ONE JSON object with a \"scenes\" list of AT LEAST {max(8, words // 30)} scenes "
+                                          f"(each scene 15-30 spoken words, about {words} words in total).")
+            script = validate_script(gemini_json(build_script_prompt(topic, cat, style, target_sec, facts, words) + more, 0.8))
+            break
+        except Exception as e:  # noqa
+            last_err = str(e)[:90]
+            log(f"script answer unusable (try {attempt}): {last_err}")
+            if attempt == 2:
+                raise
     if FIXED_SEC:
         script = ensure_length(script, words, facts)
     review = f"""You are (1) a careful {"fact-checking editor" if STORY_STYLE else "science editor"}, (2) a Hindi school teacher and (3) a documentary film editor.
