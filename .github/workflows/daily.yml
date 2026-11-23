@@ -103,13 +103,10 @@ jobs:
           # speed guards (the job is cancelled after 240 min): optional Gemini calls pause when Gemini is slow, picture work stops early
           OPTIONAL_LLM_MAX: ${{ vars.OPTIONAL_LLM_MAX || '150' }}
           LOCAL_SD_MAX: ${{ vars.LOCAL_SD_MAX || '30' }}
-          MAX_EXPLAIN_PNG: ${{ vars.MAX_EXPLAIN_PNG || '30' }}
           # TRUE-STORY channel (reference-video look). Change a Variable only if you want to go back:
           #   TOPIC_MODE = story (real documented stories with trusted sources) | science (the old nature / science topics)
           TOPIC_MODE: ${{ vars.TOPIC_MODE || 'story' }}
-          PLAIN: ${{ vars.PLAIN || '0' }}                       # 0 = editing techniques ON (cards, year slider, labels, transitions); 1 = plain pictures only
           CAST: ${{ vars.CAST || '1' }}                         # 1 = same people / same village in every picture (AI-only pictures for stories)
-          REF_ONLY: ${{ vars.REF_ONLY || '1' }}                 # 1 = only overlays that exist in the reference video
           TRUSTED_ONLY: ${{ vars.TRUSTED_ONLY || '1' }}         # 1 = source cards only from trusted organisations
           STRICT_SOURCES: ${{ vars.STRICT_SOURCES || '1' }}     # 1 = a source card only when its text supports what the narrator says
         run: |
