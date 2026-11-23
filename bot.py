@@ -26,6 +26,8 @@ import json
 import math
 import os
 import random
+
+BOT_VERSION = "round-12 reference-only true-story bot"
 import re
 import shutil
 import subprocess
@@ -1063,9 +1065,6 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 
 
 # =========================================================================== techniques_pass: puts every technique at the moment the narrator calls for it, then guarantees coverage
-# CINEMA_MODE (default on): the calm, Netflix-documentary restraint. One idea on screen at a time, no stickers / paper collage unless a chart or timeline truly needs it,
-# the real picture does the work. Set the variable CINEMA_MODE=0 to bring back the busy "every technique everywhere" look (all technique code is kept).
-CINEMA_MODE = os.environ.get("CINEMA_MODE", "1") != "0"
 # REFERENCE ONLY: overlays that never appear in the 10-minute reference video are switched off (REF_ONLY=0 brings them back)
 REF_ONLY = os.environ.get("REF_ONLY", "1") != "0"
 REF_BLOCK = {"mark", "hl", "srclist", "stat", "measure", "chart", "feature", "explain", "action", "qmark", "compare", "beforeafter", "tline"}  # red circle / red-line text, pink caption bar, SOURCES list, big red stat, ruler, chart, pop-up cards
@@ -1088,8 +1087,8 @@ PERMANENT_TECHNIQUES = {
     "tline": "Vox multi-event timeline - 3-5 dated events in order",
     "hl": "Vox highlight bar - the key claim in big text",
 }
-TECH_PER_MIN = {"qmark": 0.0, "lens": 0.0, "mark": 0.5, "hl": 0.0, "measure": 0.6, "compare": 0.4, "beforeafter": 0.3, "chart": 0.4, "tline": 0.3} if CINEMA_MODE else {"qmark": 0.0, "lens": 0.0, "mark": 1.6, "hl": 1.6, "measure": 0.8, "compare": 0.5, "beforeafter": 0.4, "chart": 0.6, "tline": 0.4}
-TECH_MIN_ABS = {"qmark": 0, "lens": 0, "mark": 1, "hl": 0 if CINEMA_MODE else 1, "measure": 1, "compare": 1, "beforeafter": 1, "chart": 1, "tline": 1}
+TECH_PER_MIN = {"qmark": 0.0, "lens": 0.0, "mark": 0.5, "hl": 0.0, "measure": 0.6, "compare": 0.4, "beforeafter": 0.3, "chart": 0.4, "tline": 0.3}
+TECH_MIN_ABS = {"qmark": 0, "lens": 0, "mark": 1, "hl": 0, "measure": 1, "compare": 1, "beforeafter": 1, "chart": 1, "tline": 1}
 TECH_MAX = {"beforeafter": 3}
 UNIT_RE = re.compile(r"(मीटर|किलोमीटर|सेंटीमीटर|सेमी|मिमी|फीट|फुट|इंच|किलोग्राम|किलो|टन|मील|लीटर|घंटे|साल|वर्ष|डिग्री|मीटर्स)")
 NUM_RE = re.compile(r"^[0-9०-९][0-9०-९,.]*$")
@@ -1277,24 +1276,6 @@ def _num_val(tok):
         return None
 
 
-def kw_words(wds, k_max=4):
-    """The key words of a scene (nouns / names / numbers), spread over the sentence, each with the index where it is spoken."""
-    cand = []
-    for i, w_ in enumerate(wds):
-        t_ = _tw(w_)
-        if len(t_) < 3 or t_ in STOP_HI or t_ in Q_ALL or t_ in ("सबसे", "बड़ा", "बड़ी", "ऊँची", "ऊँचा", "आगे", "जानिए", "देखिए", "यही", "इसी", "सारी", "सारे", "पूरी", "पूरा", "नहीं", "वाली"):
-            continue
-        if any(t_.endswith(v) for v in VERB_END) and not _num_val(t_):
-            continue
-        cand.append((i, t_))
-    if not cand:
-        return []
-    if len(cand) > k_max:
-        step = len(cand) / k_max
-        cand = [cand[int(j * step)] for j in range(k_max)]
-    return cand
-
-
 def det_techniques(scenes):
     """Rule-based: EVERY spoken cue gets its technique on its own word (needs no Gemini, always runs)."""
     n = {k: 0 for k in NEW_KINDS}
@@ -1367,23 +1348,6 @@ def det_techniques(scenes):
         if len(nums) >= 2:
             pts = [{"label": clean_short(x[3], 12), "v": x[1], "show": clean_short(x[2] + " " + x[3], 14)} for x in nums[:5]]
             add({"w": nums[0][0], "kind": "chart", "text": "", "title": clean_short(sc.get("headline_hi") or "", 28), "type": "bar", "pts": pts, "span": 5.4, "ci": si % len(VOX_BG)}, 99)
-        # years told in order -> timeline
-        yrs = [it for it in have if isinstance(it, dict) and it.get("kind") == "year" and it.get("year_num")]
-        if len(yrs) >= 3:
-            ev = [{"when": clean_short(it["text"], 14), "what": clean_short(it.get("sub") or "", 22) or clean_short(it["text"], 14)} for it in yrs[:5]]
-            add({"w": yrs[0]["w"], "kind": "tline", "text": "", "events": ev, "span": 6.2, "ci": (si + 1) % len(VOX_BG)}, 99)
-        # every scene: the key claim as a highlight bar on its last words, and a marker on the first key word
-        if not CINEMA_MODE and not cnt["hl"] and len(wds) >= 8:
-            tail = [w_ for w_ in wds[-6:]]
-            while tail and not _tw(tail[0]):
-                tail.pop(0)
-            txt = clean_short(" ".join(_tw(x) if i_ == len(tail) - 1 else x.strip(",") for i_, x in enumerate(tail)), 40)
-            _TECH_SEQ[0] += 1
-            add({"w": max(0, len(wds) - 6), "kind": "hl", "text": txt, "ci": _TECH_SEQ[0] % len(HL_COLS)}, 99)
-        if not CINEMA_MODE and not cnt["mark"] and not cnt["lens"] and len(wds) >= 8:
-            kk = kw_words(wds, 1)
-            if kk:
-                add({"w": kk[0][0], "kind": "mark", "text": kk[0][1], "shape": ("circle", "underline", "arrow")[si % 3]}, 99)
         have.sort(key=lambda x: x.get("w", 0) if isinstance(x, dict) else 0)
     return n
 
@@ -1392,36 +1356,11 @@ def norm_txt(t):
     return re.sub(r"[\s।,.!?\"'“”‘’:;()\-–—…]+", "", str(t or ""))
 
 
-def assign_vox(scenes):
-    """Style mix: every point gets key-word stickers; only scenes that EXPLAIN data / sequences / comparisons (or every 4th calm one) use the Vox paper layout, the rest stay cinematic full-screen with the other techniques."""
-    nph = [i for i, sc in enumerate(scenes) if sc.get("type") == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
-    vox_n, last_vox = 0, -9
-    cap = max(1, int(round(len(nph) * 0.3)))
-    for j, i in enumerate(nph):
-        sc = scenes[i]
-        wds = sc["narration_hi"].split()
-        sc["kw"] = [{"t": max(0.2, sc["wt"][wi][0] - 0.05), "text": tx, "ci": (j + n_) % len(KW_COLS)} for n_, (wi, tx) in enumerate(kw_words(wds, 4))]
-        sc.pop("vox", None)
-        if CINEMA_MODE:  # calm mode: no key-word stickers, no punch-ins, no paper layout (charts / timelines still use it by themselves)
-            sc["kw"] = []
-            continue
-        its = [x.get("kind") for x in sc.get("items", []) if isinstance(x, dict)]
-        heavy = any(x in its for x in ("beforeafter", "feature", "verdict", "action", "srclist", "lens", "measure"))
-        want = any(x in its for x in ("compare", "chart", "tline")) or j % 4 == 2
-        if want and not heavy and 0 < j < len(nph) - 1 and j - last_vox > 1 and vox_n < cap:
-            sc["vox"] = vox_n % len(VOX_BG)
-            vox_n += 1
-            last_vox = j
-    return vox_n
-
-
 TXT_PRI = {"person": 9, "name": 9, "place": 8, "title": 8, "year": 7, "stat": 7, "quote": 7, "note": 6, "bubble": 6, "measure": 5, "compare": 5, "chart": 5, "tline": 5, "hl": 4, "mark": 3, "kw": 1}
 
 
 def calm_pass(scenes):
     """No frequency limits: every animation the narration asks for stays; only the same kind twice within CALM_GAP seconds (a duplicate) is removed."""
-    if not CINEMA_MODE:
-        return 0
     dropped = 0
     for sc in scenes:
         its = sc.get("items")
@@ -1672,7 +1611,7 @@ def finalize_overlays(scenes, topic=""):
     for name, fn in (("declared_sources", lambda: notes_from_declared_src(scenes, topic)), ("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
                      ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)),
                      ("overlays", lambda: overlay_pass(scenes, topic)), ("png_pass", lambda: png_pass(scenes, topic)),
-                     ("years", lambda: resolve_years(scenes)), *([] if T151_ON else [("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("vox", lambda: assign_vox(scenes)), ("dedupe", lambda: dedupe_texts(scenes)), ("calm", lambda: calm_pass(scenes))]), ("forced_sources", lambda: force_source_cards(scenes, topic)),
+                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("dedupe", lambda: dedupe_texts(scenes)), ("calm", lambda: calm_pass(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
                      ("entity_sources", lambda: notes_for_entities(scenes)), ("source_list", lambda: add_source_outro(scenes))):
         try:
             st[name] = fn()
@@ -2044,6 +1983,85 @@ def wiki_sources(topic, extra_text="", want=6):
     return got
 
 
+def _page_paragraphs(h, max_n=10):
+    import html as _html
+    paras = []
+    for m in re.findall(r"<p[^>]*>(.*?)</p>", h, re.S | re.I):
+        t = _html.unescape(_strip_html(m))
+        nw = len(t.split())
+        if 25 <= nw <= 150 and sum(c.isascii() and c.isalpha() for c in t) > 0.7 * len(t) and "cookie" not in t.lower() and "subscribe" not in t.lower() and "javascript" not in t.lower():
+            paras.append(trim_words(t, 60))
+        if len(paras) >= max_n:
+            break
+    return paras
+
+
+def free_trusted_sources(topic_en, max_pages=8):
+    """Source pages WITHOUT Gemini (works when its quota is used up): the Wikipedia article of the story (all its paragraphs) and the trusted pages that article cites
+    (BBC, Britannica, universities, governments, journals...). Real text only, copied from the page."""
+    added = 0
+    try:
+        api = "https://en.wikipedia.org/w/api.php"
+        r = requests.get(api, params={"action": "query", "list": "search", "srsearch": topic_en, "srlimit": 1, "format": "json"}, headers=WIKI_UA, timeout=20).json()
+        hits = (r.get("query") or {}).get("search") or []
+        if not hits:
+            return 0
+        title = hits[0]["title"]
+        j = requests.get(api, params={"action": "query", "prop": "extracts", "explaintext": 1, "exsectionformat": "plain", "titles": title, "redirects": 1, "format": "json"}, headers=WIKI_UA, timeout=25).json()
+        text = ""
+        for pg in ((j.get("query") or {}).get("pages") or {}).values():
+            text = pg.get("extract") or ""
+        paras = [trim_words(p.strip(), 60) for p in re.split(r"\n+", text) if 25 <= len(p.split()) <= 150][:14]
+        if paras:
+            k = len(SRC_LIST) + 1
+            url = "https://en.wikipedia.org/wiki/" + title.replace(" ", "_")
+            SRC_LIST.append({"title": title + " - Wikipedia", "url": url})
+            for n_, t in enumerate(paras, 1):
+                SRC_PARAS[f"{k}.{n_}"] = {"title": title + " - Wikipedia", "url": url, "text": t}
+            added += 1
+        params = {"action": "query", "prop": "extlinks", "titles": title, "ellimit": "max", "format": "json"}
+        links = []
+        for _ in range(3):
+            jj = requests.get(api, params=params, headers=WIKI_UA, timeout=20).json()
+            for pg in ((jj.get("query") or {}).get("pages") or {}).values():
+                for el in pg.get("extlinks") or []:
+                    u = el.get("*") or el.get("url") or ""
+                    if u.startswith("http") and is_trusted(u) and "wikipedia.org" not in u and u not in links:
+                        links.append(u)
+            if "continue" not in jj:
+                break
+            params.update(jj["continue"])
+        seen_hosts = set()
+        for u in links:
+            if added >= max_pages:
+                break
+            host = _dom(u)
+            if host in seen_hosts:
+                continue
+            seen_hosts.add(host)
+            try:
+                rr = requests.get(u, headers={"User-Agent": "Mozilla/5.0 (compatible; story-video-bot/1.0)"}, timeout=20, allow_redirects=True)
+                if not rr.ok or "html" not in rr.headers.get("content-type", "html"):
+                    continue
+                h = rr.text[:1_500_000]
+                ps = _page_paragraphs(h)
+                if not ps:
+                    continue
+                tt = re.search(r"<title[^>]*>(.*?)</title>", h, re.S | re.I)
+                import html as _html
+                ttl = _html.unescape(_strip_html(tt.group(1))).replace("|", "-")[:90] if tt else host
+                k = len(SRC_LIST) + 1
+                SRC_LIST.append({"title": ttl, "url": rr.url})
+                for n_, t in enumerate(ps, 1):
+                    SRC_PARAS[f"{k}.{n_}"] = {"title": ttl, "url": rr.url, "text": t}
+                added += 1
+            except Exception as e:  # noqa
+                log("  trusted page failed:", type(e).__name__)
+    except Exception as e:  # noqa
+        log("  free trusted sources failed:", type(e).__name__, str(e)[:80])
+    return added
+
+
 def collect_sources(max_src=14, topic="", story=""):
     """Open the pages the web-search research was grounded on and keep their REAL paragraphs for on-screen source captions."""
     import html as _html
@@ -2081,6 +2099,12 @@ def collect_sources(max_src=14, topic="", story=""):
             log(f"  Wikipedia fallback added {n_} source articles")
         except Exception as e:  # noqa
             log("  wiki fallback failed:", type(e).__name__, str(e)[:80])
+    if len(SRC_PARAS) < 24 and (topic or story) and TRUSTED_ONLY:  # too few real paragraphs (Gemini limit?): the free Wikipedia + cited trusted pages
+        try:
+            n2 = free_trusted_sources(topic or story[:80])
+            log(f"  free trusted sources added {n2} pages (Wikipedia and the trusted pages it cites)")
+        except Exception as e:  # noqa
+            log("  free trusted sources failed:", type(e).__name__, str(e)[:80])
     log(f"real sources collected: {len(SRC_LIST)} pages, {len(SRC_PARAS)} paragraphs")
 
 
@@ -2206,7 +2230,7 @@ if STORY_STYLE:  # true-story version of the rules (the reference channel: gripp
 
 
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
-TRANS_NAMES = ["pandark", "split", "ink", "curl", "shred", "blurin", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut", "mask", "luma", "morph", "spin", "glitch", "burn", "shape", "match", "object", "seamless", "morphmap"]
+TRANS_NAMES = ["pandark", "split", "ink", "curl", "shred", "blurin", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut"]
 TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
 MOOD_NAMES = ["mystery", "epic", "wonder", "calm", "tense", "life", "space"]
 TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
@@ -2253,7 +2277,6 @@ Return ONLY JSON in exactly this shape:
 }}"""
 
 
-NEED_ITEMS = {"merge": (3, 3), "split": (3, 3), "steps": (3, 4), "compare": (2, 2), "multi": (2, 3)}
 
 
 def clean_narration(t):
@@ -2267,13 +2290,6 @@ def clean_short(t, n):
     t = re.sub(r"[\*\_#`\n]", " ", str(t or ""))
     t = re.sub(r"\s+", " ", t).strip()
     return t[:n].strip()
-
-
-def to_num(x, default=None):
-    try:
-        return float(str(x).replace(",", "").strip())
-    except Exception:
-        return default
 
 
 def validate_script(s, verbatim=False, min_scenes=None):
@@ -2295,35 +2311,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
                               "prompt_en": clean_short(it.get("prompt_en"), 400) or ("a realistic photo of " + q_),
                               "query_en": q_, "entity_en": clean_short(it.get("entity_en"), 70)})
         sc["items"] = []
-        if typ in NEED_ITEMS:
-            lo, hi = NEED_ITEMS[typ]
-            items = items[:hi]
-            if len(items) < lo:
-                typ = "photo"
-            else:
-                sc["items"] = items
-        elif typ == "counter":
-            c = sc.get("counter") if isinstance(sc.get("counter"), dict) else {}
-            to = to_num(c.get("to"))
-            if to is None or abs(to) > 1e13:
-                typ = "photo"
-            else:
-                sc["counter"] = {"from": to_num(c.get("from"), 0.0), "to": to,
-                                 "decimals": max(0, min(2, int(to_num(c.get("decimals"), 0)))),
-                                 "unit_hi": clean_short(c.get("unit_hi"), 30)}
-        elif typ == "bars":
-            bars = []
-            for b in (sc.get("bars") or []):
-                v = to_num(b.get("value")) if isinstance(b, dict) else None
-                if v and v > 0:
-                    dec = 0 if v >= 100 else 1
-                    bars.append({"label_hi": clean_short(b.get("label_hi"), 22) or " ", "value": v, "dec": dec,
-                                 "unit_hi": clean_short(b.get("unit_hi"), 10)})
-            if 2 <= len(bars) <= 4:
-                sc["bars"] = bars
-            else:
-                typ = "photo"
-        elif typ == "map":
+        if typ == "map":
             mp = sc.get("map") if isinstance(sc.get("map"), dict) else {}
             pins = []
             for pn in (mp.get("pins") or [])[:4]:
@@ -2351,30 +2339,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
                                  "mode": "globe" if md == "globe" else "flat"}
             else:
                 typ = "photo"
-        elif typ == "sketch":
-            br = clean_short(sc.get("sketch_brief_en"), 300)
-            if br and idx > 0 and idx != len(s["scenes"]) - 1:
-                sc["sketch_brief_en"], sc["year_hi"] = br, clean_short(sc.get("year_hi"), 24)
-            else:
-                typ = "photo"
-        elif typ == "kinetic":
-            kw = [clean_short(k, 18) for k in (sc.get("keywords_hi") or []) if clean_short(k, 18)][:4]
-            if len(kw) >= 2:
-                sc["keywords_hi"] = kw
-            else:
-                typ = "photo"
         else:
-            typ = "photo"
-        if STORY_STYLE and typ in ("counter", "bars", "sketch"):
-            typ = "photo"  # story mode: only story pictures and maps
-        if (typ in ("merge", "split", "steps", "compare", "kinetic") or (STORY_STYLE and typ == "multi")) and os.environ.get("KEEP_EXPLAINERS") != "1":
-            # cartoon explainer cards look cheap: every such scene becomes a real-photo scene (the director then edits it word by word)
-            if typ == "kinetic":
-                raw_shots = [{"text_hi": "", "prompt_en": clean_short(sc.get("image_prompt_en"), 400) or FALLBACK_SCENE, "query_en": ""}]
-            else:
-                raw_shots = [{"text_hi": it["label_hi"] or "x", "prompt_en": it["prompt_en"], "query_en": it.get("query_en", "")} for it in sc["items"]]
-            sc["shots"] = raw_shots or sc.get("shots")
-            sc["items"] = []
             typ = "photo"
         gr = str(sc.get("grade") or "").lower().strip()
         sc["grade"] = gr if gr in GRADES else TONE_GRADE.get(sc["tone"], "natural")
@@ -2385,7 +2350,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
             sc["tone"] = "suspense"
             sc["transition"] = "fade"
         sc["type"] = typ
-        sc["headline_hi"] = clean_short(sc.get("headline_hi"), 36) if typ != "kinetic" else ""
+        sc["headline_hi"] = clean_short(sc.get("headline_hi"), 36)
         base_prompt = clean_short(sc.get("image_prompt_en"), 400)
         shots = []
         for sh in (sc.get("shots") or []):
@@ -3727,36 +3692,6 @@ def gen_image(prompt, out, kind="photo", fallback_query="", query="", entity="",
     return False
 
 
-def pexels_clips(query, tdir, n=3):
-    if not PEXELS_KEY:
-        return []
-    r = requests.get("https://api.pexels.com/videos/search", headers={"Authorization": PEXELS_KEY},
-                     params={"query": query, "per_page": 10, "orientation": "landscape", "size": "medium"}, timeout=30)
-    if not r.ok:
-        return []
-    out = []
-    for v in r.json().get("videos", []):
-        if len(out) >= n:
-            break
-        if v.get("duration", 0) < 4:
-            continue
-        files = [f for f in v.get("video_files", []) if f.get("file_type") == "video/mp4" and (f.get("width") or 0) >= 1280]
-        if not files:
-            continue
-        f = sorted(files, key=lambda x: x["width"])[0]
-        dst = tdir / f"pexels_{v['id']}.mp4"
-        try:
-            if not dst.exists():
-                data = requests.get(f["link"], timeout=120)
-                data.raise_for_status()
-                dst.write_bytes(data.content)
-            out.append({"path": dst, "id": v["id"], "url": v.get("url", ""),
-                        "credit": (v.get("user") or {}).get("name", "Pexels"), "dur": ffprobe_dur(dst)})
-        except Exception as e:  # noqa
-            log("  clip download failed:", type(e).__name__)
-    return out
-
-
 # --------------------------------------------------------------------------- music + sound effects (synthesised, copyright-free)
 SR = 44100
 MOOD_MAP = {  # default mood when the script does not give one
@@ -4314,100 +4249,6 @@ PADT = 18
 PADB = 26
 
 
-def make_card(img_path, label, pal):
-    """Rounded white-framed picture card with a dark label pill. Returns an RGBA sprite."""
-    inner = CARD
-    cw = inner + 2 * BORDER
-    if img_path and Path(img_path).exists():
-        im = ImageOps.fit(Image.open(img_path).convert("RGB"), (inner, inner), Image.LANCZOS)
-    else:  # picture missing: colourful card with the label itself
-        im = Image.composite(Image.new("RGB", (inner, inner), pal["accent"]),
-                             Image.new("RGB", (inner, inner), pal["top"]),
-                             Image.linear_gradient("L").resize((inner, inner)))
-    size = 38
-    lay = text_layer(label.strip() or " ", load_font(size, "label"), fill=(255, 255, 255))
-    while lay.width > cw - 10 and size > 22:
-        size -= 3
-        lay = text_layer(label.strip() or " ", load_font(size, "label"), fill=(255, 255, 255))
-    ph = lay.height + 8
-    pw = max(150, min(cw + 20, lay.width + 56))
-    CW = cw + 2 * PADX
-    CH = PADT + cw + ph // 2 + PADB
-    sprite = Image.new("RGBA", (CW, CH), (0, 0, 0, 0))
-    m = rounded_mask((cw, cw), 36)
-    sh = Image.new("L", (CW, CH), 0)
-    sh.paste(m, (PADX, PADT + 12))
-    sh = sh.filter(ImageFilter.GaussianBlur(14)).point(lambda v: int(v * 0.38))
-    shadow = Image.new("RGBA", (CW, CH), (10, 20, 50, 255))
-    shadow.putalpha(sh)
-    sprite = Image.alpha_composite(sprite, shadow)
-    frame = Image.new("RGBA", (cw, cw), (255, 255, 255, 255))
-    frame.putalpha(m)
-    sprite.alpha_composite(frame, (PADX, PADT))
-    im_m = rounded_mask((inner, inner), 28)
-    sprite.paste(im, (PADX + BORDER, PADT + BORDER), im_m)
-    pill = Image.new("RGBA", (pw, ph), (0, 0, 0, 0))
-    pm = rounded_mask((pw, ph), ph // 2)
-    white = Image.new("RGBA", (pw, ph), (255, 255, 255, 255))
-    white.putalpha(pm)
-    pill.alpha_composite(white)
-    inner_m = rounded_mask((pw - 8, ph - 8), (ph - 8) // 2)
-    dark = Image.new("RGBA", (pw - 8, ph - 8), tuple(pal["ink"]) + (255,))
-    dark.putalpha(inner_m)
-    pill.alpha_composite(dark, (4, 4))
-    pill.alpha_composite(lay, ((pw - lay.width) // 2, (ph - lay.height) // 2))
-    sprite.alpha_composite(pill, ((CW - pw) // 2, PADT + cw - ph // 2))
-    return sprite
-
-
-def _ss(size, draw_fn):
-    k = 4
-    img = Image.new("RGBA", (size * k, size * k), (0, 0, 0, 0))
-    draw_fn(ImageDraw.Draw(img), size * k)
-    return img.resize((size, size), Image.LANCZOS)
-
-
-def _disc(d, s, pal):
-    d.ellipse([4, 4, s - 5, s - 5], fill=(255, 255, 255, 255))
-    d.ellipse([s * 0.07, s * 0.07, s - s * 0.07, s - s * 0.07], fill=tuple(pal["accent"]) + (255,))
-
-
-def sym_plus(pal, size=104):
-    def f(d, s):
-        _disc(d, s, pal)
-        t = s * 0.09
-        c = s / 2
-        d.rounded_rectangle([c - s * 0.26, c - t, c + s * 0.26, c + t], t, fill=(255, 255, 255, 255))
-        d.rounded_rectangle([c - t, c - s * 0.26, c + t, c + s * 0.26], t, fill=(255, 255, 255, 255))
-    return _ss(size, f)
-
-
-def sym_arrow(pal, size=92):
-    def f(d, s):
-        _disc(d, s, pal)
-        c, t = s / 2, s * 0.075
-        d.rounded_rectangle([s * 0.22, c - t, s * 0.62, c + t], t, fill=(255, 255, 255, 255))
-        d.polygon([(s * 0.56, c - s * 0.2), (s * 0.80, c), (s * 0.56, c + s * 0.2)], fill=(255, 255, 255, 255))
-    return _ss(size, f)
-
-
-def sym_vs(pal, size=112):
-    lay = text_layer("VS", load_font(52, "title"), fill=(255, 255, 255), stroke=3, stroke_fill=pal["ink"])
-    base = _ss(size, lambda d, s: _disc(d, s, pal))
-    base.alpha_composite(lay, ((size - lay.width) // 2, (size - lay.height) // 2))
-    return base
-
-
-def sym_badge(n, pal, size=60):
-    def f(d, s):
-        d.ellipse([3, 3, s - 4, s - 4], fill=(255, 255, 255, 255))
-        d.ellipse([s * 0.09, s * 0.09, s - s * 0.09, s - s * 0.09], fill=tuple(pal["ink"]) + (255,))
-    base = _ss(size, f)
-    lay = text_layer(str(n), load_font(34, "title"), fill=(255, 255, 255))
-    base.alpha_composite(lay, ((size - lay.width) // 2, (size - lay.height) // 2))
-    return base
-
-
 def put(frame, sprite, cx, cy, scale=1.0, alpha=1.0):
     if alpha <= 0.02 or scale <= 0.02:
         return
@@ -4419,160 +4260,6 @@ def put(frame, sprite, cx, cy, scale=1.0, alpha=1.0):
         s = s.copy()
         s.putalpha(a)
     frame.paste(s, (int(cx - s.width / 2), int(cy - s.height / 2)), s)
-
-
-def make_explainer(sc, dur, pal, events):
-    """Draw an animated explainer scene frame by frame and encode it as a silent mp4."""
-    rnd = random.Random(hash(sc["narration_hi"]) & 0xFFFF)
-    cards = [make_card(it.get("image"), it["label_hi"], pal) for it in sc["items"]]
-    typ = sc["type"]
-    cy = 335
-    fl = lambda t, ph: 5.0 * math.sin(t * 2.0 + ph)  # noqa
-    actors, fx = [], []
-
-    # decorative drifting bubbles
-    bubbles = [(soft_circle(r, (255, 255, 255), a), x, y, sp, ph) for (r, a, x, y, sp, ph) in
-               [(150, 0.16, 190, 140, 0.35, 0.0), (95, 0.20, 1090, 210, 0.5, 1.7), (210, 0.12, 980, 560, 0.28, 3.1),
-                (70, 0.22, 330, 600, 0.6, 4.4)]]
-
-    head = None
-    if sc.get("headline_hi"):
-        hl = text_layer(sc["headline_hi"], load_font(60, "head"), fill=tuple(pal["ink"]), max_w=W - 160)
-        bar = Image.new("RGBA", (min(hl.width, W - 200), 10), (0, 0, 0, 0))
-        bar.paste(Image.new("RGBA", bar.size, tuple(pal["accent"]) + (255,)), (0, 0), rounded_mask(bar.size, 5))
-        head = Image.new("RGBA", (hl.width, hl.height + 16), (0, 0, 0, 0))
-        head.alpha_composite(hl, (0, 0))
-        head.alpha_composite(bar, ((head.width - bar.width) // 2, hl.height + 2))
-
-    if typ == "merge":
-        A, B, C = cards
-        plus = sym_plus(pal)
-        glow = glow_sprite(760, (255, 255, 255), 0.75)
-        tc = max(1.9, min(dur * 0.55, dur - 2.6))
-        xa, xb, xc = W * 0.27, W * 0.73, W * 0.5
-        pcf = lambda t: e_io((t - tc) / 0.75)  # noqa
-
-        def fa(t):
-            pc = pcf(t)
-            x = lerp(lerp(-260, xa, e_out((t - 0.15) / 0.8)), xc - 40, pc)
-            return x, cy + fl(t, 0), lerp(1.0, 0.55, pc), 1 - cl((pc - 0.55) / 0.45)
-
-        def fb(t):
-            pc = pcf(t)
-            x = lerp(lerp(W + 260, xb, e_out((t - 0.35) / 0.8)), xc + 40, pc)
-            return x, cy + fl(t, 1.3), lerp(1.0, 0.55, pc), 1 - cl((pc - 0.55) / 0.45)
-
-        def fp(t):
-            return xc, cy, e_back((t - 1.0) / 0.35) * (1 - cl(pcf(t) * 2)), 1.0
-
-        def fg(t):
-            q = (t - (tc + 0.5)) / 0.7
-            return xc, cy, 1.0 + 0.04 * math.sin(t * 3), cl(q * 2) * 0.9
-
-        def fcard(t):
-            q = (t - (tc + 0.5)) / 0.65
-            return xc, cy + fl(t, 2.2), lerp(0.1, 1.12, e_back(q)), cl(q * 3)
-
-        actors += [(glow, fg), (A, fa), (B, fb), (plus, fp), (C, fcard)]
-        events += [(0.15, 'whoosh', 0.6), (0.35, 'whoosh', 0.6), (1.0, 'pop', 0.7), (tc + 0.3, 'impact', 1.0), (tc + 0.5, 'sparkle', 0.8)]
-
-        def fx_merge(frame, t):
-            d = ImageDraw.Draw(frame)
-            q = (t - (tc + 0.35)) / 0.8
-            if 0 < q < 1:
-                r = lerp(40, 400, e_out(q))
-                d.ellipse([xc - r, cy - r, xc + r, cy + r], outline=(255, 255, 255), width=max(2, int(14 * (1 - q))))
-            q2 = (t - (tc + 0.45)) / 1.2
-            if 0 < q2 < 1:
-                for k in range(14):
-                    ang = k * (2 * math.pi / 14) + 0.3
-                    rr = lerp(30, 330, e_out(q2)) * (0.65 + 0.35 * ((k * 7) % 5) / 4)
-                    sz = 11 * (1 - q2) + 2
-                    px, py = xc + math.cos(ang) * rr, cy + math.sin(ang) * rr * 0.8
-                    d.ellipse([px - sz, py - sz, px + sz, py + sz], fill=(255, 255, 255) if k % 2 else tuple(pal["accent"]))
-        fx.append(fx_merge)
-
-    elif typ == "split":
-        Wh, P1, P2 = cards
-        arrow = sym_arrow(pal)
-        plus = sym_plus(pal, 70)
-        ts = max(2.2, min(dur * 0.42, dur - 3.4))
-        pm = lambda t: e_io((t - ts) / 0.7)  # noqa
-        xs = (W * 0.19, W * 0.53, W * 0.82)
-
-        def fw(t):
-            return lerp(W / 2, xs[0], pm(t)), cy + fl(t, 0), lerp(lerp(0.2, 1.1, e_back((t - 0.2) / 0.7)), 0.82, pm(t)), cl((t - 0.2) * 4)
-
-        actors += [(Wh, fw),
-                   (arrow, lambda t: (W * 0.36, cy, e_back((t - (ts + 0.6)) / 0.35), 1.0)),
-                   (P1, lambda t: (xs[1], cy + fl(t, 1.0), 0.82 * e_back((t - (ts + 0.8)) / 0.5), cl((t - (ts + 0.8)) * 4))),
-                   (plus, lambda t: (W * 0.675, cy, e_back((t - (ts + 1.3)) / 0.3), 1.0)),
-                   (P2, lambda t: (xs[2], cy + fl(t, 2.0), 0.82 * e_back((t - (ts + 1.4)) / 0.5), cl((t - (ts + 1.4)) * 4)))]
-
-        def fx_split(frame, t):
-            q = (t - ts) / 0.5
-            if 0 < q < 1:
-                d = ImageDraw.Draw(frame)
-                for k in range(10):
-                    ang = k * (2 * math.pi / 10)
-                    rr = lerp(20, 220, e_out(q))
-                    sz = 9 * (1 - q) + 2
-                    px, py = W / 2 + math.cos(ang) * rr, cy + math.sin(ang) * rr * 0.8
-                    d.ellipse([px - sz, py - sz, px + sz, py + sz], fill=(255, 255, 255))
-        fx.append(fx_split)
-        events += [(0.25, 'pop', 0.6), (ts, 'impact', 0.9), (ts + 0.6, 'whoosh_soft', 0.8), (ts + 0.8, 'pop', 0.6), (ts + 1.4, 'pop', 0.6)]
-
-    elif typ == "steps":
-        n = len(cards)
-        s = 0.9 if n == 3 else 0.66
-        avail = max(2.0, dur - 1.4) * 0.75
-        xs = [W * (i + 0.5) / n for i in range(n)]
-        t0 = [0.4 + i * avail / n for i in range(n)]
-        arrow = sym_arrow(pal, 80 if n == 3 else 62)
-        for i, cd in enumerate(cards):
-            def fcard(t, i=i):
-                q = t - t0[i]
-                last_pulse = 1.0 + (0.04 * math.sin(t * 4) if (i == n - 1 and t > t0[i] + 1.0) else 0.0)
-                return xs[i], cy + lerp(90, 0, e_out(q / 0.6)) + fl(t, i), s * e_back(q / 0.6) * last_pulse, cl(q * 3)
-            actors.append((cd, fcard))
-            events.append((t0[i], 'pop', 0.7))
-            badge = sym_badge(i + 1, pal)
-
-            def fbadge(t, i=i):
-                q = t - t0[i] - 0.25
-                return xs[i] - (CARD + 2 * BORDER) * s / 2 + 16, cy - (cards[i].height / 2 - PADT) * s + 10 + fl(t, i), e_back(q / 0.35), 1.0
-            actors.append((badge, fbadge))
-            if i < n - 1:
-                gx = (xs[i] + xs[i + 1]) / 2
-                actors.append((arrow, lambda t, i=i, gx=gx: (gx, cy - 10, e_back((t - t0[i] - 0.55) / 0.35), 1.0)))
-
-    else:  # compare
-        A, B = cards
-        events += [(0.15, 'whoosh', 0.55), (0.35, 'whoosh', 0.55), (1.0, 'pop', 0.7)]
-        vs = sym_vs(pal)
-        xa, xb = W * 0.27, W * 0.73
-        actors += [(A, lambda t: (lerp(-260, xa, e_out((t - 0.15) / 0.8)), cy + fl(t, 0),
-                                  1.0 + 0.045 * max(0.0, math.sin(t * 1.4)) * cl(t - 1.5), 1.0)),
-                   (B, lambda t: (lerp(W + 260, xb, e_out((t - 0.35) / 0.8)), cy + fl(t, 1.6),
-                                  1.0 + 0.045 * max(0.0, -math.sin(t * 1.4)) * cl(t - 1.5), 1.0)),
-                   (vs, lambda t: (W / 2, cy, e_back((t - 1.0) / 0.4) * (1 + 0.05 * math.sin(t * 3)), 1.0))]
-
-    base = bg_base(tuple(pal["top"]), tuple(pal["bottom"]))
-
-    def draw(t):
-        frame = base.copy()
-        for sp, x, y, speed, ph in bubbles:
-            put(frame, sp, x + 24 * math.sin(t * speed + ph), y + 18 * math.cos(t * speed * 0.8 + ph), 1.0, 1.0)
-        if head is not None:
-            q = e_out(t / 0.55)
-            put(frame, head, W / 2, 62 - 26 * (1 - q), 1.0, cl(t * 2.5))
-        for sprite, f in actors:
-            x, y, scl, al = f(t)
-            put(frame, sprite, x, y, scl, al)
-        for f in fx:
-            f(frame, t)
-        return frame
-    return draw
 
 
 # --------------------------------------------------------------------------- compositor: camera, effects, transitions, subtitles
@@ -5045,8 +4732,6 @@ def blend_trans(prev, cur, p, kind):
         return _edge_fx(prev, cur, p, True, 11)
     if kind == "pandark":
         return pan_dark(prev, cur, p)
-    if kind in TR_NEW:
-        return tr_new(prev, cur, p, kind)
     if kind == "fade":
         return Image.blend(prev, cur, e_io(p))
     if kind == "flash":
@@ -5078,19 +4763,6 @@ def blend_trans(prev, cur, p, kind):
         def zm(im, z):
             return im.resize((W, H), Image.BILINEAR, box=(W / 2 - W / 2 / z, H / 2 - H / 2 / z, W / 2 + W / 2 / z, H / 2 + H / 2 / z))
         return Image.blend(zm(prev, lerp(1.0, 1.3, e_io(p))), zm(cur, lerp(1.3, 1.0, e_out(p))), e_io(p))
-    if kind == "glitch":
-        base = prev if p < 0.45 else cur
-        fr = base.copy()
-        amt = int(46 * (1 - p))
-        r, g, b = fr.split()
-        fr = Image.merge("RGB", (ImageChops.offset(r, amt, 0), g, ImageChops.offset(b, -amt, 0)))
-        rr = random.Random(int(p * 40))
-        for _ in range(5):
-            y0 = rr.randint(0, H - 60)
-            hh = rr.randint(10, 60)
-            band = fr.crop((0, y0, W, y0 + hh))
-            fr.paste(ImageChops.offset(band, rr.randint(-90, 90), 0), (0, y0))
-        return fr
     return cur
 
 
@@ -5920,10 +5592,6 @@ def _dim(fr, k):
     fr.paste(Image.blend(fr, b, min(0.9, k)))
 
 
-def _vignette_dim(fr, k):
-    _dim(fr, k)
-
-
 def draw_note(fr, ps, tl, ov, t0, t1, a):
     _rv = cl((tl - t0 - 0.15) / 1.3)  # reference: the text of a card is typed in line after line within ~1.3 s, then stays
     it = ov.get("it") or {}
@@ -6121,36 +5789,6 @@ def draw_person(fr, ps, tl, t0, t1, a, ov):
 
 
 # ---- big red stat text ("3 MONTHS")
-def stat_sprite(text, sub="", tone=""):
-    key = ("stat", text, sub, tone)
-    if key in _CARDS:
-        return _CARDS[key]
-    f = font_for(text, 200 if tone != "place" else 150, "title")
-    if tone == "place":  # countries, states, cities, months: gold lettering
-        lay = text_layer(text, f, fill=(255, 226, 90), fill2=(255, 140, 20), max_w=int(W * 0.62), stroke=3, stroke_fill=(60, 24, 0), shadow=(0, 8, 10, 0.8))
-    else:
-        lay = text_layer(text, f, fill=(255, 84, 70), fill2=(190, 12, 28), max_w=int(W * 0.62), stroke=3, stroke_fill=(40, 0, 6), shadow=(0, 8, 10, 0.8))
-    pad = 60
-    big = Image.new("RGBA", (lay.width + 2 * pad, lay.height + 2 * pad), (0, 0, 0, 0))
-    big.alpha_composite(lay, (pad, pad))
-    gl = big.getchannel("A").filter(ImageFilter.GaussianBlur(22)).point(lambda v: min(255, int(v * 1.2)))
-    glow = Image.new("RGBA", big.size, (255, 150, 20, 255) if tone == "place" else (230, 20, 40, 255))
-    glow.putalpha(gl.point(lambda v: int(v * 0.55)))
-    out = Image.new("RGBA", big.size, (0, 0, 0, 0))
-    out.alpha_composite(glow)
-    out.alpha_composite(big)
-    _CARDS[key] = out
-    return out
-
-
-def draw_stat(fr, ps, tl, t0, t1, a, ov):
-    spr = stat_sprite(ov.get("text") or "", "", (ov.get("it") or {}).get("tone", ""))
-    cx, cy = ov_spot(ps, spr, [(W * 0.74, H * 0.46), (W * 0.26, H * 0.46), (W * 0.5, H * 0.3)])
-    q = e_out(cl((tl - t0) / 0.45))
-    cx += (1 - q) * (260 if cx > W / 2 else -260)
-    put(fr, spr, cx, cy, 1.12 - 0.12 * q + 0.015 * math.sin(tl * 5), a)
-
-
 # ---- round pop-ups with a red cross / green tick
 def _circle_sprite(img, d_=230):
     c = ImageOps.fit(img.convert("RGB"), (d_, d_), centering=(0.5, 0.4))
@@ -6258,65 +5896,6 @@ _VX = {}
 _VXN = [0]
 
 
-def _vx_text(text, size, role="title", fill=(255, 255, 255), stroke=3, sfill=(8, 8, 14), shadow=True, max_w=None, align="center"):
-    key = ("t", text, size, role, fill, stroke, sfill, shadow, max_w, align)
-    if key not in _VX:
-        _VX[key] = text_layer(text, font_for(text, size, role), fill=fill, stroke=stroke, stroke_fill=sfill, shadow=(0, 3, 5, 0.75) if shadow else None, max_w=max_w, align=align)
-    return _VX[key]
-
-
-def _vx_panel(w, h, r=24, col=(10, 13, 22), alpha=185, border=(255, 255, 255, 70)):
-    key = ("p", w, h, r, col, alpha, border)
-    if key in _VX:
-        return _VX[key]
-    pad = 22
-    sp = Image.new("RGBA", (w + 2 * pad, h + 2 * pad), (0, 0, 0, 0))
-    sh_ = Image.new("L", sp.size, 0)
-    ImageDraw.Draw(sh_).rounded_rectangle([pad + 2, pad + 8, pad + w + 2, pad + h + 8], r, fill=130)
-    shadow = Image.new("RGBA", sp.size, (0, 0, 0, 255))
-    shadow.putalpha(sh_.filter(ImageFilter.GaussianBlur(9)))
-    sp.alpha_composite(shadow)
-    ImageDraw.Draw(sp).rounded_rectangle([pad, pad, pad + w, pad + h], r, fill=tuple(col) + (alpha,), outline=border, width=2)
-    _VX[key] = sp
-    return sp
-
-
-def _aa_poly(fr, pts, width, color, alpha=1.0, upto=1.0):
-    """Anti-aliased polyline (first `upto` fraction of it) pasted onto the frame; drawn at 2x inside its bounding box only."""
-    if len(pts) < 2 or alpha <= 0.01 or upto <= 0.001:
-        return
-    segs, tot = [], 0.0
-    for a, b in zip(pts, pts[1:]):
-        l = math.hypot(b[0] - a[0], b[1] - a[1])
-        segs.append((a, b, l))
-        tot += l
-    target, acc, drawn = tot * min(1.0, upto), 0.0, [pts[0]]
-    for a, b, l in segs:
-        if acc + l <= target:
-            drawn.append(b)
-            acc += l
-        else:
-            r = (target - acc) / max(l, 1e-6)
-            drawn.append((a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r))
-            break
-    xs, ys = [p[0] for p in drawn], [p[1] for p in drawn]
-    pad = int(width) + 4
-    x0, y0, x1, y1 = max(0, int(min(xs)) - pad), max(0, int(min(ys)) - pad), min(W, int(max(xs)) + pad), min(H, int(max(ys)) + pad)
-    if x1 - x0 < 2 or y1 - y0 < 2:
-        return
-    big = Image.new("L", ((x1 - x0) * 2, (y1 - y0) * 2), 0)
-    d = ImageDraw.Draw(big)
-    pp = [((x - x0) * 2, (y - y0) * 2) for x, y in drawn]
-    d.line(pp, fill=255, width=int(width * 2), joint="curve")
-    r_ = width
-    for x, y in (pp[0], pp[-1]):
-        d.ellipse([x - r_, y - r_, x + r_, y + r_], fill=255)
-    m = big.resize((x1 - x0, y1 - y0), Image.LANCZOS)
-    if alpha < 0.999:
-        m = m.point(lambda v: int(v * alpha))
-    fr.paste(Image.new("RGB", m.size, tuple(color)), (x0, y0), m)
-
-
 def _subj(sh):
     try:
         if "subj" not in sh:
@@ -6327,82 +5906,7 @@ def _subj(sh):
 
 
 # ---- measuring screen: dimension line with end caps, ruler ticks and a value label
-def draw_measure(fr, sh, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    label = (it.get("text") or "").strip()
-    if not label:
-        return
-    sx, sy = _subj(sh)
-    vert = it.get("orient") == "v"
-    p = e_out(cl((tl - t0) / 0.8))
-    white, shadow = (255, 255, 255), (0, 0, 0)
-    if vert:
-        x = W * (0.12 if sx > 0.5 else 0.88)
-        y0, y1 = H * 0.16, H * 0.84
-        mid = (y0 + y1) / 2
-        ya, yb = mid - (mid - y0) * p, mid + (y1 - mid) * p
-        for col, wd, off in ((shadow, 9, 3), (white, 5, 0)):
-            _aa_poly(fr, [(x + off, ya), (x + off, yb)], wd, col, a)
-        for yy in (ya, yb):
-            for col, wd, off in ((shadow, 9, 3), (white, 5, 0)):
-                _aa_poly(fr, [(x - 22 + off, yy), (x + 22 + off, yy)], wd, col, a)
-        n = 16
-        for k in range(1, n):
-            yy = y0 + (y1 - y0) * k / n
-            if ya <= yy <= yb:
-                L = 22 if k % 4 == 0 else 11
-                _aa_poly(fr, [(x, yy), (x + L, yy)], 3, white, a * 0.9)
-        cx, cy = x + (130 if x < W / 2 else -130), mid
-    else:
-        y = H * 0.84
-        x0, x1 = W * max(0.06, sx - 0.30), W * min(0.94, sx + 0.30)
-        mid = (x0 + x1) / 2
-        xa, xb = mid - (mid - x0) * p, mid + (x1 - mid) * p
-        for col, wd, off in ((shadow, 9, 3), (white, 5, 0)):
-            _aa_poly(fr, [(xa, y + off), (xb, y + off)], wd, col, a)
-        for xx in (xa, xb):
-            for col, wd, off in ((shadow, 9, 3), (white, 5, 0)):
-                _aa_poly(fr, [(xx + off, y - 22), (xx + off, y + 22)], wd, col, a)
-        n = 24
-        for k in range(1, n):
-            xx = x0 + (x1 - x0) * k / n
-            if xa <= xx <= xb:
-                L = 22 if k % 4 == 0 else 11
-                _aa_poly(fr, [(xx, y), (xx, y - L)], 3, white, a * 0.9)
-        cx, cy = mid, y - 122
-    if p > 0.55:
-        spr = _vx_text(label, 56, "title", stroke=3)
-        pan = _vx_panel(spr.width + 54, spr.height + 18, 18, alpha=205)
-        q = e_back(cl((tl - t0 - 0.45) / 0.4))
-        put(fr, pan, cx, cy, 0.6 + 0.4 * cl(q), a)
-        put(fr, spr, cx, cy, 0.6 + 0.4 * cl(q), a)
-        if it.get("sub"):
-            sb = _vx_text(it["sub"], 30, "sub", fill=(240, 226, 205), stroke=2)
-            put(fr, sb, cx, cy + spr.height / 2 + 26, 1.0, a * cl((tl - t0 - 0.7) / 0.3))
-
-
 # ---- question marks that pop up around the subject
-def draw_qmark(fr, sh, tl, t0, t1, a, ov):
-    sx, sy = _subj(sh)
-    spots = [(0.20, -0.26, 1.0, -9)]  # ONE question mark only (it used to draw three at once)
-    for k, (dx, dy, sc_, rot) in enumerate(spots):
-        tk = t0 + 0.12 + k * 0.28
-        if tl < tk:
-            continue
-        q = e_back(cl((tl - tk) / 0.45))
-        size = int(250 * sc_)
-        key = ("q", size)
-        if key not in _VX:
-            _VX[key] = text_layer("?", font_for("?", size, "title"), fill=(255, 255, 255), stroke=int(size * 0.07), stroke_fill=(214, 28, 44),
-                                  shadow=(0, 8, 12, 0.8), extrude=(max(4, int(size * 0.05)), (110, 10, 20)))
-        spr = _VX[key]
-        ang = rot + 7 * math.sin(tl * 3.2 + k * 1.7)
-        rs = spr.rotate(ang, resample=Image.BICUBIC, expand=True)
-        cx = min(max(sx + dx, 0.08), 0.92) * W
-        cy = min(max(sy + dy, 0.14), 0.86) * H + 7 * math.sin(tl * 2.4 + k)
-        put(fr, rs, cx, cy, 0.3 + 0.7 * cl(q), a)
-
-
 # ---- magnifier lens over the subject
 def _lens_sprite(R):
     key = ("lens", R)
@@ -6458,363 +5962,19 @@ def draw_lens(fr, sh, tl, t0, t1, a, ov):
 
 
 # ---- before / after slider (the picture on screen = BEFORE, the second real picture = AFTER)
-def draw_beforeafter(fr, sh, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    im2 = it.get("img2")
-    if im2 is None:
-        return
-    key = ("ba", id(im2))
-    if key not in _VX:
-        _VX[key] = ImageOps.fit(im2.convert("RGB"), (W, H), Image.LANCZOS)
-    after = _VX[key]
-    p = e_io(cl((tl - t0 - 0.35) / 1.3))
-    pos = W * (0.96 - 0.92 * p) + (math.sin(tl * 2.2) * 6 if p >= 1 else 0)
-    pos = int(min(max(pos, 8), W - 8))
-    before = fr.copy()
-    fr.paste(after.crop((pos, 0, W, H)), (pos, 0))
-    d = ImageDraw.Draw(fr)
-    # right part shows AFTER (revealed as the divider moves left); left part stays BEFORE
-    d.line([(pos, 0), (pos, H)], fill=(255, 255, 255), width=6)
-    cy = H // 2
-    d.ellipse([pos - 34, cy - 34, pos + 34, cy + 34], fill=(255, 255, 255), outline=(20, 20, 24), width=3)
-    d.polygon([(pos - 20, cy), (pos - 8, cy - 11), (pos - 8, cy + 11)], fill=(20, 20, 24))
-    d.polygon([(pos + 20, cy), (pos + 8, cy - 11), (pos + 8, cy + 11)], fill=(20, 20, 24))
-    la, lb = it.get("label_a") or "पहले", it.get("label_b") or "बाद में"
-    for txt, x, col in ((la, 60, (214, 28, 44)), (lb, W - 60, (28, 150, 80))):
-        s_ = _vx_text(txt, 46, "title", stroke=2)
-        pan = Image.new("RGBA", (s_.width + 44, s_.height + 14), tuple(col) + (235,))
-        pan.putalpha(rounded_mask(pan.size, 16))
-        pw = pan.width
-        px = x + pw / 2 if x < W / 2 else x - pw / 2
-        if (x < W / 2 and pos > px + pw / 2) or (x > W / 2 and pos < px - pw / 2):
-            put(fr, pan, px, 62, 1.0, a)
-            put(fr, s_, px, 62, 1.0, a)
-    if a < 0.999:
-        fr.paste(Image.blend(before, fr, a))
-
-
 # ---- comparison panel (two things, up to 3 rows with growing bars)
-def draw_compare(fr, sh, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    rows = it.get("rows") or []
-    A, B = it.get("a_hi") or "", it.get("b_hi") or ""
-    if not rows or not A or not B:
-        return
-    n_r = min(3, len(rows))
-    pw, ph = int(W * 0.86), 130 + 92 * n_r
-    pan = _vx_panel(pw, ph, 26, alpha=205)
-    q = e_out(cl((tl - t0) / 0.5))
-    cx, cy = W / 2, H - 34 - ph / 2 + (1 - q) * 160
-    put(fr, pan, cx, cy, 1.0, a)
-    lx, rx = cx - pw * 0.25, cx + pw * 0.25
-    top = cy - ph / 2 + 22
-    ha, hb = _vx_text(A, 52, "title", fill=(255, 120, 100)), _vx_text(B, 52, "title", fill=(110, 200, 255))
-    put(fr, ha, lx, top + 26, 1.0, a * cl((tl - t0 - 0.2) / 0.3))
-    put(fr, hb, rx, top + 26, 1.0, a * cl((tl - t0 - 0.3) / 0.3))
-    vs = _vx_text("VS", 60, "cond", fill=(255, 255, 255), stroke=4, sfill=(200, 24, 40))
-    put(fr, vs, cx, top + 26, 0.7 + 0.3 * e_back(cl((tl - t0 - 0.4) / 0.35)), a)
-    d = ImageDraw.Draw(fr)
-    ry = top + 98
-    rh = (ph - 130) / max(1, n_r) + 0.0
-    for k, r in enumerate(rows[:3]):
-        tk = t0 + 0.55 + k * 0.45
-        if tl < tk:
-            continue
-        g = e_out(cl((tl - tk) / 0.6))
-        lab = _vx_text(r.get("label_hi") or "", 30, "sub", fill=(235, 235, 240), stroke=1)
-        put(fr, lab, cx, ry + rh * k + 4, 1.0, a * g)
-        na, nb = float(r.get("na") or 0), float(r.get("nb") or 0)
-        mx = max(na, nb, 1e-9)
-        for side, n_, col, x0 in ((0, na, (255, 110, 90), lx), (1, nb, (100, 190, 255), rx)):
-            bw_max = pw * 0.36
-            bw = bw_max * (n_ / mx) * g if mx > 0 and (na or nb) else bw_max * 0.5 * g
-            y = ry + rh * k + 30
-            d.rounded_rectangle([x0 - bw_max / 2, y, x0 - bw_max / 2 + max(8, bw), y + 24], 10, fill=col)
-            vt = _vx_text(r.get("a_hi" if side == 0 else "b_hi") or "", 34, "title", stroke=2)
-            put(fr, vt, x0, y + 50, 1.0, a * g)
-
-
 # ---- Vox marker annotation: hand-drawn circle / underline / arrow with a handwritten label
-def _wobble_ellipse(cx, cy, rx, ry, seed, turns=1.12):
-    rnd = random.Random(seed)
-    ph = [rnd.uniform(0, 6.28) for _ in range(3)]
-    pts = []
-    n = 64
-    for k in range(n + 1):
-        th = -0.6 + 2 * math.pi * turns * k / n
-        wob = 1 + 0.035 * math.sin(2 * th + ph[0]) + 0.025 * math.sin(3 * th + ph[1]) + 0.07 * (k / n)
-        pts.append((cx + math.cos(th) * rx * wob, cy + math.sin(th) * ry * wob))
-    return pts
-
-
-def draw_mark(fr, sh, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    sx, sy = _subj(sh)
-    fx = sx if it.get("fx") is None else it["fx"]
-    fy = sy if it.get("fy") is None else it["fy"]
-    rw, rh = (it.get("rw") or 0.14), (it.get("rh") or 0.18)
-    shape = it.get("shape") or "circle"
-    col = (232, 40, 56)
-    p = e_io(cl((tl - t0) / 0.8))
-    cx, cy = fx * W, fy * H
-    seed = int(cx * 7 + cy * 3)
-    if shape == "underline":
-        y = cy + rh * H
-        pts = [(cx - rw * W + k * (2 * rw * W) / 12, y + 5 * math.sin(k * 0.9 + seed)) for k in range(13)]
-        for c_, wd in (((0, 0, 0), 13), (col, 9)):
-            _aa_poly(fr, pts, wd, c_, a * (0.55 if c_ == (0, 0, 0) else 1.0), p)
-        lab_xy = (cx, y + 42)
-    elif shape == "arrow":
-        sx0 = cx + (0.22 * W if fx < 0.5 else -0.22 * W)
-        sy0 = cy - 0.20 * H if fy > 0.35 else cy + 0.2 * H
-        ctrl = ((sx0 + cx) / 2, min(sy0, cy) - 0.08 * H)
-        pts = [((1 - u) ** 2 * sx0 + 2 * (1 - u) * u * ctrl[0] + u * u * cx, (1 - u) ** 2 * sy0 + 2 * (1 - u) * u * ctrl[1] + u * u * cy) for u in [k / 24 for k in range(25)]]
-        for c_, wd in (((0, 0, 0), 12), (col, 8)):
-            _aa_poly(fr, pts, wd, c_, a * (0.55 if c_ == (0, 0, 0) else 1.0), p)
-        if p > 0.95:
-            (x1_, y1_), (x2_, y2_) = pts[-3], pts[-1]
-            ang = math.atan2(y2_ - y1_, x2_ - x1_)
-            head = [(x2_ - 30 * math.cos(ang - 0.5), y2_ - 30 * math.sin(ang - 0.5)), (x2_, y2_), (x2_ - 30 * math.cos(ang + 0.5), y2_ - 30 * math.sin(ang + 0.5))]
-            for c_, wd in (((0, 0, 0), 12), (col, 8)):
-                _aa_poly(fr, head, wd, c_, a * (0.55 if c_ == (0, 0, 0) else 1.0), 1.0)
-        lab_xy = (sx0, sy0 - 44 if sy0 < cy else sy0 + 44)
-    else:
-        pts = _wobble_ellipse(cx, cy, rw * W, rh * H, seed)
-        for c_, wd in (((0, 0, 0), 13), (col, 9)):
-            _aa_poly(fr, pts, wd, c_, a * (0.55 if c_ == (0, 0, 0) else 1.0), p)
-        lab_xy = (cx, cy + rh * H + 44) if cy + rh * H + 80 < H else (cx, cy - rh * H - 44)
-    if it.get("text") and p > 0.6:
-        s_ = _vx_text(it["text"], 48, "head", fill=(255, 255, 255), stroke=3, sfill=(150, 10, 26))
-        q = e_back(cl((p - 0.6) / 0.4))
-        put(fr, s_, min(max(lab_xy[0], s_.width / 2 + 20), W - s_.width / 2 - 20), min(max(lab_xy[1], 40), H - 40), 0.5 + 0.5 * cl(q), a)
-
-
 # ---- animated chart (bars grow / line is drawn); numbers are only those the narrator says
-def draw_chart(fr, sh, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    pts = it.get("pts") or []
-    if len(pts) < 2:
-        return
-    sx, _ = _subj(sh)
-    pw, ph = int(W * 0.37), int(H * 0.62)
-    cx = W * 0.78
-    cy = H * 0.50
-    pan = _vx_panel(pw, ph, 22, col=(250, 248, 242), alpha=246, border=(40, 40, 40, 60))
-    q = e_out(cl((tl - t0) / 0.5))
-    put(fr, pan, cx + (1 - q) * (300 if cx > W / 2 else -300), cy, 1.0, a)
-    if q < 0.9:
-        return
-    ink = (30, 32, 40)
-    ttl = _vx_text(it.get("title") or "", 38, "title", fill=ink, stroke=0, shadow=False, max_w=pw - 50)
-    put(fr, ttl, cx, cy - ph / 2 + 16 + ttl.height / 2, 1.0, a)
-    x0, x1 = cx - pw / 2 + 36, cx + pw / 2 - 36
-    ybase, ytop = cy + ph / 2 - 62, cy - ph / 2 + 24 + ttl.height + 40
-    d = ImageDraw.Draw(fr)
-    d.line([(x0 - 6, ybase), (x1 + 6, ybase)], fill=ink, width=3)
-    n = min(6, len(pts))
-    mx = max(float(p_.get("v") or 0) for p_ in pts[:n]) or 1.0
-    slot = (x1 - x0) / n
-    if it.get("type") == "line":
-        xy = [(x0 + slot * (k + 0.5), ybase - (ybase - ytop) * float(pts[k].get("v") or 0) / mx) for k in range(n)]
-        g = e_out(cl((tl - t0 - 0.5) / 1.4))
-        _aa_poly(fr, xy, 7, VOX_CHART_COLS[0], a, g)
-        for k, (x, y) in enumerate(xy):
-            if g * (n - 1) >= k - 0.05:
-                d.ellipse([x - 10, y - 10, x + 10, y + 10], fill=(255, 255, 255), outline=VOX_CHART_COLS[1], width=5)
-    for k in range(n):
-        p_ = pts[k]
-        g = e_out(cl((tl - t0 - 0.5 - 0.25 * k) / 0.9))
-        xc = x0 + slot * (k + 0.5)
-        v = float(p_.get("v") or 0)
-        if it.get("type") != "line":
-            hgt = (ybase - ytop) * v / mx * g
-            bw = min(slot * 0.62, 90)
-            d.rounded_rectangle([xc - bw / 2, ybase - hgt, xc + bw / 2, ybase], 8, fill=VOX_CHART_COLS[k % 6])
-            ytxt = ybase - hgt - 20
-        else:
-            ytxt = ybase - (ybase - ytop) * v / mx - 28
-        if g > 0.3:
-            vt = _vx_text(str(p_.get("show") or p_.get("v")), 30, "title", fill=ink, stroke=0, shadow=False)
-            put(fr, vt, xc, ytxt, 1.0, a * cl((g - 0.3) / 0.4))
-        lt = _vx_text(p_.get("label") or "", 24, "sub", fill=(70, 72, 80), stroke=0, shadow=False, max_w=int(slot + 10))
-        put(fr, lt, xc, ybase + 14 + lt.height / 2, 1.0, a * cl((tl - t0 - 0.4 - 0.25 * k) / 0.3))
-
-
 # ---- multi-event timeline strip at the bottom
-def draw_tline(fr, sh, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    ev = (it.get("events") or [])[:5]
-    if len(ev) < 2:
-        return
-    y = H * 0.885
-    pan = _vx_panel(int(W * 0.92), 150, 20, alpha=190)
-    put(fr, pan, W / 2, y - 6, 1.0, a * e_out(cl((tl - t0) / 0.4)))
-    x0, x1 = W * 0.09, W * 0.91
-    g = e_out(cl((tl - t0 - 0.2) / 1.0))
-    _aa_poly(fr, [(x0, y), (x1, y)], 5, (255, 255, 255), a, g)
-    n = len(ev)
-    for k, e in enumerate(ev):
-        xk = x0 + (x1 - x0) * k / (n - 1)
-        tk = t0 + 0.5 + k * (max(1.0, (t1 - t0 - 1.2)) / n)
-        if tl < tk:
-            continue
-        q = e_back(cl((tl - tk) / 0.4))
-        d = ImageDraw.Draw(fr)
-        r = int(13 * cl(q))
-        d.ellipse([xk - r, y - r, xk + r, y + r], fill=(232, 40, 56), outline=(255, 255, 255), width=4)
-        wt = _vx_text(e.get("when") or "", 40, "title", fill=(255, 214, 120), stroke=2, max_w=int((x1 - x0) / n))
-        wh = _vx_text(e.get("what") or "", 31, "sub", fill=(255, 255, 255), stroke=2, max_w=int((x1 - x0) / n))
-        put(fr, wt, xk, y - 34 - wt.height / 2, 1.0, a * cl(q))
-        put(fr, wh, xk, y + 22 + wh.height / 2, 1.0, a * cl((tl - tk - 0.15) / 0.3))
-
-
 # ---- highlight bar: the key claim, marker-swiped
-def draw_hl(fr, sh, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    txt = (it.get("text") or "").strip()
-    if not txt:
-        return
-    bg, fg = HL_COLS[it.get("ci", 0) % len(HL_COLS)]
-    spr = _vx_text(txt, 76, "title", fill=fg, stroke=0, shadow=False, max_w=int(W * 0.8))
-    bw, bh = spr.width + 70, spr.height + 30
-    p = e_out(cl((tl - t0) / 0.5))
-    cx, cy = W / 2, H * 0.865
-    bar = Image.new("RGBA", (bw, bh), tuple(bg) + (255,))
-    ImageDraw.Draw(bar).polygon([(0, 0), (22, 0), (0, bh)], fill=(0, 0, 0, 0))
-    cw = max(2, int(bw * p))
-    put(fr, _vx_panel(1, 1, 1, alpha=0, border=(0, 0, 0, 0)), -50, -50, 1.0, 0)
-    sh_ = Image.new("RGBA", (cw + 30, bh + 30), (0, 0, 0, 0))
-    ImageDraw.Draw(sh_).rectangle([15, 21, 15 + cw, 21 + bh], fill=(0, 0, 0, 120))
-    sh_ = sh_.filter(ImageFilter.GaussianBlur(7))
-    put(fr, sh_, cx - bw / 2 + cw / 2, cy, 1.0, a)
-    put(fr, bar.crop((0, 0, cw, bh)), cx - bw / 2 + cw / 2, cy, 1.0, a)
-    if p > 0.45:
-        put(fr, spr, cx, cy, 1.0, a * cl((p - 0.45) / 0.4))
-
-
 # ---- the Vox paper-collage frame: the picture becomes a tilted, taped photo on coloured paper while a chart / timeline / highlight is shown
 COLLAGE_KINDS = ("chart", "tline")
 POST_KINDS = {"hl", "chart", "tline", "compare"}
 VOX_BG = [(236, 196, 92), (84, 184, 190), (240, 120, 96), (126, 164, 220), (246, 232, 206)]
 
 
-def _vox_bg(ci):
-    key = ("vbg", ci)
-    if key in _VX:
-        return _VX[key]
-    base = VOX_BG[ci % len(VOX_BG)]
-    im = Image.new("RGB", (W, H), base)
-    np = _np()
-    rng = np.random.default_rng(ci + 5)
-    a = np.asarray(im, dtype=np.float32)
-    blot = Image.fromarray((rng.random((8, 14)) * 255).astype(np.uint8)).resize((W, H), Image.BICUBIC)
-    a = a + ((np.asarray(blot, dtype=np.float32) / 255 - 0.5) * 22)[..., None]
-    im = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8))
-    d = ImageDraw.Draw(im, "RGBA")
-    dark = tuple(max(0, c - 70) for c in base) + (60,)
-    for yy in range(18, H, 34):  # halftone dots
-        for xx in range(18 + (yy // 34 % 2) * 17, W, 34):
-            d.ellipse([xx - 4, yy - 4, xx + 4, yy + 4], fill=dark)
-    rnd = random.Random(ci)
-    for _ in range(5):  # doodle stars / squiggles
-        x, y = rnd.randint(int(W * 0.62), W - 60), rnd.randint(40, H - 60)
-        d.line([(x - 14, y), (x + 14, y)], fill=dark[:3] + (140,), width=4)
-        d.line([(x, y - 14), (x, y + 14)], fill=dark[:3] + (140,), width=4)
-    _VX[key] = im
-    return im
-
-
-def vox_collage(fr, q, ci, kind="chart"):
-    e = e_out(cl(q))
-    bg = _vox_bg(ci)
-    s = lerp(1.0, 0.58, e)
-    cw, ch = int(W * s), int(H * s)
-    card = fr.resize((cw, ch), Image.BICUBIC)
-    border = 12
-    framed = Image.new("RGBA", (cw + 2 * border, ch + 2 * border), (252, 250, 244, 255))
-    framed.paste(card, (border, border))
-    tape = Image.new("RGBA", (96, 30), (240, 232, 190, 200))
-    framed.alpha_composite(tape.rotate(-30, expand=True), (-24, -8))
-    framed.alpha_composite(tape.rotate(30, expand=True), (framed.width - 70, -8))
-    rot = -2.4 * e
-    framed = framed.rotate(rot, resample=Image.BICUBIC, expand=True)
-    sh_ = Image.new("RGBA", framed.size, (0, 0, 0, 0))
-    sh_.putalpha(framed.getchannel("A").filter(ImageFilter.GaussianBlur(12)).point(lambda v: int(v * 0.55)))
-    cx, cy = lerp(W / 2, W * 0.31, e), lerp(H / 2, H * 0.45, e)
-    base = Image.blend(fr, bg, e) if e < 1 else bg.copy()
-    base = base.convert("RGBA")
-    base.alpha_composite(sh_, (int(cx - framed.width / 2 + 8), int(cy - framed.height / 2 + 14)))
-    base.alpha_composite(framed, (int(cx - framed.width / 2), int(cy - framed.height / 2)))
-    return base.convert("RGB")
-
-
 ON_PHOTO = {"lens", "beforeafter", "measure", "qmark", "mark", "explain", "action", "feature", "verdict", "sidelabel", "bigtext", "tab", "glow", "desk"}
 KW_COLS = [((236, 84, 64), (255, 255, 255)), ((0, 150, 170), (255, 255, 255)), ((58, 98, 200), (255, 255, 255)), ((250, 250, 244), (24, 26, 34)), ((240, 170, 30), (24, 26, 34))]
-
-
-def draw_kw(fr, kws, t, dur, hidden=False):
-    """Vox key-word cards: every important word the narrator says lands as a coloured sticker on the paper, stacked on the right."""
-    for n, k in enumerate(kws):
-        tk = k["t"]
-        if t < tk:
-            continue
-        end_fade = 1 - cl((t - (dur - 0.3)) / 0.3)
-        a = (0.0 if hidden else 1.0) * end_fade
-        if a <= 0.01:
-            continue
-        bg, fg = KW_COLS[k.get("ci", n) % len(KW_COLS)]
-        key = ("kw", k["text"], bg)
-        if key not in _VX:
-            spr = _vx_text(k["text"], 54, "title", fill=fg, stroke=0, shadow=False, max_w=int(W * 0.30))
-            card = Image.new("RGBA", (spr.width + 48, spr.height + 26), tuple(bg) + (255,))
-            card.putalpha(rounded_mask(card.size, 14))
-            card.alpha_composite(spr, ((card.width - spr.width) // 2, (card.height - spr.height) // 2))
-            sh_ = Image.new("RGBA", (card.width + 40, card.height + 40), (0, 0, 0, 0))
-            ImageDraw.Draw(sh_).rounded_rectangle([20 + 3, 20 + 9, 20 + card.width + 3, 20 + card.height + 9], 14, fill=(0, 0, 0, 110))
-            sh_ = sh_.filter(ImageFilter.GaussianBlur(7))
-            sh_.alpha_composite(card, (20, 20))
-            _VX[key] = sh_
-        q = e_back(cl((t - tk) / 0.4))
-        rot = (-2.5, 2.0, -1.5, 2.8)[n % 4]
-        spr = _VX[key].rotate(rot, resample=Image.BICUBIC, expand=True)
-        cy = H * (0.17 + 0.15 * n)
-        cx = W * 0.78 + (1 - cl(q)) * 340
-        put(fr, spr, cx, cy, 0.85 + 0.15 * cl(q), a)
-        if q >= 1.0 and not hidden:  # marker underline sweeps under the new word
-            u = e_out(cl((t - tk - 0.35) / 0.5))
-            if u > 0.02:
-                y = cy + spr.height / 2 - 14
-                x0 = cx - spr.width / 2 + 24
-                _aa_poly(fr, [(x0, y + 2), (x0 + (spr.width - 48) * u, y - 3)], 5, (232, 40, 56), a)
-
-
-def draw_kw_corner(fr, kws, t, dur, subj_x, has_label, blocked):
-    """Non-Vox scenes: the key word the narrator just said pops as a small sticker in the top corner away from the subject."""
-    cur = None
-    for k in kws:
-        if k["t"] <= t < k["t"] + 1.8:
-            cur = k
-    if cur is None or blocked:
-        return
-    tt = t - cur["t"]
-    a = cl(tt / 0.2) * (1 - cl((tt - 1.45) / 0.35)) * (1 - cl((t - (dur - 0.3)) / 0.3))
-    bg, fg = KW_COLS[cur.get("ci", 0) % len(KW_COLS)]
-    key = ("kwc", cur["text"], bg)
-    if key not in _VX:
-        spr = _vx_text(cur["text"], 46, "title", fill=fg, stroke=0, shadow=False, max_w=int(W * 0.30))
-        card = Image.new("RGBA", (spr.width + 40, spr.height + 22), tuple(bg) + (255,))
-        card.putalpha(rounded_mask(card.size, 12))
-        card.alpha_composite(spr, ((card.width - spr.width) // 2, (card.height - spr.height) // 2))
-        lay = Image.new("RGBA", (card.width + 36, card.height + 36), (0, 0, 0, 0))
-        ImageDraw.Draw(lay).rounded_rectangle([18 + 3, 18 + 8, 18 + card.width + 3, 18 + card.height + 8], 12, fill=(0, 0, 0, 110))
-        lay = lay.filter(ImageFilter.GaussianBlur(6))
-        lay.alpha_composite(card, (18, 18))
-        _VX[key] = lay
-    left = (subj_x > 0.55) and not has_label
-    q = e_back(cl(tt / 0.35))
-    spr = _VX[key]
-    cx = (W * 0.14 if left else W * 0.86) + (1 - cl(q)) * (-200 if left else 200)
-    put(fr, spr, cx, H * 0.115, 0.85 + 0.15 * cl(q), a)
 
 
 # =========================================================================== reference overlays that were missing: two corner labels (NEW STYLE / OLD STYLE), big time-span text (3 MONTHS), news tab (BREAKING NEWS)
@@ -7002,8 +6162,7 @@ def draw_desk(fr, sh, tl, t0, t1, a, ov):
 def draw_new_kind(fr, sh, tl, t0, t1, a, ov):
     k = ov["kind"]
     try:
-        {"measure": draw_measure, "qmark": draw_qmark, "lens": draw_lens, "beforeafter": draw_beforeafter, "compare": draw_compare, "mark": draw_mark,
-         "chart": draw_chart, "tline": draw_tline, "hl": draw_hl, "sidelabel": draw_sidelabel, "bigtext": draw_bigtext, "tab": draw_tab, "glow": draw_glow, "desk": draw_desk}[k](fr, sh, tl, t0, t1, a, ov)
+        {"lens": draw_lens, "sidelabel": draw_sidelabel, "bigtext": draw_bigtext, "tab": draw_tab, "glow": draw_glow, "desk": draw_desk}[k](fr, sh, tl, t0, t1, a, ov)
     except Exception as e:  # noqa
         if not _VX.get("err_" + k):
             _VX["err_" + k] = 1
@@ -7020,15 +6179,6 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
         a = 1.0  # these cards move themselves in and out
     if a <= 0.01:
         return True
-    if k == "explain":
-        draw_explain(fr, sh, tl, t0, t1, a, ov)
-        return True
-    if k == "action":
-        draw_action(fr, sh, tl, t0, t1, a, ov)
-        return True
-    if k == "feature":
-        draw_feature(fr, sh, tl, t0, t1, a, ov)
-        return True
     if k == "place":
         draw_place(fr, tl, t0, a, ov)
         return True
@@ -7037,9 +6187,6 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
         return True
     if k == "name":
         draw_name(fr, tl, t0, a, ov, sh)
-        return True
-    if k == "srclist":
-        draw_srclist(fr, sh, tl, t0, t1, a, ov)
         return True
     if k == "note":
         draw_note(fr, sh, tl, ov, t0, t1, a)
@@ -7052,9 +6199,6 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
         return True
     if k == "person":
         draw_person(fr, sh, tl, t0, t1, a, ov)
-        return True
-    if k == "stat":
-        draw_stat(fr, sh, tl, t0, t1, a, ov)
         return True
     if k == "verdict":
         draw_verdict(fr, sh, tl, t0, t1, a, ov)
@@ -7462,17 +6606,6 @@ KF_PRESETS = {  # (t, x, y, scale, rotation, alpha); x / y are fractions of the 
 }
 
 
-def kf_eval(kfs, t):
-    if t <= kfs[0][0]:
-        return kfs[0][1:]
-    for a, b in zip(kfs, kfs[1:]):
-        if a[0] <= t <= b[0]:
-            u = (t - a[0]) / max(1e-6, b[0] - a[0])
-            u = u * u * (3 - 2 * u)
-            return tuple(a[k] + (b[k] - a[k]) * u for k in range(1, 6))
-    return kfs[-1][1:]
-
-
 def png_sticker(im, maxside=520):
     """RGBA object -> cropped, scaled, soft shadow (real transparency is kept)."""
     a = im.getchannel("A")
@@ -7559,62 +6692,7 @@ def action_png(query, pose, verb, out):
     return explain_png(query, out)
 
 
-def draw_explain(fr, ps, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    spr = it.get("png_img")
-    if spr is None:
-        return
-    side = ov.get("side") or "right"
-    sg = -1 if side == "left" else 1
-    kfs = KF_PRESETS.get(it.get("anim") or "pop", KF_PRESETS["pop"])
-    x, y, s, rot, al = kf_eval(kfs, tl)
-    cx = W * (0.27 if side == "left" else 0.73) + sg * x * W * 0.3
-    cy = H * 0.47 + y * H * 0.5 + 6 * math.sin(tl * 2.2)
-    im = spr if abs(rot) < 0.5 else spr.rotate(rot, expand=True, resample=Image.BICUBIC)
-    scl = min(1.0, 0.62 * H / max(1, spr.height)) * s
-    put(fr, im, cx, cy, scl, a * al)
-    lab = ov.get("text") or ""
-    if lab and tl > 0.55:
-        ll = _TL_LAB.get(("x", lab))
-        if ll is None:
-            ll = _TL_LAB[("x", lab)] = text_layer(lab, font_for(lab, 46, "title"), fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(0, 3, 5, 0.8))
-        qq = e_out(cl((tl - 0.55) / 0.4))
-        put(fr, ll, cx, cy + spr.height * scl / 2 + 24 + (1 - qq) * 22, 1.0, a * qq)
-
-
 # ---------------------------------------------------------------- source list at the end + reference-only card
-def srclist_sprite(text):
-    key = ("srclist", text)
-    if key in _CARDS:
-        return _CARDS[key]
-    rows = [r.split("|") for r in text.split("\n") if r.strip()]
-    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
-    fh, fr_ = font_for("A", 30, "cond"), font_for("A", 27, "serif")
-    rows = [[pretty_source(r[0])[:70]] for r in rows]
-    need = max(int(probe.textlength(r[0], font=fr_) + 70) for r in rows) + 50
-    w_ = min(W - 80, max(620, need))
-    h_ = 30 + 46 + len(rows) * 40 + 16
-    im = Image.new("RGBA", (w_, h_), (0, 0, 0, 0))
-    d = ImageDraw.Draw(im)
-    d.rounded_rectangle([0, 0, w_ - 1, h_ - 1], radius=18, fill=(8, 8, 12, 205))
-    d.rounded_rectangle([22, 20, 22 + 150, 20 + 34], radius=6, fill=(214, 28, 40, 255))
-    d.text((36, 20 + 28), "SOURCES", font=fh, fill=(255, 255, 255, 255), anchor="ls")
-    y = 20 + 46
-    for k, r in enumerate(rows, 1):
-        t = r[0][:78]
-        d.text((26, y + 28), f"{k}.", font=fr_, fill=(255, 196, 60, 255), anchor="ls")
-        d.text((70, y + 28), t, font=fr_, fill=(240, 236, 226, 255), anchor="ls")
-        y += 40
-    _CARDS[key] = im
-    return im
-
-
-def draw_srclist(fr, ps, tl, t0, t1, a, ov):
-    spr = srclist_sprite(ov.get("it", {}).get("text") or "")
-    q = e_out(cl((tl - t0) / 0.5))
-    put(fr, spr, 40 + spr.width / 2, H - 36 - spr.height / 2 + (1 - q) * 60, 1.0, a)
-
-
 # =========================================================================== V5: clean cut-outs, action animations, meaning-aware pictures, mention-timed pictures
 def pretty_source(title, dom=""):
     """Never show a link: a title that is a web address becomes a plain name ("en.wikipedia.org" -> "Wikipedia")."""
@@ -7720,80 +6798,7 @@ ACTION_SPAN = {"run": 3.6, "walk": 4.8, "swim": 4.6, "fly": 4.0, "jump": 3.0, "f
 HORIZONTAL = ("run", "walk", "swim", "fly", "jump")
 
 
-def action_state(verb, direction, tl, span):
-    """(x, y, scale, rotation, squash_y, shadow) of the moving cut-out at time tl; x, y are screen fractions of W and H."""
-    sgn = -1 if direction == "left" else 1
-    T = max(1.2, span - 0.5)
-    u = cl((tl - 0.2) / T)
-    if verb in ("run", "walk"):
-        f = 2.7 if verb == "run" else 1.7
-        amp = 0.05 if verb == "run" else 0.016
-        x = 0.5 + sgn * (-0.68 + 1.36 * u)
-        y = 0.74 - abs(math.sin(math.pi * f * tl)) * amp
-        return x, y, 1.0, sgn * 3.0 * math.sin(2 * math.pi * f * tl + 1.0), 1 + 0.045 * math.sin(2 * math.pi * f * 2 * tl), True
-    if verb == "swim":
-        x = 0.5 + sgn * (-0.64 + 1.28 * u)
-        return x, 0.64 + 0.02 * math.sin(2 * math.pi * 0.9 * tl), 0.85, sgn * 4.0 * math.sin(2 * math.pi * 0.9 * tl), 1.0, False
-    if verb == "fly":
-        x = 0.5 + sgn * (-0.66 + 1.32 * u)
-        return x, 0.30 + 0.045 * math.sin(2 * math.pi * 0.7 * tl) + (1 - u) * 0.05, 0.9, sgn * 5.0 * math.sin(2 * math.pi * 0.7 * tl + 0.5), 1 + 0.1 * math.sin(2 * math.pi * 7 * tl), False
-    if verb == "jump":
-        x = 0.5 + sgn * (-0.38 + 0.76 * u)
-        return x, 0.74 - 0.38 * 4 * u * (1 - u), 1.0, -sgn * 14.0 * math.sin(math.pi * u), 1 + 0.08 * math.sin(math.pi * u), u < 0.02 or u > 0.98
-    if verb == "fall":
-        v = cl((tl - 0.15) / 1.3)
-        y = -0.25 + (0.74 + 0.25) * v * v
-        if v >= 1:  # small bounce when it lands
-            b = cl((tl - 1.45) / 0.5)
-            y = 0.74 - 0.05 * 4 * b * (1 - b)
-        return 0.5 + sgn * 0.12, y, 1.0, sgn * 360.0 * min(1.0, v), 1.0, v >= 1
-    if verb == "rise":
-        v = e_out(cl((tl - 0.15) / (T * 0.8)))
-        return 0.5, 0.86 - 0.58 * v, 0.9 + 0.2 * v, 0.0, 1.0, False
-    if verb == "approach":
-        v = cl((tl - 0.1) / T)
-        v = v * v * (3 - 2 * v)
-        return 0.5, 0.66 + 0.02 * math.sin(tl * 4), 0.28 + 1.3 * v, 0.0, 1.0, v > 0.2
-    if verb == "retreat":
-        v = cl((tl - 0.1) / T)
-        v = v * v * (3 - 2 * v)
-        return 0.5, 0.66, 1.4 - 1.15 * v, 0.0, 1.0, True
-    if verb == "spin":
-        v = e_out(cl((tl - 0.1) / (T * 0.7)))
-        return 0.5, 0.5, 0.3 + 0.8 * v, 720.0 * v, 1.0, False
-    if verb == "shake":
-        k = max(0.0, 1 - tl / span)
-        return 0.5 + 0.012 * math.sin(tl * 60) * k, 0.55, 1.0, 5.0 * math.sin(tl * 48) * k, 1.0, False
-    v = e_back(cl((tl - 0.1) / (T * 0.55)))  # grow
-    return 0.5, 0.58, 0.3 + 0.95 * v, 0.0, 1.0, False
-
-
 _GROUND_SH = {}
-
-
-def draw_action(fr, ps, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    spr = it.get("png_img")
-    if spr is None:
-        return
-    verb, direction = it.get("verb") or "run", it.get("dir") or "right"
-    x, y, s, rot, sq, shadow = action_state(verb, direction, tl, max(1.5, t1 - t0))
-    base = spr if (direction != "left" or verb not in HORIZONTAL) else ImageOps.mirror(spr)
-    scl = (0.44 * H / max(1, base.height)) * s
-    if shadow:  # small soft ground shadow under the feet
-        sw_ = max(40, int(base.width * scl * 0.75) // 8 * 8)
-        sh_img = _GROUND_SH.get(sw_)
-        if sh_img is None:
-            sh_img = Image.new("RGBA", (sw_ + 40, 56), (0, 0, 0, 0))
-            ImageDraw.Draw(sh_img).ellipse([20, 14, sw_ + 20, 42], fill=(0, 0, 0, 150))
-            _GROUND_SH[sw_] = sh_img = sh_img.filter(ImageFilter.GaussianBlur(7))
-        put(fr, sh_img, x * W, 0.74 * H - 2, 1.0, a * 0.6)
-    im = base
-    if abs(sq - 1) > 0.01:
-        im = im.resize((im.width, max(8, int(im.height * sq))), Image.BILINEAR)
-    if abs(rot) > 0.4:
-        im = im.rotate(rot, expand=True, resample=Image.BICUBIC)
-    put(fr, im, x * W, y * H - base.height * scl * 0.5 + 30 * scl, scl, a)  # feet (not the sprite's padding) stand on the ground line
 
 
 # ---------------------------------------------------------------- pictures that follow the MEANING, shown only when mentioned
@@ -8056,23 +7061,6 @@ def place_sprite(text, sub):
     return out
 
 
-def name_sprite(text, sub):
-    key = ("name", text, sub)
-    if key in _CARDS:
-        return _CARDS[key]
-    l1 = text_layer(text, font_for(text, 92, "title"), fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(0, 4, 7, 0.85), max_w=int(W * 0.5))
-    l2 = text_layer(sub, font_for(sub, 44, "title"), fill=(255, 214, 0), stroke=2, stroke_fill=(0, 0, 0), shadow=(0, 3, 5, 0.8), max_w=int(W * 0.42)) if sub else None
-    w_ = max(l1.width, l2.width if l2 else 0) + 30
-    h_ = l1.height + (l2.height - 6 if l2 else 0)
-    out = Image.new("RGBA", (w_, h_), (0, 0, 0, 0))
-    ImageDraw.Draw(out).rectangle([w_ - 9, 6, w_ - 1, h_ - 6], fill=(255, 214, 0, 255))
-    out.alpha_composite(l1, (w_ - 24 - l1.width, 0))
-    if l2:
-        out.alpha_composite(l2, (w_ - 24 - l2.width, l1.height - 6))
-    _CARDS[key] = out
-    return out
-
-
 def quote_sprite(text):
     key = ("quote", text)
     if key in _CARDS:
@@ -8191,59 +7179,6 @@ def build_feature(it, out):
         f["crop"] = crop
     it["png_img"] = st
     return True
-
-
-def draw_feature(fr, ps, tl, t0, t1, a, ov):
-    it = ov.get("it") or {}
-    st, feats = it.get("png_img"), it.get("features") or []
-    if st is None or not feats:
-        return
-    _dim(fr, 0.5 * a)
-    q = e_out(cl((tl - 0.15) / 0.6))
-    scl = min(1.0, 0.7 * H / st.height)
-    cx, cy = W * 0.30 - (1 - q) * 260, H * 0.52
-    put(fr, st, cx, cy, scl, a * q)
-    n = len(feats)
-    ys = {1: [0.5], 2: [0.34, 0.68], 3: [0.22, 0.5, 0.78], 4: [0.17, 0.39, 0.61, 0.83]}[min(4, n)]
-    d_ = 168
-    ov_im = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    dr = ImageDraw.Draw(ov_im)
-    pops = []
-    for k, f in enumerate(feats[:4]):
-        tk = 0.9 + k * 0.85
-        p = e_out(cl((tl - tk) / 0.5))
-        if p <= 0:
-            continue
-        px = cx + (f["x"] - 0.5) * st.width * scl
-        py = cy + (f["y"] - 0.5) * st.height * scl
-        ex, ey = W * 0.74 - d_ / 2 - 6, ys[k] * H
-        x2, y2 = px + (ex - px) * p, py + (ey - py) * p
-        dr.line([(px, py), (x2, y2)], fill=(0, 0, 0, 200), width=8)
-        dr.line([(px, py), (x2, y2)], fill=(255, 255, 255, 255), width=4)
-        dr.ellipse([px - 11, py - 11, px + 11, py + 11], fill=(230, 30, 40, 255), outline=(255, 255, 255, 255), width=3)
-        if p > 0.97:
-            ang = math.atan2(ey - py, ex - px)
-            tip = (ex, ey)
-            for s_ in (-0.45, 0.45):
-                dr.line([tip, (ex - 22 * math.cos(ang + s_), ey - 22 * math.sin(ang + s_))], fill=(255, 255, 255, 255), width=5)
-        pops.append((k, f, ys[k] * H, tk))
-    fr.paste(ov_im, (0, 0), ov_im.point(lambda v: int(v * a)))
-    for k, f, yy, tk in pops:
-        qq = e_back((tl - tk - 0.35) / 0.4)
-        if tl < tk + 0.35:
-            continue
-        key = ("fcirc", id(f["crop"]))
-        spr = _CARDS.get(key)
-        if spr is None:
-            spr = _CARDS[key] = _circle_sprite(f["crop"], d_)
-        cxx = W * 0.74
-        put(fr, spr, cxx, yy, 0.2 + 0.8 * cl(qq), a)
-        lab = f.get("label") or ""
-        if lab:
-            ll = _TL_LAB.get(("f", lab))
-            if ll is None:
-                ll = _TL_LAB[("f", lab)] = text_layer(lab, font_for(lab, 40, "title"), fill=(255, 255, 255), stroke=2, stroke_fill=(0, 0, 0), shadow=(0, 3, 5, 0.8), max_w=300)
-            put(fr, ll, cxx + d_ / 2 + 20 + ll.width / 2, yy, 1.0, a * cl((tl - tk - 0.5) / 0.3))
 
 
 # ---- cut a sentence at a word so a split screen / map starts exactly where the first subject is named
@@ -8685,1625 +7620,6 @@ def draw_ov(fr, sh, tl, pal):
     put(fr, spr, cx, cy, 0.7 + 0.3 * cl(q) if ov["kind"] == "bubble" else 1.0, a)
 
 
-# =========================================================================== T151: the 151-technique engine (never remove unless the user says so)
-# layers: bg (44, live on the background picture / video), ov (92: frame-level effects + cards in the 3 fixed bottom slots), tr (15 transitions)
-T151 = []
-
-
-def _treg(layer, group, *pairs):
-    for key, name in pairs:
-        T151.append({"id": len(T151) + 1, "layer": layer, "group": group, "key": key, "name": name})
-
-
-_treg("bg", "map", ("map_anim", "Map Animation"), ("route", "Route Animation"), ("dist_counter", "Distance Counter Animation"), ("pin", "Location Pin Animation"), ("map_zoom", "Map Zoom In / Zoom Out"),
-      ("globe_rot", "Globe Rotation Animation"), ("globe_map", "3D Globe to Map Transition"), ("satellite", "Satellite View Animation"), ("border_hl", "Country Border Highlight Animation"),
-      ("territory", "Territory Expansion Animation"), ("hist_border", "Historical Border Change Animation"), ("army_move", "Army Movement Animation"), ("travel_path", "Travel Path Animation"),
-      ("gps", "GPS Coordinate Animation"), ("latlon", "Latitude & Longitude Animation"), ("topo", "Topographic Map Animation"), ("elev", "Elevation Profile Animation"),
-      ("compass", "Compass Animation"), ("scalebar", "Scale Bar Animation"), ("geo_compare", "Geographical Comparison Animation"))
-_treg("bg", "history", ("h_timeline", "Historical Timeline Animation"), ("old_photo", "Old Photo Animation"), ("parallax25", "2.5D Parallax Animation"), ("kenburns", "Ken Burns Effect"),
-      ("doc_reveal", "Historical Document Reveal"), ("handwriting", "Handwriting Animation"), ("newspaper", "Newspaper Reveal Animation"), ("manuscript", "Ancient Manuscript Animation"),
-      ("family_tree", "Family Tree Animation"), ("dynasty", "Dynasty Timeline Animation"), ("ruler_intro", "King / Ruler Introduction Animation"), ("portrait_reveal", "Historical Portrait Reveal"),
-      ("archival", "Archival Footage Animation"), ("old_map", "Old Map Reconstruction"), ("ba_hist", "Before & After Historical Comparison"), ("event_seq", "Historical Event Sequence Animation"),
-      ("battle_form", "Battle Formation Animation"), ("army_strength", "Army Strength Comparison"), ("kingdom_exp", "Kingdom Expansion Animation"), ("evidence_hl", "Historical Evidence Highlight Animation"))
-_treg("bg", "camera", ("push_in", "Camera Push In"), ("pull_out", "Camera Pull Out"), ("dolly_zoom", "Dolly Zoom"), ("pan", "Camera Pan Animation"))
-_treg("ov", "data", ("num_counter", "Number Counter Animation"), ("dist_card", "Distance Counter"), ("pop_counter", "Population Counter"), ("pct_counter", "Percentage Counter"), ("year_counter", "Year Counter Animation"),
-      ("countdown", "Date Countdown Animation"), ("time_counter", "Time Counter Animation"), ("bar_chart", "Animated Bar Chart"), ("pie_chart", "Animated Pie Chart"), ("line_graph", "Line Graph Animation"),
-      ("area_chart", "Area Chart Animation"), ("data_compare", "Data Comparison Animation"), ("ranking", "Ranking Animation"), ("fin_counter", "Financial Counter Animation"),
-      ("stat_info", "Statistics Infographic Animation"), ("progress", "Progress Bar Animation"), ("digital_clock", "Digital Clock Animation"), ("odometer", "Digital Odometer Animation"),
-      ("dashboard", "Live Data Dashboard Animation"), ("num_roll", "Number Rolling Animation"))
-_treg("ov", "camera", ("tilt", "Camera Tilt Animation"), ("fly", "3D Camera Fly Through"), ("orbit", "Orbit Camera Animation"), ("parallax_cam", "Parallax Camera Movement"), ("aerial", "Aerial Flyover"),
-      ("drone", "Drone Reveal Animation"), ("rack", "Rack Focus Effect"), ("shake", "Camera Shake Effect"), ("handheld", "Handheld Camera Effect"), ("whip_pan", "Whip Pan Transition"),
-      ("match_move", "Match Move Transition"), ("persp_zoom", "Perspective Zoom"), ("inf_zoom", "Infinite Zoom Animation"), ("tracking", "Camera Tracking Animation"), ("cine_reveal", "Cinematic Reveal"),
-      ("focus_pull", "Focus Pull Animation"))
-_treg("ov", "text", ("kinetic", "Kinetic Typography"), ("text3d", "3D Text Animation"), ("typewriter", "Typewriter Text Effect"), ("text_reveal", "Text Reveal Animation"), ("text_mask", "Text Masking Animation"),
-      ("word_hl", "Word Highlight Animation"), ("letter", "Letter-by-Letter Animation"), ("glitch_text", "Glitch Text Animation"), ("tracking_text", "Tracking Text Animation"), ("text_path", "Text Follow Path Animation"),
-      ("subtitles", "Animated Subtitles"), ("lower_third", "Lower Third Animation"), ("chapter", "Chapter Title Animation"), ("date_loc", "Date & Location Title Animation"), ("callout", "Callout Text Animation"),
-      ("text_persp", "Text Perspective Animation"), ("text_rot", "Text Rotation Animation"), ("text_blur", "Text Blur Reveal"), ("labels", "Animated Labels"), ("text_trans", "Text Transition Animation"))
-_treg("ov", "diagram", ("flowchart", "Flowchart Animation"), ("process", "Process Flow Animation"), ("steps", "Step-by-Step Animation"), ("mindmap", "Mind Map Animation"), ("orgchart", "Organizational Chart Animation"),
-      ("network", "Network Diagram Animation"), ("conn_line", "Connection Line Animation"), ("arrow_dir", "Arrow Direction Animation"), ("callout_ptr", "Callout Pointer Animation"), ("blueprint", "Blueprint Animation"),
-      ("exploded", "Exploded View Animation"), ("assembly", "3D Object Assembly Animation"), ("cross_section", "Cross Section Animation"), ("layer_sep", "Layer Separation Animation"), ("tech_label", "Technical Label Animation"))
-_treg("ov", "vfx", ("grain", "Film Grain Effect"), ("dust", "Dust Particle Effect"), ("smoke", "Smoke Effect"), ("fog", "Fog Effect"), ("fire", "Fire & Ember Effect"), ("rain", "Rain Effect"), ("snow", "Snow Effect"),
-      ("lightning", "Lightning Effect"), ("light_leak", "Light Leak Effect"), ("lens_flare", "Lens Flare Effect"), ("vignette", "Vignette Effect"), ("chroma", "Chromatic Aberration"), ("glitch", "Glitch Effect"),
-      ("film_burn", "Film Burn Effect"), ("vhs", "VHS Effect"), ("old_film", "Old Film Effect"), ("motion_blur", "Motion Blur Effect"), ("speed_ramp", "Speed Ramp Effect"), ("freeze", "Freeze Frame Effect"),
-      ("split", "Split Screen Effect"), ("vox", "Vox Style"))
-_treg("tr", "trans", ("mask", "Mask Transition"), ("luma", "Luma Fade Transition"), ("morph", "Morph Transition"), ("zoom", "Zoom Transition"), ("whip", "Whip Transition"), ("spin", "Spin Transition"),
-      ("glitch", "Glitch Transition"), ("flash", "Light Flash Transition"), ("burn", "Film Burn Transition"), ("shape", "Shape Transition"), ("wipe", "Wipe Transition"), ("match", "Match Cut Transition"),
-      ("object", "Object Reveal Transition"), ("seamless", "Seamless Transition"), ("morphmap", "Morphing Map Transition"))
-assert len(T151) == 151, len(T151)
-TR15 = [t["key"] for t in T151 if t["layer"] == "tr"]
-FRAME_FX = {}
-
-
-def _ffx(*names):
-    def deco(fn):
-        for n in names:
-            FRAME_FX[n] = fn
-        return fn
-    return deco
-
-
-def _env(u):
-    return math.sin(math.pi * cl(u))
-
-
-def _zoomc(fr, z, cx=0.5, cy=0.5, rot=0.0):
-    """Crop-zoom around (cx, cy) (fractions) with optional rotation; z >= 1."""
-    if rot:
-        fr = fr.rotate(rot, resample=Image.BICUBIC)
-        z = z * (1 + abs(rot) * 0.02)
-    z = max(1.0, z)
-    bw, bh = W / z, H / z
-    x0 = min(max(cx * W - bw / 2, 0), W - bw)
-    y0 = min(max(cy * H - bh / 2, 0), H - bh)
-    return fr.resize((W, H), Image.BICUBIC, box=(x0, y0, x0 + bw, y0 + bh))
-
-
-def _blur(fr, r):
-    return fr.filter(ImageFilter.GaussianBlur(max(0.1, r)))
-
-
-def _radial_mask(rx, ry, soft=0.25, cx=0.5, cy=0.5):
-    np = _np()
-    key = ("rm", int(rx * 100), int(ry * 100), int(soft * 100), int(cx * 100), int(cy * 100))
-    if key not in _VX:
-        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-        d = np.sqrt(((xx / W - cx) / rx) ** 2 + ((yy / H - cy) / ry) ** 2)
-        _VX[key] = Image.fromarray((np.clip((1.0 - d) / soft, 0, 1) * 255).astype(np.uint8))
-    return _VX[key]
-
-
-# ---- camera moves (u = progress through the window)
-@_ffx("push_in")
-def cam_push(fr, u, t, s):
-    return _zoomc(fr, 1 + 0.22 * e_io(u))
-
-
-@_ffx("pull_out")
-def cam_pull(fr, u, t, s):
-    return _zoomc(fr, 1.22 - 0.2 * e_io(u))
-
-
-@_ffx("dolly_zoom")
-def cam_dolly(fr, u, t, s):
-    bg = _zoomc(fr, 1 + 0.3 * e_io(u))
-    return Image.composite(fr, bg, _radial_mask(0.34, 0.5, 0.45))
-
-
-@_ffx("pan")
-def cam_pan(fr, u, t, s):
-    return _zoomc(fr, 1.14, 0.5 + lerp(-0.07, 0.07, e_io(u)) * (1 if s % 2 else -1), 0.5)
-
-
-@_ffx("kenburns")
-def cam_kb(fr, u, t, s):
-    return _zoomc(fr, 1.06 + 0.16 * u, 0.5 + 0.05 * (u - 0.5), 0.5 - 0.03 * u)
-
-
-@_ffx("tilt")
-def cam_tilt(fr, u, t, s):
-    return _zoomc(fr, 1.16, 0.5, 0.5 + lerp(0.07, -0.07, e_io(u)))
-
-
-@_ffx("fly")
-def cam_fly(fr, u, t, s):
-    return _zoomc(fr, 1 + 0.55 * u * u, 0.5, 0.5, 2.5 * math.sin(u * 3))
-
-
-@_ffx("orbit")
-def cam_orbit(fr, u, t, s):
-    return _zoomc(fr, 1.1, 0.5 + 0.05 * math.sin(u * 3.1), 0.5, lerp(-3.5, 3.5, e_io(u)))
-
-
-@_ffx("parallax_cam", "parallax25")
-def cam_par(fr, u, t, s):
-    bg = _zoomc(fr, 1.14, 0.5 + lerp(-0.045, 0.045, u), 0.5)
-    fg = _zoomc(fr, 1.04, 0.5 - lerp(-0.02, 0.02, u), 0.5)
-    return Image.composite(fg, bg, _radial_mask(0.36, 0.55, 0.5))
-
-
-@_ffx("aerial")
-def cam_aerial(fr, u, t, s):
-    return _zoomc(fr, lerp(1.35, 1.04, e_out(u)), 0.5, lerp(0.6, 0.5, u), lerp(-3, 0, e_out(u)))
-
-
-@_ffx("drone")
-def cam_drone(fr, u, t, s):
-    r = _zoomc(fr, lerp(1.3, 1.04, e_out(u)), 0.5, lerp(0.68, 0.5, e_out(u)))
-    top = Image.linear_gradient("L").resize((W, H)).point(lambda v: int(v * (1 - e_out(u)) * 0.9))
-    return Image.composite(Image.new("RGB", (W, H), (0, 0, 0)), r, ImageOps.invert(top).point(lambda v: 255 - v) if False else top.transpose(Image.FLIP_TOP_BOTTOM))
-
-
-@_ffx("rack")
-def cam_rack(fr, u, t, s):
-    r = 11 * abs(1 - 2 * u)
-    return Image.composite(fr, _blur(fr, r), _radial_mask(0.3 + 0.3 * (1 - abs(1 - 2 * u)), 0.5, 0.4)) if r > 0.5 else fr
-
-
-@_ffx("shake")
-def cam_shake(fr, u, t, s):
-    rr = random.Random(int(t * 40) + s)
-    a = 26 * (1 - u) ** 1.5
-    return ImageChops.offset(_zoomc(fr, 1.05), int(rr.uniform(-a, a)), int(rr.uniform(-a, a)))
-
-
-@_ffx("handheld")
-def cam_hand(fr, u, t, s):
-    return _zoomc(fr, 1.05, 0.5 + 0.012 * math.sin(t * 5.3 + s) + 0.006 * math.sin(t * 11), 0.5 + 0.012 * math.cos(t * 4.1), 0.7 * math.sin(t * 3.3))
-
-
-@_ffx("whip_pan")
-def cam_whip(fr, u, t, s):
-    k = int(_env(u) * 60) + 1
-    sh = ImageChops.offset(fr, int(W * 0.5 * (e_io(u) - 0.5) * 2 * _env(u)), 0)
-    return sh.resize((max(8, W // k), H), Image.BILINEAR).resize((W, H), Image.BILINEAR) if k > 2 else sh
-
-
-@_ffx("match_move")
-def cam_mm(fr, u, t, s):
-    e = _env(u)
-    return Image.blend(fr, _zoomc(fr, 1 + 0.5 * e), 0.55 * e) if e > 0.02 else fr
-
-
-@_ffx("persp_zoom")
-def cam_pz(fr, u, t, s):
-    k = 0.16 * _env(u)
-    c = (1, 0, 0, 0, 1, 0, 0, -k / W)
-    try:
-        r = fr.transform((W, H), Image.PERSPECTIVE, c, Image.BICUBIC)
-    except Exception:  # noqa
-        r = fr
-    return _zoomc(r, 1 + 0.18 * e_io(u), 0.5, 0.45)
-
-
-@_ffx("inf_zoom")
-def cam_inf(fr, u, t, s):
-    z = 1 + u
-    big = _zoomc(fr, z) if z < 3 else fr
-    inset = fr.resize((int(W * 0.5 * z), int(H * 0.5 * z)), Image.BILINEAR)
-    out = big.copy()
-    out.paste(inset, (int(W / 2 - inset.width / 2), int(H / 2 - inset.height / 2)))
-    return Image.blend(big, out, 0.8)
-
-
-@_ffx("tracking")
-def cam_track(fr, u, t, s):
-    return _zoomc(fr, 1.12, 0.5 + 0.07 * math.sin(u * 6.28), 0.5 + 0.02 * math.sin(u * 12))
-
-
-@_ffx("cine_reveal")
-def cam_cine(fr, u, t, s):
-    r = _zoomc(fr, 1 + 0.1 * u)
-    d = ImageDraw.Draw(r)
-    hb = int(H * 0.16 * (1 - e_out(cl(u * 1.5))))
-    if hb > 0:
-        d.rectangle([0, 0, W, hb], fill=(0, 0, 0))
-        d.rectangle([0, H - hb, W, H], fill=(0, 0, 0))
-    return r
-
-
-@_ffx("focus_pull")
-def cam_fp(fr, u, t, s):
-    r = 12 * (1 - e_out(u))
-    return _blur(fr, r) if r > 0.4 else fr
-
-
-@_ffx("motion_blur")
-def cam_mb(fr, u, t, s):
-    n = 7
-    acc = None
-    for k in range(n):
-        im = ImageChops.offset(fr, int((k - n // 2) * 9 * _env(u)), 0)
-        acc = im if acc is None else Image.blend(acc, im, 1 / (k + 1))
-    return acc
-
-
-# ---- cinematic effects
-def _noise_img(seed, scale=40, alpha=True):
-    key = ("nz", seed, scale)
-    if key not in _VX:
-        np = _np()
-        rng = np.random.default_rng(seed)
-        _VX[key] = Image.fromarray((rng.random((max(2, H // scale), max(2, W // scale))) * 255).astype(np.uint8)).resize((W, H), Image.BICUBIC)
-    return _VX[key]
-
-
-def _ov(fr, rgb, mask, amt=1.0):
-    m = mask.point(lambda v: int(v * cl(amt)))
-    return Image.composite(Image.new("RGB", (W, H), rgb), fr, m)
-
-
-@_ffx("grain")
-def fx_grain(fr, u, t, s):
-    np = _np()
-    rng = np.random.default_rng(int(t * 30) + s)
-    g = (rng.normal(0, 26 * _env(u) + 4, (H, W, 1))).astype(np.float32)
-    return Image.fromarray(np.clip(np.asarray(fr, dtype=np.float32) + g, 0, 255).astype(np.uint8))
-
-
-@_ffx("dust")
-def fx_dust(fr, u, t, s):
-    d = ImageDraw.Draw(fr, "RGBA")
-    rr = random.Random(s)
-    for _ in range(70):
-        x, y, r = rr.uniform(0, W), rr.uniform(0, H), rr.uniform(1, 3.2)
-        y = (y - t * rr.uniform(10, 40)) % H
-        d.ellipse([x - r, y - r, x + r, y + r], fill=(255, 245, 225, int(150 * _env(u))))
-    return fr
-
-
-@_ffx("smoke")
-def fx_smoke(fr, u, t, s):
-    n = _noise_img(3 + s % 3, 90)
-    n2 = ImageChops.offset(n, int(t * 40), -int(t * 25))
-    m = ImageChops.multiply(n2, Image.linear_gradient("L").resize((W, H)).transpose(Image.FLIP_TOP_BOTTOM)).point(lambda v: min(255, int(v * 1.4)))
-    return _ov(fr, (200, 200, 205), m, 0.65 * _env(u))
-
-
-@_ffx("fog")
-def fx_fog(fr, u, t, s):
-    n = ImageChops.offset(_noise_img(8, 140), int(t * 22), 0)
-    m = n.point(lambda v: int(70 + v * 0.45))
-    return _ov(fr, (220, 228, 236), m, 0.7 * _env(u))
-
-
-@_ffx("fire")
-def fx_fire(fr, u, t, s):
-    g = Image.linear_gradient("L").resize((W, H)).transpose(Image.FLIP_TOP_BOTTOM)
-    flick = 0.75 + 0.25 * math.sin(t * 17)
-    out = _ov(fr, (255, 110, 20), ImageChops.multiply(g, _noise_img(5, 60)).point(lambda v: min(255, v * 2)), 0.55 * _env(u) * flick)
-    d = ImageDraw.Draw(out, "RGBA")
-    rr = random.Random(s)
-    for _ in range(40):
-        x = rr.uniform(0, W)
-        y = H - ((t * rr.uniform(60, 220) + rr.uniform(0, H)) % (H * 0.8))
-        x += math.sin(t * 3 + x) * 14
-        d.ellipse([x - 3, y - 3, x + 3, y + 3], fill=(255, rr.randint(130, 200), 40, int(230 * _env(u))))
-    return out
-
-
-@_ffx("rain")
-def fx_rain(fr, u, t, s):
-    d = ImageDraw.Draw(fr, "RGBA")
-    rr = random.Random(s)
-    for _ in range(140):
-        x = rr.uniform(0, W)
-        y = (rr.uniform(0, H) + t * 900) % H
-        d.line([(x, y), (x - 9, y + 38)], fill=(210, 225, 245, int(150 * _env(u))), width=2)
-    return Image.blend(fr, ImageEnhance.Brightness(fr).enhance(0.82), 0.5 * _env(u))
-
-
-@_ffx("snow")
-def fx_snow(fr, u, t, s):
-    d = ImageDraw.Draw(fr, "RGBA")
-    rr = random.Random(s)
-    for _ in range(110):
-        x, y0, r = rr.uniform(0, W), rr.uniform(0, H), rr.uniform(2, 5.5)
-        y = (y0 + t * rr.uniform(40, 120)) % H
-        x += math.sin(t * 2 + y0) * 18
-        d.ellipse([x - r, y - r, x + r, y + r], fill=(255, 255, 255, int(220 * _env(u))))
-    return fr
-
-
-@_ffx("lightning")
-def fx_lightning(fr, u, t, s):
-    f = 1.0 if (u < 0.12 or 0.22 < u < 0.3) else 0.0
-    out = Image.blend(fr, Image.new("RGB", (W, H), (235, 240, 255)), 0.55 * f)
-    if f:
-        rr = random.Random(s)
-        x, y, pts = rr.uniform(W * 0.3, W * 0.7), 0, []
-        while y < H * 0.8:
-            pts.append((x, y))
-            x += rr.uniform(-60, 60)
-            y += rr.uniform(40, 90)
-        _aa_poly(out, pts, 6, (255, 255, 255), 1.0)
-    return out
-
-
-@_ffx("light_leak")
-def fx_leak(fr, u, t, s):
-    np = _np()
-    xx = np.linspace(0, 1, W, dtype=np.float32)[None, :]
-    c = u * 1.3 - 0.15
-    m = np.clip(1 - np.abs(xx - c) * 3.2, 0, 1) * np.ones((H, 1), np.float32)
-    lay = np.stack([m * 255, m * 120, m * 40], -1)
-    return Image.fromarray(np.clip(np.asarray(fr, dtype=np.float32) + lay * 0.75 * _env(u), 0, 255).astype(np.uint8))
-
-
-@_ffx("lens_flare")
-def fx_flare(fr, u, t, s):
-    out = fr.copy()
-    lay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    d = ImageDraw.Draw(lay)
-    cx, cy = lerp(W * 0.15, W * 0.85, u), lerp(H * 0.2, H * 0.4, u)
-    for r, a_, col in ((120, 70, (255, 235, 180)), (60, 110, (255, 255, 255)), (22, 200, (255, 255, 255))):
-        d.ellipse([cx - r, cy - r, cx + r, cy + r], fill=col + (int(a_ * _env(u)),))
-    for k, (f, r, col) in enumerate(((-0.5, 26, (120, 200, 255)), (-1.0, 40, (255, 150, 90)), (-1.6, 18, (150, 255, 170)))):
-        x, y = W / 2 + (cx - W / 2) * f, H / 2 + (cy - H / 2) * f
-        d.ellipse([x - r, y - r, x + r, y + r], outline=col + (int(150 * _env(u)),), width=4)
-    d.line([(cx - 260, cy), (cx + 260, cy)], fill=(255, 255, 255, int(120 * _env(u))), width=3)
-    out.paste(lay.filter(ImageFilter.GaussianBlur(2)), (0, 0), lay.filter(ImageFilter.GaussianBlur(2)))
-    return out
-
-
-@_ffx("vignette")
-def fx_vig(fr, u, t, s):
-    m = _radial_mask(0.62, 0.62, 0.9).point(lambda v: 255 - v)
-    return _ov(fr, (0, 0, 0), m, 0.85 * _env(u))
-
-
-@_ffx("chroma")
-def fx_chroma(fr, u, t, s):
-    a = int(16 * _env(u)) + 1
-    r, g, b = fr.split()
-    return Image.merge("RGB", (ImageChops.offset(r, a, 0), g, ImageChops.offset(b, -a, 0)))
-
-
-@_ffx("glitch")
-def fx_glitch(fr, u, t, s):
-    return blend_trans(fr, fr, 0.3 + 0.3 * u, "glitch") if _env(u) > 0.15 else fr
-
-
-@_ffx("film_burn")
-def fx_burn(fr, u, t, s):
-    n = _noise_img(11, 50)
-    th = int(255 * (1 - _env(u)))
-    m = n.point(lambda v: 255 if v > th else 0).filter(ImageFilter.GaussianBlur(14))
-    edge = n.point(lambda v: 200 if th - 14 < v <= th else 0).filter(ImageFilter.GaussianBlur(6))
-    out = _ov(fr, (255, 245, 210), m, 0.95)
-    return _ov(out, (255, 120, 20), edge, 0.9)
-
-
-@_ffx("vhs")
-def fx_vhs(fr, u, t, s):
-    r, g, b = fr.split()
-    out = Image.merge("RGB", (ImageChops.offset(r, 7, 0), g, ImageChops.offset(b, -6, 0)))
-    d = ImageDraw.Draw(out, "RGBA")
-    for y in range(0, H, 4):
-        d.line([(0, y), (W, y)], fill=(0, 0, 0, 38), width=1)
-    ty = int((t * 160 + s * 50) % H)
-    band = out.crop((0, ty, W, min(H, ty + 26)))
-    out.paste(ImageChops.offset(band, 40, 0), (0, ty))
-    return ImageEnhance.Color(out).enhance(1.25)
-
-
-@_ffx("old_film", "old_photo", "archival")
-def fx_old(fr, u, t, s):
-    g = ImageOps.colorize(ImageOps.grayscale(fr), (30, 20, 10), (255, 238, 205))
-    g = ImageEnhance.Contrast(g).enhance(1.1)
-    d = ImageDraw.Draw(g, "RGBA")
-    rr = random.Random(int(t * 12) + s)
-    for _ in range(7):
-        x = rr.uniform(0, W)
-        d.line([(x, 0), (x + rr.uniform(-3, 3), H)], fill=(255, 255, 255, rr.randint(30, 90)), width=1)
-    for _ in range(18):
-        x, y, r = rr.uniform(0, W), rr.uniform(0, H), rr.uniform(1, 3)
-        d.ellipse([x - r, y - r, x + r, y + r], fill=(0, 0, 0, 120))
-    g = Image.blend(g, ImageEnhance.Brightness(g).enhance(0.85 + 0.25 * rr.random()), 0.5)
-    g = _ov(g, (0, 0, 0), _radial_mask(0.7, 0.7, 0.8).point(lambda v: 255 - v), 0.7)
-    return Image.blend(fr, g, min(1.0, 3.5 * _env(u)))
-
-
-@_ffx("split")
-def fx_split(fr, u, t, s):
-    e = e_out(cl(u * 3)) * (1 - e_in(cl((u - 0.75) * 4)) if 'e_in' in globals() else 1)
-    x = int(W * (0.5 + (1 - e) * 0.5))
-    right = ImageEnhance.Color(_zoomc(fr, 1.45, 0.72, 0.45)).enhance(0.6)
-    out = fr.copy()
-    out.paste(right.crop((x, 0, W, H)), (x, 0))
-    ImageDraw.Draw(out).line([(x, 0), (x, H)], fill=(255, 255, 255), width=5)
-    return out
-
-
-@_ffx("vox")
-def fx_vox(fr, u, t, s):
-    return vox_collage(fr, min(cl(u / 0.25), 1 - cl((u - 0.75) / 0.25)), s)
-
-
-
-# ---- the 15 transitions (blend_trans hands every new kind to tr_new)
-def tr_new(prev, cur, p, kind):
-    np = _np()
-    p = cl(p)
-    e = e_io(p)
-    if kind == "mask":  # staggered vertical blinds
-        if "tr_blind" not in _VX:
-            xx = np.arange(W, dtype=np.float32)[None, :]
-            _VX["tr_blind"] = (np.broadcast_to(((xx // 64) % 2) * 0.0 + (xx // 64) / (W / 64), (H, W)).copy(), (np.broadcast_to((xx % 64) / 64.0, (H, W))).copy())
-        a, b = _VX["tr_blind"]
-        m = np.clip((e * 1.6 - a * 0.6) * 2.0 - b * 0 - 0.0, 0, 1) * 255 if False else np.clip((e * 1.5 - a * 0.5) * 3 - 1.0 + 0.0 - (1 - b) * 0.0, 0, 1) * 255
-        return Image.composite(cur, prev, Image.fromarray(m.astype(np.uint8)))
-    if kind == "luma":
-        lum = np.asarray(ImageOps.grayscale(prev), dtype=np.float32) / 255
-        m = np.clip((e * 1.4 - lum * 0.4) * 5 - 0.6 * 0 - 1.0 + 0.0, 0, 1) * 255
-        m = np.clip((e - (1 - lum) * 0.0 - 0.0) * 1.0 + (e * 1.25 - lum) * 4, 0, 1) * 255 if False else np.clip((e * 1.3 - lum) * 4, 0, 1) * 255
-        return Image.composite(cur, prev, Image.fromarray(m.astype(np.uint8)))
-    if kind == "morph":
-        if "tr_wy" not in _VX:
-            yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-            _VX["tr_wy"] = (yy, xx)
-        yy, xx = _VX["tr_wy"]
-        amp = 38 * math.sin(math.pi * p)
-
-        def warp(im, sgn):
-            a = np.asarray(im)
-            sx = np.clip(xx + sgn * amp * np.sin(yy / 46.0 + p * 6), 0, W - 1).astype(np.int32)
-            sy = np.clip(yy + sgn * amp * 0.5 * np.sin(xx / 60.0), 0, H - 1).astype(np.int32)
-            return Image.fromarray(a[sy, sx])
-        return Image.blend(warp(prev, 1), warp(cur, -1), e)
-    if kind == "spin":
-        a = prev.rotate(-e * 50, resample=Image.BILINEAR).resize((W, H), Image.BILINEAR, box=(W * 0.5 * (1 - 1 / (1 + e)), H * 0.5 * (1 - 1 / (1 + e)), W - W * 0.5 * (1 - 1 / (1 + e)), H - H * 0.5 * (1 - 1 / (1 + e))))
-        b = cur.rotate((1 - e) * 50, resample=Image.BILINEAR)
-        return Image.blend(a, b, e)
-    if kind == "burn":
-        n = _noise_img(21, 50)
-        th = int(255 * (1 - e))
-        m = n.point(lambda v: 255 if v > th else 0).filter(ImageFilter.GaussianBlur(4))
-        edge = n.point(lambda v: 255 if th - 22 < v <= th else 0).filter(ImageFilter.GaussianBlur(5))
-        out = Image.composite(cur, prev, ImageChops.invert(m) if False else m.point(lambda v: 255 - v))
-        out = Image.composite(cur, prev, n.point(lambda v: 255 if v <= int(255 * e) else 0).filter(ImageFilter.GaussianBlur(3)))
-        ring = n.point(lambda v: 255 if abs(v - int(255 * e)) < 14 else 0).filter(ImageFilter.GaussianBlur(5))
-        return _ov(_ov(out, (255, 140, 30), ring, 0.95), (255, 245, 200), ring.point(lambda v: v // 2), 0.8)
-    if kind == "shape":  # expanding diamond / star
-        m = Image.new("L", (W, H), 0)
-        r = e * math.hypot(W, H) * 0.62
-        cx, cy = W / 2, H / 2
-        pts = []
-        for k in range(10):
-            rr_ = r if k % 2 == 0 else r * 0.55
-            a_ = math.pi / 5 * k - math.pi / 2
-            pts.append((cx + math.cos(a_) * rr_, cy + math.sin(a_) * rr_))
-        ImageDraw.Draw(m).polygon(pts, fill=255)
-        return Image.composite(cur, prev, m.filter(ImageFilter.GaussianBlur(3)))
-    if kind == "match":  # match cut: dive into the centre, come out of the centre of the next picture
-        if p < 0.5:
-            return _zoomc(prev, 1 + 2.2 * e_io(p * 2) ** 2)
-        return _zoomc(cur, 1 + 2.2 * (1 - e_io((p - 0.5) * 2)) ** 2)
-    if kind == "object":  # the next picture is revealed through an oval around the subject
-        m = Image.new("L", (W, H), 0)
-        r = e * math.hypot(W, H) * 0.55
-        ImageDraw.Draw(m).ellipse([W * 0.5 - r * 1.3, H * 0.46 - r, W * 0.5 + r * 1.3, H * 0.46 + r], fill=255)
-        out = Image.composite(cur, prev, m.filter(ImageFilter.GaussianBlur(6)))
-        if 0.02 < p < 0.95:
-            ImageDraw.Draw(out).ellipse([W * 0.5 - r * 1.3, H * 0.46 - r, W * 0.5 + r * 1.3, H * 0.46 + r], outline=(255, 255, 255), width=4)
-        return out
-    if kind == "seamless":  # continuous vertical glide with a little motion blur
-        off = int(e * H)
-        canvas = Image.new("RGB", (W, 2 * H))
-        canvas.paste(prev, (0, 0))
-        canvas.paste(cur, (0, H))
-        fr = canvas.crop((0, off, W, off + H))
-        k = 1 + int(10 * math.sin(math.pi * p))
-        return fr.resize((W, max(8, H // k)), Image.BILINEAR).resize((W, H), Image.BILINEAR) if k > 1 else fr
-    if kind == "morphmap":  # picture dissolves through a lat/long grid like a map morph
-        out = Image.blend(_zoomc(prev, 1 + 0.4 * e), _zoomc(cur, 1.4 - 0.4 * e), e)
-        d = ImageDraw.Draw(out, "RGBA")
-        al = int(150 * math.sin(math.pi * p))
-        for k in range(1, 8):
-            d.line([(W * k / 8, 0), (W * k / 8, H)], fill=(255, 255, 255, al), width=2)
-        for k in range(1, 5):
-            d.line([(0, H * k / 5), (W, H * k / 5)], fill=(255, 255, 255, al), width=2)
-        return out
-    return cur
-
-
-
-# ---- overlay cards (data / text / diagram): each is drawn into a 410x236 sprite and placed in one of the 3 fixed bottom slots (left / centre / right)
-T_CW, T_CH = 410, 236
-SLOT_CX = {"L": 14 + T_CW / 2 + 0.0, "C": W / 2, "R": W - 14 - T_CW / 2}
-SLOT_CY = H - 16 - T_CH / 2
-ACC = [(255, 92, 72), (0, 190, 205), (255, 190, 40), (120, 200, 90), (150, 120, 255)]
-HI_DIG = str.maketrans("0123456789", "०१२३४५६७८९")
-
-
-def _realize(im):
-    """Overlay graphics have no panel: they sit on the picture like broadcast graphics - soft contact shadow, tight dark edge, a little bloom and film grain so they do not look computer-drawn."""
-    np = _np()
-    a = im.getchannel("A")
-    soft = a.filter(ImageFilter.GaussianBlur(6)).point(lambda v: int(v * 0.75))
-    edge = a.filter(ImageFilter.MaxFilter(5)).filter(ImageFilter.GaussianBlur(1.4)).point(lambda v: int(v * 0.55))
-    sh = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    sh.putalpha(ImageChops.offset(soft, 3, 6))
-    ed = Image.new("RGBA", im.size, (0, 0, 0, 0))
-    ed.putalpha(edge)
-    glow = im.filter(ImageFilter.GaussianBlur(7))
-    arr = np.asarray(im).astype(np.float32)
-    lum_ = (0.299 * arr[..., 0] + 0.587 * arr[..., 1] + 0.114 * arr[..., 2])[..., None]
-    arr[..., :3] = (lum_ + (arr[..., :3] - lum_) * 0.7) * 0.95  # muted, not cartoon-bright
-    g_ = np.asarray(glow).astype(np.float32)
-    arr[..., :3] = np.clip(arr[..., :3] + 0.22 * g_[..., :3] * (g_[..., 3:4] / 255.0), 0, 255)
-    arr[..., :3] = np.clip(arr[..., :3] + np.random.default_rng(int(a.getbbox()[2] if a.getbbox() else 1)).normal(0, 4.0, arr.shape[:2] + (1,)), 0, 255)
-    spr = Image.fromarray(arr.astype(np.uint8), "RGBA")
-    spr = Image.blend(spr, spr.filter(ImageFilter.GaussianBlur(0.7)), 0.35)
-    out = Image.alpha_composite(Image.alpha_composite(sh, ed), spr)
-    return out
-
-
-def _bg_real(src, fr, t):
-    """After a background technique: soften the hard computer edges, add grain and a vignette so it matches the photograph."""
-    np = _np()
-    fr = Image.blend(fr, fr.filter(ImageFilter.GaussianBlur(1.1)), 0.4)
-    if "vig" not in _VX:
-        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-        r = np.sqrt(((xx - W / 2) / (W / 2)) ** 2 + ((yy - H / 2) / (H / 2)) ** 2)
-        _VX["vig"] = (1 - 0.34 * np.clip(r - 0.55, 0, 1) ** 1.6)[..., None]
-    arr = np.asarray(fr).astype(np.float32) * _VX["vig"]
-    arr += np.random.default_rng(int(t * 30) % 997).normal(0, 4.5, (H, W, 1))
-    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
-
-
-class Cv:
-    def __init__(s, acc):
-        s.S = 2
-        s.acc = acc
-        s.im = Image.new("RGBA", (T_CW * 2, T_CH * 2), (0, 0, 0, 0))
-        s.d = ImageDraw.Draw(s.im)
-
-    def text(s, txt, size, x, y, fill=(255, 255, 255), role="title", max_w=None, a=1.0, rot=0, anchor="c"):
-        if not str(txt).strip():
-            return
-        spr = _vx_text(str(txt), int(size * 2), role, fill=fill, stroke=0, shadow=False, max_w=int(max_w * 2) if max_w else None)
-        if rot:
-            spr = spr.rotate(rot, resample=Image.BICUBIC, expand=True)
-        if a < 0.98:
-            spr = spr.copy()
-            spr.putalpha(spr.getchannel("A").point(lambda v: int(v * a)))
-        px = int(x * 2 - (spr.width / 2 if anchor == "c" else 0))
-        s.im.paste(spr, (px, int(y * 2 - spr.height / 2)), spr)
-
-    def line(s, pts, w=3, fill=(255, 255, 255), prog=1.0):
-        P = [(x * 2, y * 2) for x, y in pts]
-        segs = list(zip(P, P[1:]))
-        tot = sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in segs) or 1
-        tgt, acc_ = tot * cl(prog), 0.0
-        for a, b in segs:
-            l = math.hypot(b[0] - a[0], b[1] - a[1])
-            if acc_ + l <= tgt:
-                s.d.line([a, b], fill=fill, width=int(w * 2))
-                acc_ += l
-            else:
-                r = (tgt - acc_) / max(l, 1e-6)
-                s.d.line([a, (a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r)], fill=fill, width=int(w * 2))
-                break
-
-    def rect(s, x0, y0, x1, y1, fill=None, outline=None, r=6, w=2):
-        s.d.rounded_rectangle([x0 * 2, y0 * 2, x1 * 2, y1 * 2], r * 2, fill=fill, outline=outline, width=int(w * 2))
-
-    def circ(s, x, y, r, fill=None, outline=None, w=2):
-        s.d.ellipse([(x - r) * 2, (y - r) * 2, (x + r) * 2, (y + r) * 2], fill=fill, outline=outline, width=int(w * 2))
-
-    def poly(s, pts, fill=None, outline=None):
-        s.d.polygon([(x * 2, y * 2) for x, y in pts], fill=fill, outline=outline)
-
-    def arc(s, x, y, r, a0, a1, fill, w=8):
-        s.d.arc([(x - r) * 2, (y - r) * 2, (x + r) * 2, (y + r) * 2], a0, a1, fill=fill, width=int(w * 2))
-
-    def done(s):
-        return _realize(s.im.resize((T_CW, T_CH), Image.LANCZOS))
-
-
-import unicodedata
-
-
-def _gr(s_):
-    out = []
-    for ch in s_:
-        if out and (unicodedata.category(ch).startswith("M") or ch in "\u094d" or (out[-1].endswith("\u094d"))):
-            out[-1] += ch
-        else:
-            out.append(ch)
-    return out
-
-
-def _fmt(v):
-    v = float(v)
-    s_ = f"{int(round(v)):,}" if abs(v - round(v)) < 1e-6 or abs(v) >= 100 else (f"{v:.1f}")
-    return s_.translate(HI_DIG)
-
-
-def _series(E, C, n=5):
-    s_ = (E.get("series") or C.get("series") or [("क", 3), ("ख", 5), ("ग", 2), ("घ", 4), ("ङ", 6)])[:n]
-    return s_ if len(s_) >= 2 else [("क", 3), ("ख", 5)]
-
-
-def _words(C, n=5):
-    w_ = C.get("words") or ["शुरुआत", "कारण", "असर", "नतीजा", "आगे"]
-    return (w_ * 3)[:n]
-
-
-CARDFN = {}
-
-
-def _card(*names):
-    def deco(fn):
-        for n in names:
-            CARDFN[n] = fn
-        return fn
-    return deco
-
-
-def _numE(E):
-    return float(E.get("num") or 0), E.get("unit") or ""
-
-
-@_card("num_counter", "pop_counter", "dist_card", "fin_counter")
-def c_numc(cv, p, t, E, C, key):
-    v, unit = _numE(E)
-    g = e_out(cl(p * 1.6))
-    pre = "₹ " if key == "fin_counter" else ""
-    cv.text(pre + _fmt(v * g), 64, 205, 100, ACC[0], max_w=370)
-    cv.text(E.get("label") or unit or {"dist_card": "किलोमीटर", "pop_counter": "आबादी", "fin_counter": "रकम"}.get(key, ""), 24, 205, 160, (230, 230, 240), "sub", 360)
-    if key == "dist_card":
-        cv.line([(40, 205), (370, 205)], 3, (120, 130, 150))
-        cv.circ(40 + 330 * g, 205, 9, fill=ACC[0])
-    elif key == "pop_counter":
-        for k in range(20):
-            if k / 20 < g:
-                cv.circ(36 + k * 17.5, 205, 6, fill=ACC[1])
-
-
-@_card("pct_counter", "progress")
-def c_pct(cv, p, t, E, C, key):
-    v = min(100.0, float(E.get("num") or E.get("pct") or 70))
-    g = e_out(cl(p * 1.6))
-    if key == "pct_counter":
-        cv.arc(205, 122, 80, 0, 360, (60, 66, 84), 16)
-        cv.arc(205, 122, 80, -90, -90 + 360 * v / 100 * g, ACC[1], 16)
-        cv.text(_fmt(v * g) + "%", 52, 205, 122, (255, 255, 255))
-    else:
-        cv.rect(30, 110, 380, 150, fill=(60, 66, 84))
-        cv.rect(30, 110, 30 + 350 * v / 100 * g, 150, fill=ACC[3])
-        cv.text(_fmt(v * g) + "%", 40, 205, 64, (255, 255, 255))
-    cv.text(E.get("label") or "", 22, 205, 205, (230, 230, 240), "sub", 360)
-
-
-@_card("year_counter")
-def c_year(cv, p, t, E, C, key):
-    y = int(E.get("year") or 1900)
-    g = e_out(cl(p * 1.5))
-    cv.text(str(int(y - 80 * (1 - g))).translate(HI_DIG), 92, 205, 112, ACC[2], max_w=380)
-    cv.text(E.get("label") or "साल", 24, 205, 186, (230, 230, 240), "sub", 360)
-
-
-@_card("countdown", "time_counter", "digital_clock")
-def c_time(cv, p, t, E, C, key):
-    if key == "countdown":
-        total = 3 * 86400 + 5 * 3600
-        rem = int(total * (1 - e_io(cl(p * 1.3))))
-        parts = [(rem // 86400, "दिन"), (rem // 3600 % 24, "घंटे"), (rem // 60 % 60, "मिनट"), (rem % 60, "सेकंड")]
-        for k, (v, lb) in enumerate(parts):
-            x = 55 + k * 100
-            cv.rect(x - 38, 70, x + 38, 140, fill=(40, 46, 64), outline=ACC[0], w=2)
-            cv.text(f"{v:02d}".translate(HI_DIG), 40, x, 105, (255, 255, 255))
-            cv.text(lb, 20, x, 162, (200, 205, 220), "sub")
-    elif key == "time_counter":
-        s_ = t * 1.0 + p * 20
-        cv.text(f"{int(s_ // 60):02d}:{int(s_ % 60):02d}.{int(s_ * 10 % 10)}".translate(HI_DIG), 70, 205, 112, ACC[1], max_w=380)
-        cv.text(E.get("label") or "बीता समय", 22, 205, 185, (230, 230, 240), "sub", 360)
-    else:
-        m = int(E.get("minutes") or 720) + int(p * 40)
-        cv.text(f"{m // 60 % 24:02d}{':' if int(t * 2) % 2 == 0 else ' '}{m % 60:02d}".translate(HI_DIG), 86, 205, 115, (90, 255, 150), role="cond", max_w=380)
-        cv.text(E.get("label") or "", 22, 205, 190, (230, 230, 240), "sub", 360)
-
-
-@_card("odometer", "num_roll")
-def c_odo(cv, p, t, E, C, key):
-    v = int(abs(float(E.get("num") or 1234)))
-    ds = str(v)[-7:]
-    g = e_out(cl(p * 1.5))
-    n = len(ds)
-    w0 = min(48, 360 / n)
-    x0 = 205 - w0 * n / 2
-    for k, ch in enumerate(ds):
-        tgt = int(ch)
-        spin = (1 - g) * (10 + k * 3)
-        cur = (tgt - spin) % 10
-        x = x0 + w0 * (k + 0.5)
-        cv.rect(x - w0 / 2 + 2, 62, x + w0 / 2 - 2, 150, fill=(30, 34, 48), outline=(110, 118, 140))
-        for dd in (-1, 0, 1):
-            dig = int(round(cur + dd)) % 10
-            off = (cur - round(cur)) * 40
-            yy = 106 + dd * 40 + off
-            if 66 < yy < 146:
-                cv.text(str(dig).translate(HI_DIG), 40, x, yy, (255, 255, 255) if dd == 0 else (130, 136, 150), a=1.0 if dd == 0 else 0.6)
-    cv.text(E.get("label") or "", 22, 205, 190, (230, 230, 240), "sub", 360)
-
-
-@_card("bar_chart", "data_compare", "ranking", "dashboard")
-def c_bars(cv, p, t, E, C, key):
-    ser = _series(E, C, 2 if key == "data_compare" else 5)
-    if key == "ranking":
-        ser = sorted(ser, key=lambda x: -x[1])
-    mx = max(v for _, v in ser) or 1
-    n = len(ser)
-    if key in ("ranking", "dashboard") or n > 3:
-        rh = min(34, 190 / n)
-        for k, (lb, v) in enumerate(ser):
-            g = e_out(cl(p * 2 - k * 0.12))
-            y = 34 + k * (rh + 6)
-            cv.text(f"{k + 1}", 20, 28, y + rh / 2, ACC[2])
-            cv.rect(48, y, 48 + 250 * v / mx * g, y + rh, fill=ACC[k % 5], r=4)
-            cv.text(lb, 18, 56, y + rh / 2, (255, 255, 255), "sub", 140, anchor="l")
-            cv.text(_fmt(v * g), 18, 330, y + rh / 2, (255, 255, 255))
-    else:
-        bw = 360 / n
-        for k, (lb, v) in enumerate(ser):
-            g = e_out(cl(p * 2 - k * 0.15))
-            x = 25 + bw * (k + 0.5)
-            hh = 130 * v / mx * g
-            cv.rect(x - bw * 0.3, 170 - hh, x + bw * 0.3, 170, fill=ACC[k % 5], r=5)
-            cv.text(_fmt(v * g), 20, x, 160 - hh, (255, 255, 255))
-            cv.text(lb, 18, x, 196, (220, 224, 236), "sub", bw)
-
-
-@_card("pie_chart")
-def c_pie(cv, p, t, E, C, key):
-    ser = _series(E, C, 5)
-    tot = sum(v for _, v in ser) or 1
-    g = e_out(cl(p * 1.4))
-    a0 = -90.0
-    for k, (lb, v) in enumerate(ser):
-        a1 = a0 + 360 * v / tot
-        end = min(a1, -90 + 360 * g)
-        if end > a0:
-            cv.d.pieslice([40 * 2, 30 * 2, 190 * 2, 180 * 2][:4] if False else [30 * 2, 40 * 2, 180 * 2, 190 * 2], a0, end, fill=ACC[k % 5])
-        cv.text(lb, 18, 230, 56 + k * 28, (255, 255, 255), "sub", 150, anchor="l")
-        cv.rect(206, 48 + k * 28, 220, 62 + k * 28, fill=ACC[k % 5], r=3)
-        a0 = a1
-
-
-@_card("line_graph", "area_chart")
-def c_line(cv, p, t, E, C, key):
-    ser = _series(E, C, 6)
-    mx, n = max(v for _, v in ser) or 1, len(ser)
-    pts = [(40 + 330 * k / (n - 1), 180 - 130 * v / mx) for k, (_, v) in enumerate(ser)]
-    g = e_out(cl(p * 1.5))
-    cv.line([(30, 180), (380, 180)], 2, (120, 130, 150))
-    if key == "area_chart":
-        m = max(1, int(len(pts) * g))
-        sub = pts[:m]
-        if len(sub) >= 2:
-            cv.poly(sub + [(sub[-1][0], 180), (sub[0][0], 180)], fill=ACC[1] + (150,))
-    cv.line(pts, 4, ACC[2] if key == "line_graph" else ACC[1], g)
-    for k, (x, y) in enumerate(pts):
-        if k / max(1, n - 1) <= g:
-            cv.circ(x, y, 6, fill=(255, 255, 255))
-            cv.text(ser[k][0], 16, x, 202, (210, 215, 230), "sub", 60)
-
-
-@_card("stat_info")
-def c_statinfo(cv, p, t, E, C, key):
-    ser = _series(E, C, 3)
-    for k, (lb, v) in enumerate(ser[:3]):
-        g = e_out(cl(p * 2 - k * 0.2))
-        x = 70 + k * 135
-        cv.circ(x, 78, 30, outline=ACC[k], w=4)
-        cv.text(["●", "▲", "■"][k], 26, x, 78, ACC[k])
-        cv.text(_fmt(v * g), 34, x, 140, (255, 255, 255), max_w=120)
-        cv.text(lb, 18, x, 182, (210, 215, 230), "sub", 120)
-
-
-# ---- text cards
-def _ph(E, C):
-    return (E.get("txt") or " ".join(_words(C, 4)))[:60]
-
-
-@_card("kinetic")
-def c_kin(cv, p, t, E, C, key):
-    ws = _ph(E, C).split()[:5]
-    for k, w in enumerate(ws):
-        g = e_back(cl(p * 3 - k * 0.35))
-        cv.text(w, 52 if k % 2 == 0 else 38, 205 + (k % 2 * 2 - 1) * 20, 40 + k * 38, ACC[k % 5] if k % 2 else (255, 255, 255), max_w=380, a=cl(g))
-
-
-@_card("text3d")
-def c_3d(cv, p, t, E, C, key):
-    spr = text_layer(_ph(E, C)[:22], font_for("अ", 56, "title"), fill=(255, 255, 255), fill2=(255, 210, 120), stroke=2, stroke_fill=(70, 20, 0), extrude=(10, (140, 50, 10)), max_w=380)
-    sc_ = 0.6 + 0.4 * e_back(cl(p * 3))
-    spr = spr.resize((max(1, int(spr.width * sc_ * 0.9)), max(1, int(spr.height * sc_ * 0.9))), Image.BILINEAR)
-    cv.im.paste(spr, (int(T_CW - spr.width / 2), int(T_CH - spr.height / 2)), spr)
-
-
-@_card("typewriter", "letter", "text_reveal", "text_blur", "glitch_text", "text_rot", "text_persp", "tracking_text", "text_mask")
-def c_txt(cv, p, t, E, C, key):
-    s_ = _ph(E, C)[:34]
-    g = cl(p * 2.2)
-    if key == "typewriter":
-        gl_ = _gr(s_)
-        n = int(len(gl_) * g)
-        cv.text("".join(gl_[:n]) + ("|" if int(t * 3) % 2 == 0 else ""), 40, 205, 118, (255, 255, 255), max_w=390)
-    elif key == "letter":
-        gl = _gr(s_)[:16]
-        x = 205 - 11 * len(gl) / 2
-        for k, ch in enumerate(gl):
-            gg = e_back(cl(g * len(gl) - k))
-            cv.text(ch, 40, x + k * 22, 118 - (1 - cl(gg)) * 70, (255, 255, 255), a=cl(gg))
-    elif key == "text_reveal":
-        tmp = Cv.__new__(Cv)
-        spr = _vx_text(s_, 68, "title", fill=(255, 255, 255), stroke=0, shadow=False, max_w=760)
-        cw_ = int(spr.width * e_out(g))
-        if cw_ > 2:
-            cv.im.paste(spr.crop((0, 0, cw_, spr.height)), (int(410 - spr.width / 2), int(236 - spr.height / 2)), spr.crop((0, 0, cw_, spr.height)))
-    elif key == "text_blur":
-        spr = _vx_text(s_, 68, "title", fill=(255, 255, 255), stroke=0, shadow=False, max_w=760).filter(ImageFilter.GaussianBlur(14 * (1 - e_out(g))))
-        cv.im.paste(spr, (int(410 - spr.width / 2), int(236 - spr.height / 2)), spr)
-    elif key == "glitch_text":
-        j = int(10 * (1 - g)) + 2
-        for dx, col in ((-j, (255, 40, 90)), (j, (40, 220, 255)), (0, (255, 255, 255))):
-            cv.text(s_, 38, 205 + dx * 0.6, 118, col, max_w=380, a=0.9 if dx else 1.0)
-    elif key == "text_rot":
-        cv.text(s_, 40, 205, 118, (255, 255, 255), max_w=380, rot=90 * (1 - e_out(g)))
-    elif key == "text_persp":
-        spr = _vx_text(s_, 68, "title", fill=(255, 255, 255), stroke=0, shadow=False, max_w=760)
-        k_ = 0.0016 * (1 - e_out(g))
-        try:
-            spr = spr.transform(spr.size, Image.PERSPECTIVE, (1, 0, 0, 0, 1, 0, k_, 0), Image.BICUBIC)
-        except Exception:  # noqa
-            pass
-        cv.im.paste(spr, (int(410 - spr.width / 2), int(236 - spr.height / 2)), spr)
-    elif key == "tracking_text":
-        sp = lerp(26, 6, e_out(g))
-        gl = _gr(s_)[:14]
-        x = 205 - sp * len(gl) / 2
-        for k, ch in enumerate(gl):
-            cv.text(ch, 38, x + k * sp, 118, (255, 255, 255), a=cl(g * 3))
-    else:  # text_mask: the letters are windows onto moving colour
-        spr = _vx_text(s_, 76, "title", fill=(255, 255, 255), stroke=0, shadow=False, max_w=760)
-        grad = Image.new("RGBA", spr.size)
-        gd = ImageDraw.Draw(grad)
-        for xx in range(0, spr.width, 6):
-            c_ = ACC[int((xx / 40 + t * 3) % 5)]
-            gd.rectangle([xx, 0, xx + 6, spr.height], fill=c_ + (255,))
-        grad.putalpha(spr.getchannel("A"))
-        cv.im.paste(grad, (int(410 - spr.width / 2), int(236 - spr.height / 2)), grad)
-
-
-@_card("word_hl", "subtitles", "callout", "labels", "text_trans", "text_path")
-def c_txt2(cv, p, t, E, C, key):
-    ws = _ph(E, C).split()[:6] or ["…"]
-    g = cl(p * 2)
-    if key in ("word_hl", "subtitles"):
-        n = len(ws)
-        cur = min(n - 1, int(g * n * 1.05))
-        lines = [ws[:3], ws[3:6]] if n > 3 else [ws]
-        k = 0
-        for li, ln in enumerate(lines):
-            tw = [len(w) * 16 + 14 for w in ln]
-            x = 205 - sum(tw) / 2
-            for w, wd in zip(ln, tw):
-                if key == "word_hl" and k == cur:
-                    cv.rect(x, 96 + li * 56 - 22, x + wd - 6, 96 + li * 56 + 22, fill=(255, 64, 120), r=8)
-                cv.text(w, 34, x + wd / 2 - 3, 96 + li * 56, (255, 255, 255) if k != cur or key == "word_hl" else ACC[2])
-                x += wd
-                k += 1
-    elif key == "callout":
-        cv.circ(70, 170, 8, fill=ACC[0])
-        cv.line([(70, 170), (130, 90)], 3, ACC[0], g * 2)
-        if g > 0.4:
-            cv.rect(120, 40, 390, 100, fill=(30, 36, 54), outline=ACC[0], w=2)
-            cv.text(" ".join(ws[:3]), 28, 255, 70, (255, 255, 255), max_w=250)
-    elif key == "labels":
-        for k, w in enumerate(ws[:4]):
-            gg = e_back(cl(p * 3 - k * 0.3))
-            wd = len(w) * 15 + 36
-            y = 40 + k * 46
-            cv.rect(30, y - 18, 30 + wd * cl(gg), y + 18, fill=ACC[k % 5], r=18)
-            if gg > 0.6:
-                cv.text(w, 24, 30 + wd / 2, y, (255, 255, 255) if k % 5 != 2 else (20, 20, 30))
-    elif key == "text_trans":
-        a_, b_ = ws[0], (ws[1] if len(ws) > 1 else ws[0])
-        gg = e_io(cl(p * 1.6))
-        cv.text(a_, 54, 205, 118 - 90 * gg, (255, 255, 255), a=1 - gg)
-        cv.text(b_, 54, 205, 118 + 90 * (1 - gg), ACC[2], a=gg)
-    else:  # text on a curved path
-        gl = _gr(" ".join(ws)[:20])
-        n = len(gl)
-        for k, ch in enumerate(gl):
-            th = math.pi * (0.15 + 0.7 * k / max(1, n - 1))
-            x, y = 205 - math.cos(th) * 150, 200 - math.sin(th) * 110
-            cv.text(ch, 32, x, y, (255, 255, 255), a=cl(g * n * 0.6 - k * 0.3), rot=(math.degrees(th) - 90))
-
-
-@_card("lower_third", "chapter", "date_loc")
-def c_lt(cv, p, t, E, C, key):
-    g = e_out(cl(p * 3))
-    name = E.get("word") or (_words(C, 1)[0])
-    if key == "lower_third":
-        cv.rect(30 - 300 * (1 - g), 90, 380, 150, fill=ACC[0], r=10)
-        cv.text(name, 36, 205 - 300 * (1 - g), 120, (255, 255, 255), max_w=330)
-        cv.text(E.get("sub") or "", 20, 205, 180, (210, 215, 230), "sub", 340, a=g)
-    elif key == "chapter":
-        cv.text(f"अध्याय {int(E.get('n') or 1)}".translate(HI_DIG), 30, 205, 70, ACC[2], a=g)
-        cv.line([(100, 96), (310, 96)], 3, ACC[2], g)
-        cv.text(name, 46, 205, 150, (255, 255, 255), max_w=370, a=g)
-    else:
-        cv.text(str(E.get("year") or "").translate(HI_DIG) or "समय", 58, 205, 82, ACC[2], a=g)
-        cv.line([(120, 124), (290, 124)], 3, (255, 255, 255), g)
-        cv.text(E.get("place") or name, 32, 205, 168, (255, 255, 255), max_w=370, a=g)
-
-
-# ---- diagram cards
-@_card("flowchart", "process", "steps")
-def c_flow(cv, p, t, E, C, key):
-    ws = _words(C, 4)
-    for k, w in enumerate(ws):
-        g = e_back(cl(p * 3 - k * 0.45))
-        if key == "steps":
-            y = 36 + k * 48
-            cv.circ(40, y, 16, fill=ACC[k % 5] if g > 0.5 else (60, 66, 84))
-            cv.text(str(k + 1).translate(HI_DIG), 20, 40, y, (255, 255, 255))
-            cv.text(w, 26, 70, y, (255, 255, 255), max_w=300, anchor="l", a=cl(g))
-        else:
-            if key == "process":
-                x = 22 + k * 94
-                cv.poly([(x, 80), (x + 76, 80), (x + 92, 118), (x + 76, 156), (x, 156), (x + 16, 118)], fill=ACC[k % 5] if g > 0.3 else (60, 66, 84))
-                cv.text(w, 17, x + 46, 118, (20, 20, 30), max_w=70, a=cl(g))
-            else:
-                x = 20 + k * 98
-                y = 60 if k % 2 == 0 else 150
-                if k == 2:
-                    cv.poly([(x + 40, y - 36), (x + 82, y), (x + 40, y + 36), (x, y)], outline=ACC[2], fill=(30, 36, 54))
-                else:
-                    cv.rect(x, y - 28, x + 84, y + 28, fill=(30, 36, 54), outline=ACC[k % 5], w=3)
-                cv.text(w, 17, x + 42, y, (255, 255, 255), max_w=78, a=cl(g))
-                if k:
-                    cv.line([(x - 14, 60 if (k - 1) % 2 == 0 else 150), (x, y)], 3, (200, 205, 220), cl(g))
-
-
-@_card("mindmap", "orgchart", "network", "conn_line")
-def c_net(cv, p, t, E, C, key):
-    ws = _words(C, 6)
-    if key == "mindmap":
-        cv.circ(205, 118, 36, fill=ACC[0])
-        cv.text(ws[0], 20, 205, 118, (255, 255, 255), max_w=66)
-        for k, w in enumerate(ws[1:6]):
-            g = e_out(cl(p * 3 - k * 0.3))
-            a = -math.pi / 2 + k * 2 * math.pi / 5
-            x, y = 205 + math.cos(a) * 130 * g, 118 + math.sin(a) * 78 * g
-            cv.line([(205, 118), (x, y)], 3, ACC[k % 5])
-            cv.rect(x - 44, y - 16, x + 44, y + 16, fill=(30, 36, 54), outline=ACC[k % 5])
-            cv.text(w, 17, x, y, (255, 255, 255), max_w=80, a=cl(g))
-    elif key == "orgchart":
-        g = e_out(cl(p * 2))
-        cv.rect(145, 24, 265, 64, fill=ACC[0])
-        cv.text(ws[0], 20, 205, 44, (255, 255, 255), max_w=110)
-        for k in range(3):
-            x = 70 + k * 135
-            cv.line([(205, 64), (205, 90), (x, 90), (x, 112)], 3, (200, 205, 220), cl(g * 1.5))
-            if g > 0.5:
-                cv.rect(x - 52, 112, x + 52, 152, fill=(30, 36, 54), outline=ACC[k + 1], w=2)
-                cv.text(ws[k + 1], 18, x, 132, (255, 255, 255), max_w=96)
-                for j in range(2):
-                    xx = x - 26 + j * 52
-                    cv.line([(x, 152), (xx, 176)], 2, (150, 156, 175))
-                    cv.circ(xx, 184, 8, fill=ACC[(k + j) % 5])
-    elif key == "network":
-        pts = [(205, 118), (80, 60), (330, 60), (80, 180), (330, 180), (205, 40)]
-        for k in range(1, 6):
-            cv.line([pts[0], pts[k]], 2, (120, 130, 150), e_out(cl(p * 3 - k * 0.2)))
-        for k, (x, y) in enumerate(pts):
-            g = e_back(cl(p * 3 - k * 0.2))
-            cv.circ(x, y, 24 * cl(g), fill=ACC[k % 5])
-            if g > 0.6:
-                cv.text(ws[k], 15, x, y, (20, 20, 30), max_w=46)
-    else:
-        cv.circ(60, 118, 30, fill=ACC[1])
-        cv.circ(350, 118, 30, fill=ACC[0])
-        cv.text(ws[0], 16, 60, 118, (20, 20, 30), max_w=54)
-        cv.text(ws[1], 16, 350, 118, (20, 20, 30), max_w=54)
-        n = 14
-        for k in range(n):
-            x = 96 + (318 - 96) * k / (n - 1)
-            if ((k / n) - (t * 0.8) % 1.0) % 1 < 0.35:
-                cv.circ(x, 118, 5, fill=(255, 255, 255))
-        cv.line([(96, 118), (96 + 222 * e_out(cl(p * 3)), 118)], 2, (150, 156, 175))
-
-
-@_card("arrow_dir", "callout_ptr", "tech_label")
-def c_arrow(cv, p, t, E, C, key):
-    ws = _words(C, 3)
-    g = e_out(cl(p * 2.5))
-    if key == "arrow_dir":
-        x1 = 40 + 300 * g
-        cv.line([(40, 118), (x1, 118)], 14, ACC[0])
-        cv.poly([(x1, 92), (x1 + 44, 118), (x1, 144)], fill=ACC[0])
-        cv.text(ws[0], 26, 205, 190, (255, 255, 255), max_w=340, a=g)
-    elif key == "callout_ptr":
-        cv.line([(50, 190), (50 + 110 * g, 190 - 100 * g)], 4, ACC[2])
-        cv.circ(50, 190, 8, fill=ACC[2])
-        if g > 0.6:
-            cv.rect(150, 40, 390, 100, fill=(30, 36, 54), outline=ACC[2], w=3)
-            cv.text(ws[0], 26, 270, 70, (255, 255, 255), max_w=230)
-    else:
-        cv.circ(80, 150, 6, fill=ACC[1])
-        cv.line([(80, 150), (150, 150), (190, 70)], 2, ACC[1], g * 1.4)
-        if g > 0.7:
-            cv.rect(190, 44, 392, 96, fill=None, outline=ACC[1], w=2)
-            cv.text(ws[0].upper(), 22, 291, 70, ACC[1], role="cond", max_w=190)
-            cv.text(ws[1], 16, 291, 112, (200, 210, 225), "sub", 190)
-
-
-@_card("blueprint", "exploded", "assembly", "cross_section", "layer_sep")
-def c_tech(cv, p, t, E, C, key):
-    ws = _words(C, 4)
-    g = e_out(cl(p * 1.8))
-    if key == "blueprint":
-        cv.d.rectangle([4, 4, T_CW * 2 - 4, T_CH * 2 - 4], fill=(18, 60, 130, 235))
-        for x in range(20, 410, 20):
-            cv.line([(x, 8), (x, 228)], 1, (70, 120, 190))
-        for y in range(20, 236, 20):
-            cv.line([(8, y), (402, y)], 1, (70, 120, 190))
-        cv.line([(100, 170), (100, 70), (300, 70), (300, 170), (100, 170)], 3, (255, 255, 255), g)
-        cv.line([(100, 70), (150, 40), (350, 40), (300, 70)], 2, (255, 255, 255), g)
-        cv.text(ws[0], 22, 205, 205, (255, 255, 255), "cond")
-    elif key == "exploded":
-        for k in range(4):
-            off = 22 * g * (k - 1.5)
-            cv.rect(130, 56 + k * 34 + off, 280, 84 + k * 34 + off, fill=ACC[k % 5], outline=(255, 255, 255), w=2)
-            cv.text(ws[k], 16, 205, 70 + k * 34 + off, (20, 20, 30), max_w=130)
-    elif key == "assembly":
-        for k in range(5):
-            gg = e_out(cl(p * 3 - k * 0.3))
-            x, y = 130 + (k % 3) * 60 + (k // 3) * 30, 150 - (k // 3) * 54
-            sx, sy = x + (1 - gg) * (k - 2) * 120, y - (1 - gg) * 140
-            cv.poly([(sx, sy), (sx + 40, sy - 20), (sx + 80, sy), (sx + 40, sy + 20)], fill=ACC[k % 5])
-            cv.poly([(sx, sy), (sx + 40, sy + 20), (sx + 40, sy + 60), (sx, sy + 40)], fill=tuple(int(c * 0.7) for c in ACC[k % 5]))
-            cv.poly([(sx + 80, sy), (sx + 40, sy + 20), (sx + 40, sy + 60), (sx + 80, sy + 40)], fill=tuple(int(c * 0.5) for c in ACC[k % 5]))
-    elif key == "cross_section":
-        for k in range(4):
-            r = 90 - k * 20
-            cv.d.pieslice([(150 - r) * 2, (190 - r) * 2, (150 + r) * 2, (190 + r) * 2], 180, 180 + 180 * g, fill=ACC[k % 5])
-            cv.line([(150, 190 - r * 0.75), (270, 60 + k * 30)], 2, (200, 205, 220), cl(g * 2 - 0.5))
-            cv.text(ws[k], 17, 330, 60 + k * 30, (255, 255, 255), "sub", 110, a=cl(g * 2 - 0.5))
-    else:
-        for k in range(4):
-            off = 36 * g * (k - 1.5)
-            y = 118 + off
-            cv.poly([(100, y), (210, y - 28), (320, y), (210, y + 28)], fill=ACC[k % 5] + (200,), outline=(255, 255, 255))
-            cv.text(ws[k], 15, 210, y, (20, 20, 30), max_w=120)
-
-
-def render_card(key, p, t, E, C):
-    cv = Cv(ACC[hash(key) % 5] if False else ACC[sum(map(ord, key)) % 5])
-    fn = CARDFN.get(key)
-    if fn is None:
-        return None
-    if key in ("blueprint",):
-        pass
-    fn(cv, p, t, E, C, key)
-    return cv.done()
-
-
-
-# ---- background techniques: map & geography (real coastlines from get_land) and history / documentary looks
-GEO_DEFAULT = [{"name": "", "lat": 22.0, "lon": 79.0}, {"name": "", "lat": 28.6, "lon": 77.2}]
-
-
-def _proj(lon, lat, c, span):
-    """equirectangular projection around c=(lon,lat); span = degrees of longitude across the frame"""
-    k = W / span
-    return (W / 2 + (lon - c[0]) * k, H / 2 - (lat - c[1]) * k)
-
-
-def _map_img(c, span, style="terrain"):
-    key = ("map", int(c[0] * 4), int(c[1] * 4), int(span), style)
-    if key in _VX:
-        return _VX[key]
-    pal = {"terrain": ((60, 120, 170), (98, 150, 84)), "satellite": ((8, 22, 46), (34, 60, 38)), "old": ((222, 200, 150), (206, 180, 128)), "topo": ((226, 236, 240), (236, 232, 214)),
-           "flat": ((30, 70, 120), (200, 190, 150))}[style]
-    msk = Image.new("L", (W, H), 0)
-    d = ImageDraw.Draw(msk)
-    for ring in get_land():
-        pts = [_proj(x, y, c, span) for x, y in ring[::max(1, int(len(ring) / 400))]]
-        if len(pts) > 2 and max(p[0] for p in pts) > -50 and min(p[0] for p in pts) < W + 50 and max(p[1] for p in pts) > -50 and min(p[1] for p in pts) < H + 50:
-            try:
-                d.polygon(pts, fill=255)
-            except Exception:  # noqa
-                pass
-    np = _np()
-    m_ = np.asarray(msk.filter(ImageFilter.GaussianBlur(1.2))).astype(np.float32)[..., None] / 255.0
-    shallow = np.asarray(msk.filter(ImageFilter.GaussianBlur(16))).astype(np.float32)[..., None] / 255.0
-    n1 = np.asarray(ImageOps.grayscale(_noise_img(31, 24))).astype(np.float32)[..., None] / 255.0
-    n2 = np.asarray(ImageOps.grayscale(_noise_img(53, 90))).astype(np.float32)[..., None] / 255.0
-    n3 = np.asarray(ImageOps.grayscale(_noise_img(77, 8))).astype(np.float32)[..., None] / 255.0
-    oc, ld = np.array(pal[0], np.float32), np.array(pal[1], np.float32)
-    ocean = oc * (0.8 + 0.3 * n1) * (1 - 0.35 * shallow) + np.array([40, 70, 80], np.float32) * 0.35 * shallow * (style in ("terrain", "satellite", "flat"))
-    land = ld * (0.72 + 0.5 * n1 + 0.18 * (n3 - 0.5))
-    sh_ = np.asarray(ImageOps.grayscale(_noise_img(53, 90)).filter(ImageFilter.EMBOSS)).astype(np.float32)[..., None] / 255.0 - 0.5
-    land = land * (1 + 1.1 * sh_)  # hill shading
-    if style in ("terrain", "satellite"):  # forests dark, dry ground warm
-        land = land * (0.85 + 0.3 * n2) + np.array([22, 10, -6], np.float32) * (n2 - 0.5)
-    comp = ocean * (1 - m_) + land * m_
-    coast = np.abs(np.asarray(msk.filter(ImageFilter.GaussianBlur(2.2))).astype(np.float32)[..., None] / 255.0 - 0.5)
-    comp = comp * (1 - 0.5 * np.clip(1 - coast * 6, 0, 1) * 0.35)
-    big = Image.fromarray(np.clip(comp, 0, 255).astype(np.uint8), "RGB")
-    ed_ = msk.filter(ImageFilter.FIND_EDGES).filter(ImageFilter.GaussianBlur(0.8))
-    big = _ov(big, (60, 50, 38) if style != "old" else (90, 60, 30), ed_.point(lambda v: min(255, v * 2)), 0.55)
-    if style == "topo":
-        q = ImageOps.grayscale(_noise_img(17, 70)).point(lambda v: (v // 18) * 18)
-        e = ImageChops.difference(q, q.filter(ImageFilter.MaxFilter(3))).point(lambda v: 255 if v else 0)
-        big = _ov(big, (120, 90, 60), e, 0.7)
-    if style == "satellite":
-        big = ImageEnhance.Contrast(big).enhance(1.25)
-    _VX[key] = big
-    return big
-
-
-def _geo(ctx, i=0):
-    g = (ctx or {}).get("geo") or GEO_DEFAULT
-    return g[min(i, len(g) - 1)]
-
-
-def _mapmix(fr, mp, u, lo=0.12, hi=0.82):
-    a = cl(min(u / lo, (1 - u) / (1 - hi))) if True else 1
-    return Image.blend(fr, mp, a)
-
-
-def _hav(a, b):
-    R = 6371.0
-    p1, p2 = math.radians(a["lat"]), math.radians(b["lat"])
-    dl, dp = math.radians(b["lon"] - a["lon"]), p2 - p1
-    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
-    return 2 * R * math.asin(math.sqrt(h))
-
-
-def _pin(fr, x, y, a=1.0, r=1.0):
-    d = ImageDraw.Draw(fr, "RGBA")
-    d.ellipse([x - 22 * r, y - 8 * r, x + 22 * r, y + 8 * r], fill=(0, 0, 0, int(90 * a)))
-    d.polygon([(x, y), (x - 15 * r, y - 38 * r), (x + 15 * r, y - 38 * r)], fill=(232, 40, 56, int(255 * a)))
-    d.ellipse([x - 19 * r, y - 62 * r, x + 19 * r, y - 24 * r], fill=(232, 40, 56, int(255 * a)))
-    d.ellipse([x - 7 * r, y - 50 * r, x + 7 * r, y - 36 * r], fill=(255, 255, 255, int(255 * a)))
-
-
-def _lab(fr, txt, x, y, size=34, fill=(255, 255, 255)):
-    if txt:
-        spr = _vx_text(txt, size, "title", fill=fill, stroke=3, sfill=(10, 12, 20))
-        put(fr, spr, x, y, 1.0, 1.0)
-
-
-BGFX = {}
-
-
-def _bg(*names):
-    def deco(fn):
-        for n in names:
-            BGFX[n] = fn
-        return fn
-    return deco
-
-
-@_bg("map_anim")
-def bg_map(fr, u, t, s, ctx):
-    g = _geo(ctx)
-    c = (g["lon"] + lerp(-10, 0, e_out(u)), g["lat"] + lerp(4, 0, e_out(u)))
-    return _mapmix(fr, _map_img(c, lerp(70, 40, e_out(u))), u)
-
-
-@_bg("route", "travel_path", "army_move", "dist_counter")
-def bg_route(fr, u, t, s, ctx, key="route"):
-    a_, b_ = _geo(ctx, 0), _geo(ctx, 1)
-    if abs(a_["lat"] - b_["lat"]) + abs(a_["lon"] - b_["lon"]) < 2:
-        b_ = {"name": "", "lat": a_["lat"] + 6, "lon": a_["lon"] + 9}
-    c = ((a_["lon"] + b_["lon"]) / 2, (a_["lat"] + b_["lat"]) / 2)
-    span = max(30, abs(a_["lon"] - b_["lon"]) * 2.6, abs(a_["lat"] - b_["lat"]) * 4.5)
-    out = _mapmix(fr, _map_img(c, span, "terrain" if key != "army_move" else "old"), u)
-    pa, pb = _proj(a_["lon"], a_["lat"], c, span), _proj(b_["lon"], b_["lat"], c, span)
-    g = e_io(cl((u - 0.12) / 0.6))
-    pts = [(lerp(pa[0], pb[0], k / 30), lerp(pa[1], pb[1], k / 30) - 70 * math.sin(math.pi * k / 30)) for k in range(31)]
-    if key in ("route", "dist_counter"):
-        _aa_poly(out, pts, 8, (255, 255, 255), 1.0, g)
-        _aa_poly(out, pts, 4, (232, 40, 56), 1.0, g)
-    elif key == "travel_path":
-        n = int(30 * g)
-        d = ImageDraw.Draw(out)
-        for k in range(0, n, 2):
-            d.line([pts[k], pts[min(30, k + 1)]], fill=(255, 255, 255), width=6)
-        d.ellipse([pts[n][0] - 10, pts[n][1] - 10, pts[n][0] + 10, pts[n][1] + 10], fill=(255, 190, 40), outline=(20, 20, 20), width=3)
-    else:
-        for j in range(5):
-            k = int(30 * cl(g - j * 0.05))
-            x, y = pts[k]
-            ImageDraw.Draw(out).rectangle([x - 9, y - 9, x + 9, y + 9], fill=(180, 30, 30), outline=(255, 255, 255), width=2)
-        _aa_poly(out, pts, 4, (120, 20, 20), 0.8, g)
-    _pin(out, pa[0], pa[1] + 0, 1.0, 0.6)
-    _pin(out, pb[0], pb[1] + 0, cl(g * 2 - 0.6), 0.6)
-    _lab(out, a_["name"], pa[0], pa[1] + 24, 28)
-    _lab(out, b_["name"], pb[0], pb[1] + 24, 28)
-    if key == "dist_counter":
-        _lab(out, f"{int(_hav(a_, b_) * g):,} किमी".translate(HI_DIG), W / 2, H * 0.14, 64, (255, 230, 120))
-    return out
-
-
-@_bg("dist_counter")
-def bg_dist(fr, u, t, s, ctx):
-    return bg_route(fr, u, t, s, ctx, "dist_counter")
-
-
-@_bg("travel_path")
-def bg_tp(fr, u, t, s, ctx):
-    return bg_route(fr, u, t, s, ctx, "travel_path")
-
-
-@_bg("army_move")
-def bg_am(fr, u, t, s, ctx):
-    return bg_route(fr, u, t, s, ctx, "army_move")
-
-
-@_bg("pin", "map_zoom", "territory", "hist_border", "border_hl", "kingdom_exp", "satellite", "old_map", "topo", "geo_compare")
-def bg_place(fr, u, t, s, ctx, key="pin"):
-    g = _geo(ctx)
-    c = (g["lon"], g["lat"])
-    style = {"satellite": "terrain", "old_map": "old", "topo": "topo", "kingdom_exp": "old", "hist_border": "old"}.get(key, "terrain")
-    if key == "geo_compare":
-        a_, b_ = _geo(ctx, 0), _geo(ctx, 1)
-        out = fr.copy()
-        for i, gg in enumerate((a_, b_)):
-            mp = _map_img((gg["lon"], gg["lat"]), 24).resize((W // 2, H))
-            out.paste(mp.crop((0, 0, W // 2, H)), (i * W // 2, 0))
-            _pin(out, i * W // 2 + W // 4, H // 2 + 20, 1.0, 0.8)
-            _lab(out, gg["name"], i * W // 2 + W // 4, H * 0.12, 40)
-        ImageDraw.Draw(out).line([(W // 2, 0), (W // 2, H)], fill=(255, 255, 255), width=6)
-        return Image.blend(fr, out, cl(min(u / 0.12, (1 - u) / 0.18)))
-    span = lerp(150, 14, e_out(u)) if key == "map_zoom" else lerp(40, 16, e_out(u))
-    out = _mapmix(fr, _map_img(c, span, style), u)
-    x, y = _proj(g["lon"], g["lat"], c, span)
-    if key in ("territory", "kingdom_exp", "hist_border", "border_hl"):
-        gr = e_out(cl(u * 1.3))
-        lay = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        dd = ImageDraw.Draw(lay)
-        r = 40 + 260 * gr
-        pts = [(x + math.cos(a) * r * (1 + 0.18 * math.sin(3 * a + s) + 0.1 * math.sin(5 * a)), y + math.sin(a) * r * 0.75 * (1 + 0.18 * math.cos(2 * a + s))) for a in [k * 0.2 for k in range(32)]]
-        dd.polygon(pts, fill=(232, 60, 56, 70) if key != "border_hl" else (255, 210, 60, 56), outline=(232, 40, 56, 235) if key != "border_hl" else (255, 230, 90, 235))
-        gl_ = lay.filter(ImageFilter.GaussianBlur(14))
-        lay = Image.alpha_composite(gl_, lay.filter(ImageFilter.GaussianBlur(0.8)))
-        if key == "hist_border":
-            dd.line(pts + [pts[0]], fill=(255, 255, 255, 255), width=4)
-            sm = [(x + (p[0] - x) * 0.6, y + (p[1] - y) * 0.6) for p in pts]
-            dd.polygon(sm, outline=(60, 30, 10, 255))
-        out.paste(lay, (0, 0), lay)
-    _pin(out, x, y, cl(u * 3), 0.9 + 0.1 * math.sin(t * 6))
-    d = ImageDraw.Draw(out, "RGBA")
-    for k in range(2):
-        rr = 14 + ((t * 70 + k * 40) % 80)
-        d.ellipse([x - rr, y - rr * 0.5, x + rr, y + rr * 0.5], outline=(255, 255, 255, int(200 * (1 - rr / 94))), width=3)
-    _lab(out, g["name"], x, y + 36, 38)
-    return out
-
-
-for _k in ("pin", "map_zoom", "territory", "hist_border", "border_hl", "kingdom_exp", "satellite", "old_map", "topo", "geo_compare"):
-    BGFX[_k] = (lambda kk: (lambda fr, u, t, s, ctx: bg_place(fr, u, t, s, ctx, kk)))(_k)
-
-
-def _globe(c_lon, size=420):
-    np = _np()
-    if "globe_land" not in _VX:
-        m = Image.new("L", (720, 360), 0)
-        d = ImageDraw.Draw(m)
-        for ring in get_land():
-            pts = [((x + 180) * 2, (90 - y) * 2) for x, y in ring[::max(1, int(len(ring) / 300))]]
-            if len(pts) > 2:
-                d.polygon(pts, fill=255)
-        _VX["globe_land"] = np.asarray(m)
-    land = _VX["globe_land"]
-    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32)
-    nx, ny = (xx - size / 2) / (size / 2), (yy - size / 2) / (size / 2)
-    r2 = nx * nx + ny * ny
-    ok = r2 <= 1
-    nz = np.sqrt(np.clip(1 - r2, 0, 1))
-    lat = np.degrees(np.arcsin(np.clip(-ny, -1, 1)))
-    lon = np.degrees(np.arctan2(nx, nz)) + c_lon
-    li = np.clip(((lon + 180) % 360) * 2, 0, 719).astype(np.int32)
-    la = np.clip((90 - lat) * 2, 0, 359).astype(np.int32)
-    isl = land[la, li] > 128
-    img = np.zeros((size, size, 4), np.uint8)
-    lit = np.clip(-0.45 * nx - 0.35 * ny + 0.82 * nz, 0, 1)
-    shade = (0.12 + 0.95 * lit ** 0.9)[..., None]
-    cl_ = (np.random.default_rng(3).random((size // 8 + 2, size // 8 + 2)) * 255).astype(np.uint8)
-    cloud = np.asarray(Image.fromarray(cl_).resize((size, size), Image.BICUBIC).filter(ImageFilter.GaussianBlur(5))).astype(np.float32)[..., None] / 255.0
-    base = np.where(isl[..., None], np.array([78, 118, 66]) + 40 * (cloud - 0.5), np.array([16, 52, 118]))
-    spec = (np.clip(lit - 0.78, 0, 1) * 4.0)[..., None] * (~isl)[..., None] * 120
-    col = base * shade + spec + np.clip(cloud - 0.62, 0, 1) * 330 * shade
-    rim = np.clip(r2 - 0.72, 0, 1)[..., None] * 3.0
-    col = col + rim * np.array([60, 110, 200]) * (0.4 + lit[..., None])
-    img[..., :3] = np.clip(col, 0, 255)
-    img[..., 3] = np.where(ok, 255, 0)
-    return Image.fromarray(img, "RGBA")
-
-
-@_bg("globe_rot", "globe_map")
-def bg_globe(fr, u, t, s, ctx, key="globe_rot"):
-    g = _geo(ctx)
-    out = Image.blend(fr, Image.new("RGB", (W, H), (4, 6, 16)), cl(min(u / 0.15, (1 - u) / 0.15)) * (1.0 if key == "globe_rot" else 0.9))
-    rr = random.Random(5)
-    d = ImageDraw.Draw(out)
-    for _ in range(80):
-        d.point((rr.randint(0, W), rr.randint(0, H)), fill=(255, 255, 255))
-    gl = _globe(g["lon"] - 90 * (1 - e_out(u)) + 40 * (u - 0.5), 440)
-    if key == "globe_map" and u > 0.5:
-        k = e_io((u - 0.5) / 0.5)
-        mp = _map_img((g["lon"], g["lat"]), 60)
-        out = Image.blend(out, mp, k)
-        gl = gl.resize((int(440 * (1 - k * 0.6)), int(440 * (1 - k * 0.6))))
-        gl.putalpha(gl.getchannel("A").point(lambda v: int(v * (1 - k))))
-    out.paste(gl, (int(W / 2 - gl.width / 2), int(H / 2 - gl.height / 2)), gl)
-    return Image.blend(fr, out, cl(min(u / 0.12, (1 - u) / 0.12)))
-
-
-BGFX["globe_rot"] = lambda fr, u, t, s, ctx: bg_globe(fr, u, t, s, ctx, "globe_rot")
-BGFX["globe_map"] = lambda fr, u, t, s, ctx: bg_globe(fr, u, t, s, ctx, "globe_map")
-
-
-@_bg("gps", "latlon", "compass", "scalebar", "elev", "evidence_hl")
-def bg_hud(fr, u, t, s, ctx, key="gps"):
-    out = fr.copy()
-    d = ImageDraw.Draw(out, "RGBA")
-    a = int(255 * cl(min(u / 0.15, (1 - u) / 0.15)))
-    g = _geo(ctx)
-    if key == "gps":
-        cx, cy = W * 0.5, H * 0.45
-        d.ellipse([cx - 70, cy - 70, cx + 70, cy + 70], outline=(120, 255, 170, a), width=3)
-        d.line([(cx - 100, cy), (cx + 100, cy)], fill=(120, 255, 170, a), width=2)
-        d.line([(cx, cy - 100), (cx, cy + 100)], fill=(120, 255, 170, a), width=2)
-        txt = f"{abs(g['lat']):.4f}° {'N' if g['lat'] >= 0 else 'S'}   {abs(g['lon']):.4f}° {'E' if g['lon'] >= 0 else 'W'}"
-        n = int(len(txt) * e_out(cl(u * 1.6)))
-        spr = _vx_text(txt[:n] + ("_" if int(t * 3) % 2 else ""), 40, "cond", fill=(120, 255, 170), stroke=2)
-        put(out, spr, cx, cy + 120, 1.0, a / 255)
-    elif key == "latlon":
-        gr = e_out(cl(u * 1.5))
-        for k in range(1, 8):
-            x = W * k / 8
-            d.line([(x, 0), (x, H * gr)], fill=(255, 255, 255, int(a * 0.55)), width=2)
-        for k in range(1, 5):
-            y = H * k / 5
-            d.line([(0, y), (W * gr, y)], fill=(255, 255, 255, int(a * 0.55)), width=2)
-        for k in range(1, 8):
-            _lab(out, f"{int(g['lon'] - 28 + k * 8)}°E".translate(HI_DIG), W * k / 8, 24, 22)
-        for k in range(1, 5):
-            _lab(out, f"{int(g['lat'] + 12 - k * 5)}°N".translate(HI_DIG), 40, H * k / 5 - 14, 22)
-    elif key == "compass":
-        cx, cy, R = W - 130, 130, 80
-        d.ellipse([cx - R, cy - R, cx + R, cy + R], fill=(10, 13, 22, int(a * 0.8)), outline=(255, 255, 255, a), width=3)
-        ang = math.radians(360 * (1 - e_out(cl(u * 1.4))) + 20 * math.sin(t * 2) * (1 - cl(u * 1.4)))
-        for sgn, col in ((1, (232, 40, 56)), (-1, (230, 230, 240))):
-            tip = (cx + sgn * math.sin(ang) * R * 0.85, cy - sgn * math.cos(ang) * R * 0.85)
-            base1 = (cx + math.cos(ang) * 12, cy + math.sin(ang) * 12)
-            base2 = (cx - math.cos(ang) * 12, cy - math.sin(ang) * 12)
-            d.polygon([tip, base1, base2], fill=col + (a,))
-        _lab(out, "उ", cx + math.sin(ang) * (R + 20), cy - math.cos(ang) * (R + 20), 26)
-    elif key == "scalebar":
-        w_ = 260 * e_out(cl(u * 2))
-        x0, y0 = 70, 70
-        d.rectangle([x0, y0, x0 + w_, y0 + 12], fill=(255, 255, 255, a), outline=(10, 10, 10, a), width=2)
-        for k in range(1, 4):
-            d.line([(x0 + w_ * k / 4, y0), (x0 + w_ * k / 4, y0 + 22)], fill=(255, 255, 255, a), width=3)
-        if w_ > 200:
-            _lab(out, "0 — 100 किमी", x0 + 130, y0 - 22, 24)
-    elif key == "elev":
-        rr = random.Random(7)
-        pts, v = [], 0.0
-        for k in range(41):
-            v += rr.uniform(-0.12, 0.14)
-            pts.append((60 + (W - 120) * k / 40, H * 0.30 - 70 * (0.5 + 0.5 * math.sin(k * 0.3 + v))))
-        gr = e_out(cl(u * 1.5))
-        n = int(40 * gr)
-        d.polygon(pts[:n + 1] + [(pts[n][0], H * 0.34), (60, H * 0.34)], fill=(60, 180, 120, int(a * 0.6)))
-        d.line(pts[:n + 1], fill=(255, 255, 255, a), width=4)
-        d.ellipse([pts[n][0] - 9, pts[n][1] - 9, pts[n][0] + 9, pts[n][1] + 9], fill=(232, 40, 56, a))
-    else:  # evidence_hl: spotlight dims the picture and rings the key spot
-        mask = _radial_mask(0.22, 0.3, 0.5, 0.5, 0.45)
-        dim = _ov(out, (0, 0, 0), mask.point(lambda v: 255 - v), 0.6 * cl(min(u / 0.2, (1 - u) / 0.2)))
-        out = dim
-        d = ImageDraw.Draw(out, "RGBA")
-        d.ellipse([W * 0.5 - 150 * e_out(u * 2 if u < 0.5 else 1), H * 0.45 - 100, W * 0.5 + 150, H * 0.45 + 100], outline=(255, 220, 60, a), width=5)
-    return out
-
-
-for _k in ("gps", "latlon", "compass", "scalebar", "elev", "evidence_hl"):
-    BGFX[_k] = (lambda kk: (lambda fr, u, t, s, ctx: bg_hud(fr, u, t, s, ctx, kk)))(_k)
-
-
-# ---- history / documentary looks
-def _paper_t(w, h, tone=(236, 222, 186), seed=1):
-    key = ("paper", w, h, tone, seed)
-    if key not in _VX:
-        np = _np()
-        rng = np.random.default_rng(seed)
-        blot = Image.fromarray((rng.random((max(2, h // 60), max(2, w // 60))) * 255).astype(np.uint8)).resize((w, h), Image.BICUBIC)
-        im = ImageOps.colorize(blot, tuple(int(c * 0.88) for c in tone), tuple(min(255, int(c * 1.03)) for c in tone))
-        _VX[key] = im
-    return _VX[key]
-
-
-def _sheet(fr, u, sp, txt_lines, rot=-3, w_=0.56, head=None, tone=(236, 222, 186), pos=0.28, ink=(40, 30, 20)):
-    out = fr.copy()
-    w, h = int(W * w_), int(H * 0.82)
-    pg = _paper_t(w, h, tone).copy().convert("RGBA")
-    d = ImageDraw.Draw(pg)
-    d.rectangle([0, 0, w - 1, h - 1], outline=(90, 60, 30), width=5)
-    y = 36
-    if head:
-        sp_ = _vx_text(head, 54, "title", fill=ink, stroke=0, shadow=False, max_w=w - 60)
-        pg.alpha_composite(sp_, ((w - sp_.width) // 2, y))
-        y += sp_.height + 18
-        d.line([(30, y), (w - 30, y)], fill=ink, width=3)
-        y += 20
-    for k, ln in enumerate(txt_lines):
-        g = cl(u * 3 - k * 0.25)
-        if g > 0:
-            sp_ = _vx_text(ln, 34, "sub", fill=ink, stroke=0, shadow=False, max_w=w - 70, align="left")
-            n = int(sp_.width * g)
-            pg.alpha_composite(sp_.crop((0, 0, max(1, n), sp_.height)), (36, y))
-        y += 46
-    pg = pg.rotate(rot, resample=Image.BICUBIC, expand=True)
-    sl = e_out(cl(u * 4)) * (1 - e_in(cl((u - 0.85) * 6))) if False else e_out(cl(min(u * 4, (1 - u) * 5)))
-    cx = lerp(-w, W * pos + w * 0.1, sl) if pos < 0.5 else lerp(W + w, W * pos, sl)
-    shadow = Image.new("RGBA", pg.size, (0, 0, 0, 0))
-    shadow.putalpha(pg.getchannel("A").filter(ImageFilter.GaussianBlur(12)).point(lambda v: int(v * 0.6)))
-    out.paste(shadow, (int(cx - pg.width / 2 + 10), int(H / 2 - pg.height / 2 + 14)), shadow)
-    out.paste(pg, (int(cx - pg.width / 2), int(H / 2 - pg.height / 2)), pg)
-    return out
-
-
-def _phr(ctx):
-    return ((ctx or {}).get("phrase") or "इतिहास में दर्ज एक अहम पल").split()
-
-
-@_bg("doc_reveal", "manuscript", "handwriting")
-def bg_doc(fr, u, t, s, ctx, key="doc_reveal"):
-    ws = _phr(ctx)
-    lines = [" ".join(ws[i:i + 3]) for i in range(0, min(len(ws), 12), 3)] or ["…"]
-    if key == "manuscript":
-        return _sheet(fr, u, s, lines, 2, 0.5, "॥ पांडुलिपि ॥", (214, 186, 120), 0.72)
-    if key == "handwriting":
-        return _sheet(fr, u, s, lines, -1.5, 0.6, None, (246, 240, 226), 0.5, (20, 40, 110))
-    return _sheet(fr, u, s, lines, -3, 0.54, "दस्तावेज़", (236, 228, 205), 0.27)
-
-
-for _k in ("doc_reveal", "manuscript", "handwriting"):
-    BGFX[_k] = (lambda kk: (lambda fr, u, t, s, ctx: bg_doc(fr, u, t, s, ctx, kk)))(_k)
-
-
-@_bg("newspaper")
-def bg_news(fr, u, t, s, ctx):
-    pg = _paper_t(W, H, (226, 222, 210), 4).copy()
-    d = ImageDraw.Draw(pg)
-    mh = _vx_text("दैनिक समाचार", 96, "title", fill=(25, 25, 25), stroke=0, shadow=False)
-    pg.paste(mh, ((W - mh.width) // 2, 24), mh)
-    d.line([(40, 150), (W - 40, 150)], fill=(25, 25, 25), width=5)
-    hd = _vx_text(" ".join(_phr(ctx))[:40], 70, "title", fill=(20, 20, 20), stroke=0, shadow=False, max_w=W - 120)
-    pg.paste(hd, ((W - hd.width) // 2, 180), hd)
-    rr = random.Random(2)
-    for c in range(3):
-        for k in range(14):
-            y = 360 + k * 24
-            d.line([(60 + c * 400, y), (60 + c * 400 + rr.randint(250, 340), y)], fill=(70, 70, 70), width=5)
-    ph = ImageOps.grayscale(fr).resize((380, 150))
-    pg.paste(ph, (W - 460, 400))
-    e = e_out(cl(min(u * 3, (1 - u) * 4)))
-    pg = pg.rotate((1 - e) * 540, resample=Image.BILINEAR, expand=False).resize((int(W * (0.15 + 0.85 * e)), int(H * (0.15 + 0.85 * e))))
-    out = fr.copy()
-    out.paste(pg, (int(W / 2 - pg.width / 2), int(H / 2 - pg.height / 2)))
-    return out
-
-
-@_bg("portrait_reveal", "ruler_intro")
-def bg_portrait(fr, u, t, s, ctx, key="portrait_reveal"):
-    e = e_out(cl(min(u * 3, (1 - u) * 4)))
-    out = _ov(fr, (0, 0, 0), Image.new("L", (W, H), 255), 0.35 * e)
-    pw, ph = 330, 420
-    face = _zoomc(fr, 1.6, 0.5, 0.42).resize((pw, ph), Image.BICUBIC)
-    face = ImageOps.colorize(ImageOps.grayscale(face), (30, 20, 10), (255, 240, 210)) if key == "portrait_reveal" else face
-    m = Image.new("L", (pw, ph), 0)
-    ImageDraw.Draw(m).ellipse([0, 0, pw - 1, ph - 1], fill=255)
-    fm = Image.new("RGBA", (pw + 36, ph + 36), (0, 0, 0, 0))
-    ImageDraw.Draw(fm).ellipse([0, 0, pw + 35, ph + 35], fill=(212, 170, 70, 255))
-    fm.paste(face, (18, 18), m)
-    cx = lerp(W + 200, W * 0.72, e)
-    out.paste(fm, (int(cx - fm.width / 2), int(H * 0.46 - fm.height / 2)), fm)
-    w = (_phr(ctx) + [""])[0]
-    nm = _vx_text(w if key == "portrait_reveal" else "राजा " + w, 50, "title", fill=(255, 240, 200), stroke=3)
-    put(out, nm, cx, H * 0.46 + fm.height / 2 + 36, 1.0, e)
-    if key == "ruler_intro":
-        _lab(out, "शासनकाल", cx, H * 0.46 + fm.height / 2 + 84, 28, (230, 200, 120))
-    return out
-
-
-BGFX["portrait_reveal"] = lambda fr, u, t, s, ctx: bg_portrait(fr, u, t, s, ctx, "portrait_reveal")
-BGFX["ruler_intro"] = lambda fr, u, t, s, ctx: bg_portrait(fr, u, t, s, ctx, "ruler_intro")
-
-
-@_bg("ba_hist")
-def bg_bah(fr, u, t, s, ctx):
-    pos = int(W * lerp(0.95, 0.05, e_io(cl((u - 0.1) / 0.6))))
-    old = fx_old(fr, 0.5, t, s)
-    old = Image.blend(fr, old, 1.0)
-    out = fr.copy()
-    out.paste(old.crop((0, 0, pos, H)), (0, 0))
-    d = ImageDraw.Draw(out)
-    d.line([(pos, 0), (pos, H)], fill=(255, 255, 255), width=6)
-    d.ellipse([pos - 28, H // 2 - 28, pos + 28, H // 2 + 28], fill=(255, 255, 255))
-    _lab(out, "तब", 90, 60, 40, (255, 230, 170))
-    _lab(out, "अब", W - 90, 60, 40)
-    return Image.blend(fr, out, cl(min(u / 0.1, (1 - u) / 0.15)))
-
-
-def _card_bg(fr, u, key, ctx, E=None, pos=(0.5, 0.45), scale=1.7):
-    C = (ctx or {}).get("C") or {}
-    spr = render_card(key, e_out(cl(u * 1.4)), u * 4, E or ctx.get("E") or {}, C)
-    if spr is None:
-        return fr
-    spr = spr.resize((int(spr.width * scale), int(spr.height * scale)), Image.BILINEAR)
-    out = fr.copy()
-    out = _ov(out, (0, 0, 0), Image.new("L", (W, H), 255), 0.3 * cl(min(u * 5, (1 - u) * 5)))
-    put(out, spr, W * pos[0], H * pos[1], 1.0, cl(min(u * 5, (1 - u) * 5)))
-    return out
-
-
-for _k, _ck in (("family_tree", "orgchart"), ("dynasty", "flowchart"), ("event_seq", "steps"), ("army_strength", "data_compare"), ("h_timeline", "process")):
-    BGFX[_k] = (lambda ck: (lambda fr, u, t, s, ctx: _card_bg(fr, u, ck, ctx)))(_ck)
-
-
-@_bg("battle_form")
-def bg_battle(fr, u, t, s, ctx):
-    out = _ov(fr, (0, 0, 0), Image.new("L", (W, H), 255), 0.3 * cl(min(u * 5, (1 - u) * 5)))
-    d = ImageDraw.Draw(out, "RGBA")
-    for side, col in ((0, (200, 50, 50)), (1, (50, 110, 210))):
-        for r in range(4):
-            for c in range(9):
-                g = e_out(cl(u * 3 - (c + r * 2) * 0.04))
-                x = W * (0.12 + c * 0.04) if side == 0 else W * (0.88 - c * 0.04)
-                y = H * (0.34 + r * 0.1) + (1 - g) * (-200 if side == 0 else 200)
-                d.rectangle([x - 15, y - 15, x + 15, y + 15], fill=col + (int(235 * cl(min(u * 5, (1 - u) * 5))),), outline=(255, 255, 255, 220), width=2)
-    return out
-
-
-@_bg("archival")
-def bg_arch(fr, u, t, s, ctx):
-    out = fx_old(fr, 0.5, t, s)
-    out = Image.blend(fr, out, cl(min(u / 0.1, (1 - u) / 0.1)))
-    d = ImageDraw.Draw(out)
-    for x in range(0, W, 44):
-        d.rectangle([x + 10, 8, x + 30, 26], fill=(0, 0, 0))
-        d.rectangle([x + 10, H - 26, x + 30, H - 8], fill=(0, 0, 0))
-    _lab(out, f"REC  {int(t // 60):02d}:{int(t % 60):02d}:{int(t * 25 % 25):02d}", 150, 62, 24, (255, 255, 255))
-    return out
-
-
-for _k, _fn in (("old_photo", fx_old), ("kenburns", cam_kb), ("parallax25", cam_par), ("push_in", cam_push), ("pull_out", cam_pull), ("dolly_zoom", cam_dolly), ("pan", cam_pan)):
-    BGFX[_k] = (lambda fn: (lambda fr, u, t, s, ctx: fn(fr, u, t, s)))(_fn)
-
-
-def _bg_missing():
-    return [t["key"] for t in T151 if t["layer"] == "bg" and t["key"] not in BGFX]
-
-
-
-# ---- planner: decides WHEN each of the 151 techniques appears (every video, any length) and keeps the three bottom slots free of collisions
-PLAIN_MODE = os.environ.get("PLAIN", "0") != "0"  # clean slate: no editing techniques at all; PLAIN=0 brings the old technique code back (all of it is still in the file)
-T151_ON = False  # the 151-technique planner and its runtime hooks were removed on request
-BOT_VERSION = "round-11 plain + cast"
-
-
-TR_NEW = set(TR15) - {"zoom", "whip", "glitch", "flash", "wipe"}
 
 
 WATERMARK = os.environ.get("WATERMARK", "1") != "0"  # reference: a tiny grey "Generative AI" at the lower left of every AI picture (WATERMARK=0 switches it off)
@@ -10322,14 +7638,6 @@ def name_ok(text):
             if n_ and (n_ in t or t in n_):
                 return True
     return False
-
-
-def draw_watermark(fr):
-    key = ("wm", W, H)
-    if key not in _VX:
-        _VX[key] = text_layer("Generative AI", font_for("Generative AI", max(14, int(H * 0.021)), "geom"), fill=(235, 235, 235))
-    sp = _VX[key]
-    put(fr, sp, W * 0.012 + sp.width / 2, H * 0.957, 1.0, 0.45)
 
 
 def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
@@ -10414,96 +7722,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                     draw_popup(fr, x_["ps"], t - x_["t0"])
                     draw_ov(fr, x_["ps"], t - x_["t0"], pal)
         _items_pass(False)  # everything that lives ON the photo is drawn first ...
-        cg_ = [x_ for x_ in items if x_["it"]["kind"] in COLLAGE_KINDS and x_["t0"] <= t < x_["t1"]]
-        vox_on = bool(sc.get("vox")) or bool(cg_)
-        if vox_on:  # ... then the photo becomes the Vox taped-photo card on coloured paper, and the explaining cards go on the paper
-            try:
-                q_v = cl(t / 0.45) if sc.get("vox") else min(cl((t - cg_[0]["t0"]) / 0.5), 1 - cl((t - (cg_[0]["t1"] - 0.45)) / 0.4))
-                ci_v = sc["vox"] if sc.get("vox") else cg_[0]["it"].get("ci", 0)
-                fr = vox_collage(fr, q_v, ci_v if isinstance(ci_v, int) else 0)
-            except Exception as e_:  # noqa
-                if not _VX.get("err_collage"):
-                    _VX["err_collage"] = 1
-                    log("vox collage failed once:", type(e_).__name__, str(e_)[:100])
         _items_pass(True)
-        if sc.get("vox") and sc.get("kw"):
-            busy_ = any(x_["it"]["kind"] in ("chart", "compare", "tline") and x_["t0"] <= t < x_["t1"] for x_ in items)
-            try:
-                draw_kw(fr, sc["kw"], t, dur, busy_)
-            except Exception as e_:  # noqa
-                if not _VX.get("err_kw"):
-                    _VX["err_kw"] = 1
-                    log("vox keyword cards failed once:", type(e_).__name__, str(e_)[:100])
-        if sc.get("kw") and not sc.get("vox") and not vox_on:
-            try:
-                blocked_ = any(x_["t0"] <= t < x_["t1"] and (item_zones(x_["it"]) & {"T", "FULL"}) for x_ in items)
-                draw_kw_corner(fr, sc["kw"], t, dur, _subj(sh)[0], lt is not None, blocked_)
-            except Exception as e_:  # noqa
-                if not _VX.get("err_kwc"):
-                    _VX["err_kwc"] = 1
-                    log("keyword sticker failed once:", type(e_).__name__, str(e_)[:100])
-        if WATERMARK and (CAST["on"] or STORY_STYLE):
-            try:
-                draw_watermark(fr)
-            except Exception:  # noqa
-                pass
-        return fr
-    return draw
-
-
-def make_kinetic_draw(sc, dur, speech_dur, ctx, events, pal):
-    img = graded_image(ctx, sc["image"], sc.get("grade", "natural"))
-    shot = {"img": img, "dur": dur, "cam": "push", "par": False, "focus": False}
-    words = sc["keywords_hi"]
-    n = len(words)
-    size = min(150 if n <= 2 else 118, int(430 / (n * 1.22)))
-    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
-    while size > 60 and max(probe.textlength(w, font=load_font(size, "title")) for w in words) > W * 0.82:
-        size -= 8
-    sprites = []
-    for k, w in enumerate(words):
-        if k % 2:
-            lay = text_layer(w, load_font(size, "title"), fill=(255, 243, 80), fill2=(255, 150, 0), stroke=11,
-                             stroke_fill=tuple(pal["ink"]), shadow=(5, 8, 6, 0.75), extrude=(8, (120, 50, 0)))
-        else:
-            lay = text_layer(w, load_font(size, "title"), fill=(255, 255, 255), fill2=(210, 230, 255), stroke=11,
-                             stroke_fill=tuple(pal["ink"]), shadow=(5, 8, 6, 0.75), extrude=(8, tuple(max(0, c // 2) for c in pal["ink"])))
-        sprites.append(lay)
-    t_i = [0.45 + i * (speech_dur * 0.72) / n for i in range(n)]
-    nwd, wt_ = sc["narration_hi"].split(), sc.get("wt")
-    if wt_ and len(wt_) == len(nwd):
-        got, last_k = [], -1
-        for kw in words:
-            hit = next((k for k, w_ in enumerate(nwd) if k > last_k and (kw.split()[0].strip("।,?!") in w_ or w_.strip("।,?!") in kw)), None)
-            if hit is None:
-                got = None
-                break
-            got.append(max(0.2, wt_[hit][0] - 0.05))
-            last_k = hit
-        if got:
-            t_i = got
-    for t in t_i:
-        events.append((t, "impact", 0.8))
-    lh = int(size * 1.22)
-    ink_img = Image.new("RGB", (W, H), tuple(pal["ink"]))
-    dust = Dust(ctx["rnd"].random(), 22)
-
-    def draw(t):
-        fr = shot_frame(shot, t)
-        fr = Image.blend(fr, ink_img, 0.42)
-        fr = fx_apply(fr, t, int(t * FPS), 0.0, leak=False)
-        dust.draw(fr, t)
-        for i, sp in enumerate(sprites):
-            q = t - t_i[i]
-            if q < 0:
-                continue
-            put(fr, sp, W / 2, H * 0.40 + (i - (n - 1) / 2) * lh, lerp(2.3, 1.0, e_out(q / 0.2)), cl(q * 9))
-        for ti in t_i:
-            q = t - ti
-            if 0 <= q < 0.28:
-                a = 16 * (1 - q / 0.28)
-                fr = ImageChops.offset(fr, int(a * math.sin(q * 110)), int(a * 0.6 * math.cos(q * 90)))
-                break
         return fr
     return draw
 
@@ -10532,81 +7751,7 @@ def quick_text(s, size, fill, stroke=0, stroke_fill=(255, 255, 255), role="title
     return _qt[key]
 
 
-def make_counter_draw(sc, dur, speech_dur, pal, events):
-    c = sc["counter"]
-    frm, to, dec = c["from"], c["to"], c["decimals"]
-    base = bg_base(tuple(pal["top"]), tuple(pal["bottom"]))
-    bubbles = _bubbles()
-    head = head_sprite(sc["headline_hi"], pal) if sc.get("headline_hi") else None
-    cnt = max(1.5, min(dur - 1.4, speech_dur * 0.62))
-    for k in range(int(cnt / 0.09)):
-        events.append((0.45 + k * 0.09, "tick", 0.22))
-    events.append((0.45 + cnt, "ding", 0.7))
-    unit = text_layer(c["unit_hi"], load_font(66, "head"), fill=tuple(pal["ink"]), max_w=W - 200) if c["unit_hi"] else None
-
-    def draw(t):
-        fr = base.copy()
-        _draw_bubbles(fr, bubbles, t)
-        if head is not None:
-            put(fr, head, W / 2, 62, 1.0, cl(t * 2.5))
-        q = cl((t - 0.45) / cnt)
-        v = lerp(frm, to, e_out(q))
-        s = f"{v:,.{dec}f}"
-        pulse = 1.0 + (0.05 * math.sin((t - 0.45 - cnt) * 9) * math.exp(-(t - 0.45 - cnt) * 3) if t > 0.45 + cnt else 0)
-        num = quick_text(s, 230, tuple(pal["accent"]), stroke=12, stroke_fill=(255, 255, 255), fill2=tuple(max(0, x - 70) for x in pal["accent"]))
-        put(fr, num, W / 2, 290, e_back(t / 0.5) * pulse, cl(t * 4))
-        if unit is not None:
-            put(fr, unit, W / 2, 440, 1.0, cl((t - 0.5) * 3))
-        bw = 760
-        d = ImageDraw.Draw(fr)
-        d.rounded_rectangle([W / 2 - bw / 2, 505, W / 2 + bw / 2, 527], 11, fill=(255, 255, 255))
-        if q > 0.01:
-            d.rounded_rectangle([W / 2 - bw / 2, 505, W / 2 - bw / 2 + max(22, bw * q), 527], 11, fill=tuple(pal["accent"]))
-        return fr
-    return draw
-
-
 BAR_COLS = [(255, 120, 40), (30, 140, 255), (40, 190, 120), (235, 70, 120)]
-
-
-def make_bars_draw(sc, dur, speech_dur, pal, events):
-    bars = sc["bars"]
-    n = len(bars)
-    mx = max(b["value"] for b in bars)
-    base = bg_base(tuple(pal["top"]), tuple(pal["bottom"]))
-    bubbles = _bubbles()
-    head = head_sprite(sc["headline_hi"], pal) if sc.get("headline_hi") else None
-    bw, gap = 170, 90
-    x0 = W / 2 - (n * bw + (n - 1) * gap) / 2
-    base_y, maxh = 470, 270
-    st = [0.5 + i * 0.4 for i in range(n)]
-    for t in st:
-        events.append((t, "pop", 0.6))
-    events.append((st[-1] + 0.9, "ding", 0.6))
-    labels = [text_layer(b["label_hi"], load_font(34, "label"), fill=tuple(pal["ink"]), max_w=bw + gap - 10) for b in bars]
-
-    def draw(t):
-        fr = base.copy()
-        _draw_bubbles(fr, bubbles, t)
-        if head is not None:
-            put(fr, head, W / 2, 62, 1.0, cl(t * 2.5))
-        d = ImageDraw.Draw(fr)
-        d.rounded_rectangle([x0 - 40, base_y, x0 + n * bw + (n - 1) * gap + 40, base_y + 8], 4, fill=tuple(pal["ink"]))
-        for i, b in enumerate(bars):
-            q = e_out((t - st[i]) / 0.95)
-            hh = maxh * b["value"] / mx * q
-            x = x0 + i * (bw + gap)
-            col = BAR_COLS[i % 4]
-            if hh > 2:
-                d.rounded_rectangle([x, base_y - hh, x + bw, base_y], 22, fill=col)
-                d.rounded_rectangle([x + 12, base_y - hh + 8, x + 40, base_y - 14] if hh > 40 else [0, 0, 0, 0], 10,
-                                    fill=tuple(min(255, c + 60) for c in col))
-                txt = f"{b['value'] * q:,.{b['dec']}f}" + (" " + b["unit_hi"] if b["unit_hi"] else "")
-                put(fr, quick_text(txt, 40, tuple(pal["ink"]), stroke=5, stroke_fill=(255, 255, 255), role="label"),
-                    x + bw / 2, base_y - hh - 28, 1.0, cl(q * 3))
-            put(fr, labels[i], x + bw / 2, base_y + 40, 1.0, cl((t - st[i]) * 3))
-        return fr
-    return draw
 
 
 # ---- render one scene to a silent mp4
@@ -10614,9 +7759,6 @@ def pick_transition(i, sc, prev_sc, ctx):
     rnd = ctx["rnd"]
     if i == 0:
         return "fade", 0.7
-    if PLAIN_MODE:
-        _k = rnd.choice(SLIDE_MIX)
-        return _k, (0.9 if _k == "pandark" else 0.6)
     hint = sc.get("transition")
     if hint == "cut":
         return "none", 0.0
@@ -10743,184 +7885,6 @@ def pin_sprite(pal):
 
 
 # --------------------------------------------------------------------------- split-screen list of real photos with red brush label cards
-def brush_card(text, pal=None):
-    """Red torn-brush label card with white bold text (like the reference 'University of ...' cards)."""
-    font = load_font(46, "title")
-    lay = text_layer(text, font, fill=(255, 255, 255), stroke=2, stroke_fill=(90, 0, 0))
-    w, h = lay.width + 110, lay.height + 56
-    rnd = random.Random(len(text) * 7 + 3)
-    card = Image.new("RGBA", (w + 40, h + 40), (0, 0, 0, 0))
-    d = ImageDraw.Draw(card)
-    top = [(20 + x, 20 + rnd.randint(-4, 8)) for x in range(0, w + 1, 12)]
-    bot = [(20 + x, 20 + h - rnd.randint(-4, 8)) for x in range(w, -1, -12)]
-    pts = [(20 - rnd.randint(6, 22), 20 + h * 0.5)] + top + [(20 + w + rnd.randint(6, 22), 20 + h * 0.45)] + bot
-    d.polygon(pts, fill=(196, 28, 30, 255))
-    for _ in range(18):  # dry-brush streaks
-        y = 20 + rnd.randint(6, h - 6)
-        d.line([(20 + rnd.randint(0, w // 3), y), (20 + rnd.randint(w // 2, w), y + rnd.randint(-2, 2))], fill=(150, 10, 14, 120), width=rnd.randint(1, 3))
-    sh = Image.new("RGBA", card.size, (0, 0, 0, 0))
-    sh.putalpha(card.getchannel("A").filter(ImageFilter.GaussianBlur(7)).point(lambda v: int(v * 0.55)))
-    out = Image.new("RGBA", card.size, (0, 0, 0, 0))
-    out.alpha_composite(sh, (4, 7))
-    out.alpha_composite(card)
-    out.alpha_composite(lay, ((out.width - lay.width) // 2, (out.height - lay.height) // 2 - 2))
-    return out
-
-
-def make_multi_draw(sc, dur, speech_dur, pal, events):
-    np = _np()
-    items = sc["items"][:3]
-    n = len(items)
-    imgs, subj = [], []
-    for it in items:
-        try:
-            im = Image.open(it["image"]).convert("RGB") if it.get("image") else Image.new("RGB", (W, H), (40, 40, 50))
-        except Exception:  # noqa
-            im = Image.new("RGB", (W, H), (40, 40, 50))
-        try:
-            subj.append(subject_center(im))
-        except Exception:  # noqa
-            subj.append((0.5, 0.5))
-        sc_ = max(W * 1.25 / im.width, H * 1.25 / im.height)
-        imgs.append(im.resize((int(im.width * sc_), int(im.height * sc_)), Image.LANCZOS))
-    for k in range(n):  # mirror a picture when that puts its subject nearer to the middle of its own panel (never lets a divider cut the subject)
-        vw0 = imgs[k].width / 1.25
-        want = (W * k / n + W * (k + 1) / n) / 2 / W * vw0
-        def err(fx):
-            ox_ = fx * imgs[k].width - want
-            return abs(ox_ - min(max(0.0, ox_), imgs[k].width - vw0))
-        if err(1 - subj[k][0]) + 1e-3 < err(subj[k][0]):
-            imgs[k] = ImageOps.mirror(imgs[k])
-            subj[k] = (1 - subj[k][0], subj[k][1])
-    vs = bool(sc.get("vs")) and n == 2  # old vs new: left bright, right black&white with red wash, big labels, magnifier circles
-    cards = [brush_card(it["label_hi"], pal) for it in items] if not vs else []
-    vs_labs = []
-    if vs:
-        for k, it in enumerate(items):
-            lab_ = text_layer(it["label_hi"], font_for(it["label_hi"], 96, "title"), fill=(255, 255, 255), stroke=3, stroke_fill=(10, 10, 10), shadow=(0, 5, 6, 0.8), max_w=int(W * 0.42))
-            vs_labs.append(lab_)
-    # when each item is named
-    ts = []
-    for k, it in enumerate(items):
-        t_ = it["t"] if it.get("t") is not None else (find_word_time(sc, it["label_hi"]) if k > 0 else 0.0)
-        ts.append(t_)
-    fixed_ = []  # each panel arrives when it is named (never earlier); two panels are never closer than 0.9 s
-    for k, t_ in enumerate(ts):
-        if k == 0:
-            fixed_.append(0.0)
-        elif t_ is not None:
-            fixed_.append(max(t_, fixed_[-1] + 0.9))
-        else:
-            fixed_.append(fixed_[-1] + max(1.2, (speech_dur - 1.5) / n))
-    ts = fixed_
-    if n > 1 and ts[-1] > dur - 1.1 and dur > 1.5:  # all panels must be in place before the sentence ends
-        f_ = max(0.3, (dur - 1.1) / ts[-1])
-        ts = [t_ * f_ for t_ in ts]
-    for k in range(1, n):
-        events += [(ts[k], "whoosh_soft", 0.8)]
-    slant = 14 if vs else 70  # divider leans like the reference
-
-    def dividers(t):
-        """x of each divider at the middle of the screen: panel k occupies [div[k], div[k+1]]."""
-        xs_ = []
-        for k in range(1, n):
-            final = W * k / n
-            q = e_io(cl((t - ts[k]) / 0.65))
-            xs_.append(lerp(W + slant + 40, final, q) if t >= ts[k] - 0.01 else W + slant + 40)
-        return [-slant - 40] + xs_ + [W + slant + 40]
-
-    def draw(t):
-        dv = dividers(t)
-        fr = Image.new("RGB", (W, H), (10, 10, 12))
-        pcrops = {}
-        for k in range(n):
-            xl, xr = dv[k], dv[k + 1]
-            if xr - xl < 4:
-                continue
-            tl_ = max(0.0, t - (ts[k] - 0.2))
-            z = 1.0 + 0.10 * cl(tl_ / 5.0)
-            im = imgs[k]
-            cw_, ch_ = W / (z * 1.25) * 1.25 / 1.25, H / z
-            # crop window of the zoomed image (cover), slowly drifting
-            vw, vh = im.width / (1.25 * z), im.height / (1.25 * z)
-            # the crop is positioned so the SUBJECT (animal / person / object) sits in the middle of its own panel, never under a divider
-            pcx = (W * k / n + W * (k + 1) / n) / 2
-            ox = subj[k][0] * im.width - pcx / W * vw + (0.02 * im.width) * (cl(tl_ / 6.0) - 0.5) * (1 if k % 2 == 0 else -1)
-            ox = min(max(0.0, ox), im.width - vw)
-            oy = min(max(0.0, subj[k][1] * im.height - 0.46 * vh), im.height - vh)
-            crop = im.crop((int(ox), int(oy), int(ox + vw), int(oy + vh))).resize((W, H), Image.BILINEAR)
-            if vs:
-                crop = vs_grade(crop, k)
-            pcrops[k] = crop
-            m = Image.new("L", (W, H), 0)
-            ImageDraw.Draw(m).polygon([(xl + slant, 0), (xr + slant, 0), (xr - slant, H), (xl - slant, H)], fill=255)
-            if k == 0:
-                ImageDraw.Draw(m).polygon([(-10, 0), (xr + slant, 0), (xr - slant, H), (-10, H)], fill=255)
-            if k == n - 1:
-                ImageDraw.Draw(m).polygon([(xl + slant, 0), (W + 10, 0), (W + 10, H), (xl - slant, H)], fill=255)
-            fr.paste(crop, (0, 0), m)
-        d = ImageDraw.Draw(fr)
-        for k in range(1, n):  # white divider line
-            if dv[k] < W + slant:
-                d.line([(dv[k] + slant, 0), (dv[k] - slant, H)], fill=(255, 255, 255), width=5)
-        a = np.asarray(fr, np.float32)  # cinematic vignette + slight darkening
-        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-        vg = 1.0 - 0.45 * (((xx - W / 2) / (W / 2)) ** 2 + ((yy - H / 2) / (H / 2)) ** 2) / 2
-        fr = Image.fromarray(np.clip(a * (0.9 * vg)[..., None], 0, 255).astype(np.uint8)).convert("RGBA")
-        dv = dividers(t)
-        for k in range(0 if vs else n):
-            q = t - (ts[k] + 0.2)
-            if q < 0:
-                continue
-            pw = max(120.0, min(dv[k + 1], W) - max(dv[k], 0) - 2 * slant * 0.6)  # visible width of this panel
-            cs = min(0.72, (pw - 30) / cards[k].width)
-            cx = (max(dv[k], 0) + min(dv[k + 1], W)) / 2
-            cx = min(max(cx, cards[k].width / 2 * cs + 8), W - cards[k].width / 2 * cs - 8)
-            top_ = subj[k][1] > 0.56  # subject sits low in its picture -> the label card goes to the top, otherwise to the bottom (never over the face/body)
-            cyk = (95 - lerp(40, 0, e_out(q / 0.4))) if top_ else (H - 95 + lerp(40, 0, e_out(q / 0.4)))
-            put(fr, cards[k], cx, cyk, cs * (0.9 + 0.1 * e_back(q / 0.5)), cl(q * 5))
-        if vs:
-            for k in range(n):
-                q = t - (ts[k] + 0.2)
-                if q < 0:
-                    continue
-                lab_ = vs_labs[k]
-                lx = (lab_.width / 2 + 56) if k == 0 else (W - lab_.width / 2 - 56)
-                put(fr, lab_, lx + (1 - e_out(q / 0.45)) * (-160 if k == 0 else 160), H - 78 - lab_.height / 2, 1.0, cl(q * 5))
-                qz = t - (ts[k] + 0.95)
-                if qz > 0 and k in pcrops:  # magnifier circle: the same picture, zoomed on a detail
-                    d_ = 250
-                    pcx = (W * k / n + W * (k + 1) / n) / 2
-                    pcy = H * 0.50
-                    r_ = 70
-                    zc = pcrops[k].crop((int(pcx - r_), int(pcy - r_), int(pcx + r_), int(pcy + r_))).resize((d_, d_), Image.BICUBIC)
-                    circ = Image.new("RGBA", (d_ + 24, d_ + 24), (0, 0, 0, 0))
-                    glow = Image.new("RGBA", circ.size, (230, 30, 40, 0))
-                    ga = Image.new("L", circ.size, 0)
-                    ImageDraw.Draw(ga).ellipse([2, 2, d_ + 21, d_ + 21], fill=210)
-                    glow.putalpha(ga.filter(ImageFilter.GaussianBlur(7)))
-                    circ.alpha_composite(glow)
-                    ring = Image.new("RGBA", (d_ + 10, d_ + 10), (0, 0, 0, 0))
-                    ImageDraw.Draw(ring).ellipse([0, 0, d_ + 9, d_ + 9], fill=(255, 236, 225, 255))
-                    circ.alpha_composite(ring, (7, 7))
-                    zc = zc.convert("RGBA")
-                    zc.putalpha(rounded_mask((d_, d_), d_ // 2))
-                    circ.alpha_composite(zc, (12, 12))
-                    put(fr, circ, pcx, pcy, 0.3 + 0.7 * e_back(qz / 0.5), cl(qz * 4))
-        return fr.convert("RGB")
-    return draw
-
-
-def vs_grade(crop, k):
-    """Right panel = the OLD thing: black & white, dark red wash; left panel = the NEW thing: slightly vivid."""
-    if k == 0:
-        return ImageEnhance.Color(crop).enhance(1.12)
-    g = ImageOps.colorize(ImageOps.grayscale(crop), black=(6, 0, 2), mid=(104, 60, 62), white=(236, 226, 226))
-    wash = Image.new("RGB", g.size, (205, 8, 22))
-    mask = Image.linear_gradient("L").resize(g.size).point(lambda v: int(35 + v * 0.35))  # red grows towards the bottom
-    return Image.composite(wash, g, mask)
-
-
 # --------------------------------------------------------------------------- 3D terrain map (distance / "from one place to another")
 def fnoise(w, h, seed, octaves=5):
     np = _np()
@@ -11207,7 +8171,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         ang -= 180  # always readable, never upside down
     elif ang < -90:
         ang += 180
-    ktxt_sp = quick_text(ktxt, 72, (255, 255, 255), stroke=7, stroke_fill=(25, 25, 25), role="label")
+    ktxt_sp = quick_text(ktxt, 46, (255, 255, 255), stroke=5, stroke_fill=(25, 25, 25), role="label")  # reference "15 km away": small white text along the arrow, never bigger than the place names
     ktxt_sp = ktxt_sp.rotate(-ang, expand=True, resample=Image.BICUBIC)
     nx, ny = -(arc[mid_i + 2][1] - arc[mid_i - 2][1]), (arc[mid_i + 2][0] - arc[mid_i - 2][0])
     nn = math.hypot(nx, ny) or 1
@@ -11317,7 +8281,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
                     pass
         if NP == 2 and t > t_text:  # distance is written only when exactly two places were named
             x, y = sp(*kpos)
-            put(fr, ktxt_sp, x, y, max(0.7, min(1.4, k * 1.1)) * (0.9 + 0.1 * e_out(cl((t - t_text) / 0.4))), cl((t - t_text) * 4))
+            put(fr, ktxt_sp, x, y, max(0.7, min(1.0, k * 0.8)) * (0.9 + 0.1 * e_out(cl((t - t_text) / 0.4))), cl((t - t_text) * 4))
         return fr.convert("RGB")
     return draw
 
@@ -11634,50 +8598,6 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
 LAYER_COLS = [(255, 196, 60), (255, 130, 50), (230, 70, 60), (170, 40, 110), (90, 40, 140)]
 
 
-def make_layers_draw(sc, dur, speech_dur, pal, events):
-    layers = sc["layers"]
-    n = len(layers)
-    base = bg_base(tuple(pal["top"]), tuple(pal["bottom"]))
-    bubbles = _bubbles()
-    head = head_sprite(sc["headline_hi"], pal) if sc.get("headline_hi") else None
-    top, bh = 110, min(84, 400 // n)
-    cx = 360
-    t_i = [0.5 + i * max(0.7, (speech_dur * 0.75) / n) for i in range(n)]
-    for t in t_i:
-        events.append((t, "pop", 0.7))
-    lab = [text_layer(l["label_hi"], load_font(46, "head"), fill=tuple(pal["ink"]), align="left") for l in layers]
-    det = [text_layer(l["detail_hi"], load_font(34, "label"), fill=tuple(pal["accent"]), stroke=4, stroke_fill=(255, 255, 255), align="left") if l["detail_hi"] else None for l in layers]
-    arrow = sym_arrow(pal, 64).rotate(-90, expand=True)
-
-    def draw(t):
-        fr = base.copy()
-        _draw_bubbles(fr, bubbles, t)
-        if head is not None:
-            put(fr, head, W / 2, 62, 1.0, cl(t * 2.5))
-        d = ImageDraw.Draw(fr)
-        for i in range(n):
-            q = t - t_i[i]
-            if q < 0:
-                continue
-            w = 560 - i * 70
-            off = lerp(-700, 0, e_out(q / 0.5))
-            y0 = top + i * (bh + 6)
-            col = LAYER_COLS[i % 5] if n > 1 else LAYER_COLS[0]
-            d.rounded_rectangle([cx - w / 2 + off, y0, cx + w / 2 + off, y0 + bh], 22, fill=(255, 255, 255))
-            d.rounded_rectangle([cx - w / 2 + 5 + off, y0 + 5, cx + w / 2 - 5 + off, y0 + bh - 5], 18, fill=col)
-            d.ellipse([cx - 14 + off, y0 + bh / 2 - 14, cx + 14 + off, y0 + bh / 2 + 14], fill=(255, 255, 255))
-            a = cl(q * 3)
-            put(fr, lab[i], 760 + lab[i].width / 2 + (1 - a) * 80, y0 + bh / 2 - (14 if det[i] else 0), 1.0, a)
-            if det[i] is not None:
-                put(fr, det[i], 760 + det[i].width / 2 + (1 - a) * 80, y0 + bh / 2 + 26, 1.0, a)
-        k = max(0, sum(1 for x in t_i if t >= x) - 1)
-        put(fr, arrow, 90, top + k * (bh + 6) + bh / 2 + 6 * math.sin(t * 5), 1.0, cl(t - t_i[0]))
-        return fr
-    return draw
-
-
-
-
 # --------------------------------------------------------------------------- SKETCH scenes: animated line-art diagrams that EXPLAIN (parchment / dark paper, drawn on stroke by stroke)
 SK_WU, SK_HU = 100.0, 56.25
 SK_THEMES = {
@@ -11686,304 +8606,8 @@ SK_THEMES = {
 }
 
 
-def sk_theme(sc):
-    dark = sc.get("tone") == "suspense" or sc.get("grade") in ("dark", "dread", "bwred", "redwash")
-    return SK_THEMES["dark" if dark else "paper"]
-
-
-def sk_bg(th):
-    key = ("skbg", th["dark"])
-    if key in _C:
-        return _C[key]
-    np = _np()
-    yy = np.linspace(0, 1, H, dtype=np.float32)[:, None, None]
-    top, bot = np.array(th["top"], dtype=np.float32), np.array(th["bot"], dtype=np.float32)
-    a = top * (1 - yy) + bot * yy
-    a = np.broadcast_to(a, (H, W, 3)).copy()
-    rng = np.random.default_rng(11)
-    blot = Image.fromarray((rng.random((9, 16)) * 255).astype(np.uint8)).resize((W, H), Image.BICUBIC)
-    a += ((np.asarray(blot, dtype=np.float32) / 255.0 - 0.5) * (17 if not th["dark"] else 10))[..., None]
-    a *= vig_mask() * (0.55 if th["dark"] else 0.32) + (0.45 if th["dark"] else 0.68)
-    img = Image.fromarray(np.clip(a, 0, 255).astype(np.uint8)).convert("RGBA")
-    rays = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-    rd = ImageDraw.Draw(rays)
-    cx, cy = W * 0.70, H * 0.50
-    for k in range(36):
-        ang = k * math.pi / 18
-        rd.line([(cx, cy), (cx + math.cos(ang) * W, cy + math.sin(ang) * W)], fill=tuple(th["rays"]) + (26,), width=2)
-    img.alpha_composite(rays)
-    _C[key] = img.convert("RGB")
-    return _C[key]
-
-
-def sk_points(pr):
-    t = pr["t"]
-    if t in ("line", "arrow"):
-        pts = [tuple(p) for p in pr["p"]]
-        if t == "arrow" and len(pts) >= 2:
-            (x0, y0), (x1, y1) = pts[-2], pts[-1]
-            ang = math.atan2(y1 - y0, x1 - x0)
-            hl = 2.2
-            pts += [(x1 - hl * math.cos(ang - 0.45), y1 - hl * math.sin(ang - 0.45)), (x1, y1), (x1 - hl * math.cos(ang + 0.45), y1 - hl * math.sin(ang + 0.45))]
-        return pts
-    if t == "rect":
-        x0, y0, x1, y1 = pr["b"]
-        return [(x0, y0), (x1, y0), (x1, y1), (x0, y1), (x0, y0)]
-    if t == "circle":
-        cx, cy = pr["c"]
-        r = pr["r"]
-        return [(cx + r * math.cos(2 * math.pi * k / 56), cy + r * math.sin(2 * math.pi * k / 56)) for k in range(57)]
-    if t == "arc":
-        cx, cy = pr["c"]
-        r, a0, a1 = pr["r"], math.radians(pr["a0"]), math.radians(pr["a1"])
-        n = max(8, int(abs(a1 - a0) / 0.12))
-        return [(cx + r * math.cos(a0 + (a1 - a0) * k / n), cy + r * math.sin(a0 + (a1 - a0) * k / n)) for k in range(n + 1)]
-    if t == "poly":
-        pts = [tuple(p) for p in pr["p"]]
-        return pts + pts[:1]
-    return []
-
-
-def clean_prims(raw):
-    """Gemini's drawing instructions -> safe, bounded list of strokes (coordinates clamped to the 100 x 56.25 canvas)."""
-    if isinstance(raw, dict):
-        raw = raw.get("strokes") or raw.get("shapes") or raw.get("items") or []
-    out = []
-
-    def num(v, lo, hi):
-        return max(lo, min(hi, float(v)))
-
-    def pt(p):
-        return [num(p[0], 0, SK_WU), num(p[1], 0, SK_HU)]
-
-    for pr in (raw or [])[:48]:
-        try:
-            t = str(pr.get("t") or "").lower()
-            col = pr.get("col") if pr.get("col") in ("ink", "accent") else "ink"
-            fill = pr.get("fill") if pr.get("fill") in ("ink", "accent", "soft") else ""
-            w = num(pr.get("w", 2), 1, 4)
-            if t in ("line", "arrow", "poly"):
-                pts = [pt(p) for p in pr.get("p", [])][:24]
-                if len(pts) >= 2:
-                    out.append({"t": t, "p": pts, "col": col, "w": w, "fill": fill if t == "poly" else ""})
-            elif t == "rect":
-                b = [num(v, 0, SK_WU) for v in pr.get("b", [])][:4]
-                if len(b) == 4 and b[2] > b[0] and b[3] > b[1]:
-                    out.append({"t": t, "b": b, "col": col, "w": w, "fill": fill})
-            elif t == "circle":
-                c = pt(pr.get("c"))
-                out.append({"t": t, "c": c, "r": num(pr.get("r"), 0.6, 30), "col": col, "w": w, "fill": fill})
-            elif t == "arc":
-                out.append({"t": t, "c": pt(pr.get("c")), "r": num(pr.get("r"), 0.6, 40), "a0": num(pr.get("a0", 0), -720, 720), "a1": num(pr.get("a1", 180), -720, 720), "col": col, "w": w, "fill": ""})
-            elif t == "text":
-                s_ = clean_short(pr.get("s"), 26)
-                if s_:
-                    out.append({"t": "text", "p": pt(pr.get("p")), "s": s_, "size": num(pr.get("size", 3), 1.8, 5), "col": col})
-        except Exception:  # noqa
-            continue
-    return out
-
-
-def sketch_prompt(sc, topic):
-    return f"""You are an illustrator for a premium explainer film. Draw ONE clear teaching diagram as animated line-art (like an engineer's sketch / museum diagram), to be drawn stroke by stroke while the narrator speaks.
-VIDEO TOPIC: {topic}
-WHAT TO DRAW: {sc.get('sketch_brief_en')}
-NARRATION (Hindi): {sc['narration_hi']}
-Canvas: x from 0 to 100, y from 0 to 56.25 (y grows downward). The LEFT 38 units are reserved for the headline text: draw ONLY inside x 40..97 and y 5..47 (the bottom strip is for the timeline).
-Return ONLY JSON: {{"strokes": [ ... ]}} with 16-34 strokes in the order they should be drawn (big shapes first, details next, labels last). Stroke types:
- {{"t":"line","p":[[x,y],[x,y],...],"w":2,"col":"ink"}}   polyline (2-12 points)
- {{"t":"arrow","p":[[x,y],[x,y]],"w":2,"col":"accent"}}   arrow showing movement / cause
- {{"t":"circle","c":[x,y],"r":8,"w":2,"col":"ink","fill":"soft"}}   (fill optional: soft, ink or accent)
- {{"t":"arc","c":[x,y],"r":10,"a0":0,"a1":180,"w":2,"col":"ink"}}   degrees
- {{"t":"rect","b":[x0,y0,x1,y1],"w":2,"col":"ink","fill":"soft"}}
- {{"t":"poly","p":[[x,y],...],"w":2,"col":"ink","fill":"soft"}}   closed shape
- {{"t":"text","p":[x,y],"s":"short label","size":3,"col":"ink"}}   at most 4 labels, each at most 3 words, in simple Hindi (Devanagari) or a proper noun; p is the CENTRE of the label
-Rules: the drawing must show the exact idea of the narration (what collides with what, what flows where, which part is inside which); use "accent" colour only for the key moving / changing element and its arrow; use real proportions (a small moon next to a bigger planet), keep everything inside the allowed area, no overlapping labels, simple clean shapes a child understands."""
-
-
-def build_sketches(scenes, topic=""):
-    """Ask Gemini for the line drawing of every sketch scene; a scene whose drawing fails becomes an ordinary picture scene."""
-    n_ok = 0
-    for sc in scenes:
-        if sc.get("type") != "sketch":
-            continue
-        prims = None
-        if GEMINI_KEY:
-            try:
-                prims = clean_prims(gemini_json(sketch_prompt(sc, topic), 0.5))
-            except Exception as e:  # noqa
-                log("sketch drawing failed:", str(e)[:100])
-        if prims and len(prims) >= 6:
-            sc["strokes"] = prims
-            n_ok += 1
-            continue
-        sc["type"] = "photo"
-        sc["shots"] = [{"text_hi": sc["narration_hi"], "prompt_en": clean_short(sc.get("sketch_brief_en"), 300) or FALLBACK_SCENE, "label_hi": "",
-                        "query_en": "", "entity_en": "", "motion": False, "clip_en": "", "popup_en": "", "ov": None, "fx": None, "fy": None}]
-    log(f"sketch scenes drawn: {n_ok}")
-
-
-def _sk_stroke_mask(pts, w_px, frac, bbox):
-    """Anti-aliased mask (drawn at 2x) of the first `frac` of a polyline; returns (mask_L_1x, (x0, y0))."""
-    x0, y0, x1, y1 = bbox
-    mw, mh = max(2, x1 - x0), max(2, y1 - y0)
-    big = Image.new("L", (mw * 2, mh * 2), 0)
-    d = ImageDraw.Draw(big)
-    segs, tot = [], 0.0
-    for a, b in zip(pts, pts[1:]):
-        l = math.hypot(b[0] - a[0], b[1] - a[1])
-        segs.append((a, b, l))
-        tot += l
-    target, acc, drawn = tot * frac, 0.0, [pts[0]]
-    for a, b, l in segs:
-        if acc + l <= target:
-            drawn.append(b)
-            acc += l
-        else:
-            r = (target - acc) / max(l, 1e-6)
-            drawn.append((a[0] + (b[0] - a[0]) * r, a[1] + (b[1] - a[1]) * r))
-            break
-    pp = [((x - x0) * 2, (y - y0) * 2) for x, y in drawn]
-    if len(pp) >= 2:
-        d.line(pp, fill=255, width=int(w_px * 2), joint="curve")
-        r_ = w_px
-        for x, y in (pp[0], pp[-1]):
-            d.ellipse([x - r_, y - r_, x + r_, y + r_], fill=255)
-    return big.resize((mw, mh), Image.LANCZOS), (x0, y0), drawn[-1]
-
-
-def make_sketch_draw(sc, dur, sp, pal, events):
-    th = sk_theme(sc)
-    ux, uy = W / SK_WU, H / SK_HU
-    strokes = sc["strokes"]
-    # timing: strokes are drawn one after another (longer strokes take longer); labels fade in when reached
-    t_a, t_b = 0.35, max(1.5, min(dur - 0.8, sp * 0.86))
-    lens = []
-    for pr in strokes:
-        if pr["t"] == "text":
-            lens.append(6.0)
-        else:
-            pts = sk_points(pr)
-            lens.append(max(4.0, sum(math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))))
-    tot = sum(lens)
-    plan, acc = [], 0.0
-    for pr, l in zip(strokes, lens):
-        s0 = t_a + (t_b - t_a) * acc / tot
-        acc += l
-        plan.append((s0, t_a + (t_b - t_a) * acc / tot))
-    px = []
-    for pr in strokes:
-        if pr["t"] == "text":
-            px.append(None)
-            continue
-        pts = [(x * ux, y * uy) for x, y in sk_points(pr)]
-        xs, ys = [p[0] for p in pts], [p[1] for p in pts]
-        wpx = pr["w"] * 1.5
-        bb = (max(0, int(min(xs) - wpx - 6)), max(0, int(min(ys) - wpx - 6)), min(W, int(max(xs) + wpx + 6)), min(H, int(max(ys) + wpx + 6)))
-        px.append((pts, wpx, bb))
-    ink, acc_c, soft = tuple(th["ink"]), tuple(th["accent"]), tuple(th["soft"])
-    cols = {"ink": ink, "accent": acc_c, "soft": soft}
-    # headline: words appear one by one at the left, like kinetic type
-    hw = (sc.get("headline_hi") or "").split()
-    big_f = load_font(64, "head")
-    head_sp = []
-    for k in range(1, len(hw) + 1):
-        head_sp.append(text_layer(" ".join(hw[:k]), big_f, fill=ink, max_w=int(W * 0.34), align="left", stroke=0,
-                                  shadow=None if not th["dark"] else (0, 3, 6, 0.7)))
-    h_t = [0.25 + (max(0.8, sp * 0.5)) * k / max(1, len(hw)) for k in range(len(hw))]
-    year = (sc.get("year_hi") or "").strip()
-    year_sp = text_layer(year, load_font(30, "title"), fill=ink, stroke=0) if year else None
-    label_sp = {}
-    for i, pr in enumerate(strokes):
-        if pr["t"] == "text":
-            label_sp[i] = text_layer(pr["s"], load_font(int(pr["size"] * 12), "sub"), fill=cols[pr["col"]], stroke=2 if th["dark"] else 0, stroke_fill=(0, 0, 0))
-    state = {"k": 0, "layer": Image.new("RGBA", (W, H), (0, 0, 0, 0))}
-
-    def commit(i):
-        pr = strokes[i]
-        if pr["t"] == "text":
-            return
-        pts, wpx, bb = px[i]
-        if pr.get("fill") and pr["t"] in ("poly", "rect", "circle"):
-            fl = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-            fd = ImageDraw.Draw(fl)
-            c_ = cols[pr["fill"]] + (255 if pr["fill"] != "soft" else 235,)
-            if pr["t"] == "circle":
-                fd.polygon(pts, fill=c_)
-            else:
-                fd.polygon(pts, fill=c_)
-            state["layer"].alpha_composite(fl.crop(bb), (bb[0], bb[1]))
-        m, (x0, y0), _tip = _sk_stroke_mask(pts, wpx, 1.0, bb)
-        col = Image.new("RGBA", m.size, cols[pr["col"]] + (255,))
-        col.putalpha(m)
-        state["layer"].alpha_composite(col, (x0, y0))
-
-    def draw(t):
-        fr = sk_bg(th).copy()
-        done = sum(1 for (a, b) in plan if b <= t)
-        if done < state["k"]:
-            state["k"], state["layer"] = 0, Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        while state["k"] < done:
-            commit(state["k"])
-            state["k"] += 1
-        # ground shadow so the drawing lifts off the paper
-        fr.paste(state["layer"], (0, 0), state["layer"])
-        tip = None
-        for i, (a, b) in enumerate(plan):
-            if a <= t < b and strokes[i]["t"] != "text":
-                frac = e_io(cl((t - a) / max(1e-3, b - a)))
-                pts, wpx, bb = px[i]
-                m, (x0, y0), tip = _sk_stroke_mask(pts, wpx, max(0.001, frac), bb)
-                col = Image.new("RGB", m.size, cols[strokes[i]["col"]])
-                fr.paste(col, (x0, y0), m)
-        if tip is not None:
-            r_ = 7
-            ImageDraw.Draw(fr).ellipse([tip[0] - r_, tip[1] - r_, tip[0] + r_, tip[1] + r_], outline=acc_c, width=3)
-        for i, spr in label_sp.items():
-            a, b = plan[i]
-            if t >= a:
-                al = e_out(cl((t - a) / 0.35))
-                pr = strokes[i]
-                put(fr, spr, pr["p"][0] * ux, pr["p"][1] * uy + (1 - al) * 8, 1.0, al)
-        for k, spr in enumerate(head_sp):
-            if t >= h_t[k]:
-                al = e_out(cl((t - h_t[k]) / 0.3))
-                if k == len(head_sp) - 1 or t < h_t[min(k + 1, len(h_t) - 1)]:
-                    put(fr, spr, W * 0.045 + spr.width / 2 + (1 - al) * -14, H * 0.42, 1.0, al)
-        if head_sp and t > h_t[-1] + 0.2:
-            wb = min(W * 0.30, W * 0.30 * e_out(cl((t - h_t[-1] - 0.2) / 0.6)))
-            ImageDraw.Draw(fr).rounded_rectangle([W * 0.05, H * 0.42 + head_sp[-1].height / 2 + 8, W * 0.05 + wb, H * 0.42 + head_sp[-1].height / 2 + 16], 4, fill=acc_c)
-        d_ = ImageDraw.Draw(fr)
-        for (cx_, cy_, sx, sy) in ((26, 20, 1, 1), (W - 26, 20, -1, 1), (26, H - 20, 1, -1), (W - 26, H - 20, -1, -1)):  # HUD corner ticks
-            d_.line([(cx_, cy_), (cx_ + 22 * sx, cy_)], fill=ink, width=2)
-            d_.line([(cx_, cy_), (cx_, cy_ + 22 * sy)], fill=ink, width=2)
-        y_l = H - 30
-        d_.line([(W * 0.22, y_l), (W * 0.92, y_l)], fill=ink, width=1)
-        d_.line([(W * 0.22, y_l), (W * 0.22 + (W * 0.70) * cl(t / max(0.1, dur)), y_l)], fill=acc_c, width=3)
-        for k in range(0, 15):
-            xx = W * 0.22 + W * 0.70 * k / 14
-            d_.line([(xx, y_l - 4), (xx, y_l + 4)], fill=ink, width=1)
-        if year_sp is not None:
-            put(fr, year_sp, 40 + year_sp.width / 2, H - 52, 1.0, e_out(cl(t / 0.5)))
-        return fr
-
-    return draw
-
-
 def _make_draw(sc, dur, sp, pal, ctx, events):
     typ = sc["type"]
-    if typ == "sketch":
-        return make_sketch_draw(sc, dur, sp, pal, events)
-    if typ == "multi":
-        return make_multi_draw(sc, dur, sp, pal, events)
-    if typ in ("merge", "split", "steps", "compare"):
-        return make_explainer(sc, dur, pal, events)
-    if typ == "counter":
-        return make_counter_draw(sc, dur, sp, pal, events)
-    if typ == "bars":
-        return make_bars_draw(sc, dur, sp, pal, events)
-    if typ == "kinetic":
-        return make_kinetic_draw(sc, dur, sp, ctx, events, pal)
     if typ == "map":
         return make_map_draw(sc, dur, sp, pal, events)
     return make_photo_draw(sc, dur, sp, ctx, events, pal)
@@ -12149,28 +8773,9 @@ def grade_photo(im):
     return im
 
 
-def fit_cover(path, size=(W, H)):
-    return ImageOps.fit(Image.open(path).convert("RGB"), size, Image.LANCZOS)
-
-
 def bloom(im, strength=0.35, radius=26):
     g = ImageEnhance.Brightness(im.filter(ImageFilter.GaussianBlur(radius))).enhance(strength)
     return ImageChops.screen(im, g)
-
-
-def split_lines(text):
-    w = text.split()
-    n = len(w)
-    if n <= 1:
-        return [text]
-    if n == 2:
-        return w
-    if n == 3:
-        return [w[0], " ".join(w[1:])]
-    if n <= 5:
-        return [" ".join(w[:n // 2]), " ".join(w[n // 2:])]
-    a, b = n // 3, 2 * n // 3
-    return [" ".join(w[:a]), " ".join(w[a:b]), " ".join(w[b:])]
 
 
 def ov_of(size):
@@ -12372,28 +8977,6 @@ def make_thumb_hero(img_path, text, sub, badge, out, side="left"):
         cv.alpha_composite(bp, (30, 28))
     final = cv.convert("RGB").filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3))
     final.save(out, "JPEG", quality=93)
-
-
-def make_thumb_bottom(img_path, text, out):
-    """Full picture, subject clear in the upper part, big headline on a dark gradient at the bottom."""
-    np = _np()
-    base = Image.open(img_path).convert("RGB")
-    pic = bloom(grade_photo(crop_to(base, (W, H), subject_center(base)[0])), 0.3, 24).convert("RGBA")
-    ys = np.linspace(0, 1, H)[:, None]
-    a = np.clip((ys - 0.48) / 0.52, 0, 1) ** 1.2 * 238
-    shade = np.zeros((H, W, 4), np.uint8)
-    shade[..., 0:3] = (4, 6, 24)
-    shade[..., 3] = np.broadcast_to(a, (H, W)).astype(np.uint8)
-    pic.alpha_composite(Image.fromarray(shade))
-    shuffle_thumb_font()
-    layers, size = title_layers([text], W * 0.94, H * 0.40, start=170, text=text)
-    ov = ov_of(size)
-    total_h = sum(l.height for l, _ in layers) - ov * (len(layers) - 1)
-    y = max(0, H - total_h - 22)
-    for lay, key in layers:
-        pic.alpha_composite(lay, (max(0, (W - lay.width) // 2), y))
-        y += lay.height - ov
-    pic.convert("RGB").filter(ImageFilter.UnsharpMask(radius=2, percent=80, threshold=3)).save(out, "JPEG", quality=93)
 
 
 def make_thumb_split(img_a, img_b, text, left, right, out):
@@ -13341,63 +9924,9 @@ def make_visuals(scenes, imgdir):
                     failed += 1
                 else:
                     raise RuntimeError("no picture could be made for the first scene. Image problems: " + fail_summary())
-        elif sc["type"] == "kinetic":
-            requested += 1
-            p = imgdir / f"{i:03d}_k.png"
-            if gen_image(sc["image_prompt_en"], p, "photo"):
-                sc["image"] = p
-                prev_img = p
-            elif prev_img:
-                sc["image"] = prev_img
-                failed += 1
-            else:
-                raise RuntimeError("no picture could be made. Image problems: " + fail_summary())
-        elif sc["type"] in NEED_ITEMS:
-            for k, it in enumerate(sc["items"]):
-                requested += 1
-                p = imgdir / f"{i:03d}_{k}.png"
-                if gen_image(it["prompt_en"], p, "photo" if sc["type"] == "multi" else "card", query=it.get("query_en", ""), entity=it.get("entity_en", "")):
-                    it["image"] = p
-                else:
-                    it["image"] = None
-                    failed += 1
         if i % 4 == 0:
             log(f"visuals scene {i + 1}/{len(scenes)} (failed pictures so far: {failed}/{requested})")
     return failed, requested
-
-
-def strip_everything(scenes, topic_en="", convert=True):
-    """CLEAN SLATE (PLAIN_MODE): remove every editing technique, overlay, label, sticker, map, split screen, transition and camera trick.
-    What is left: one picture or clip per spoken sentence, shown for exactly that sentence, plain cuts, voice and music."""
-    KEEP = {"text_hi", "prompt_en", "query_en", "entity_en", "clip_en", "motion", "image", "img", "path", "file", "img2"}
-    for sc in scenes:
-        if not convert and sc.get("type") != "photo":
-            continue
-        for k in ("items", "beats", "t151"):
-            sc[k] = []
-        for k in ("kw", "vox", "t151_ctx", "headline_hi", "pills"):
-            sc[k] = None
-        for k in ("grade", "transition", "cam", "fx", "tech"):
-            sc.pop(k, None)
-        if convert and sc.get("type") != "photo":
-            sc["type"] = "photo"
-            sc["shots"] = [{"text_hi": sc["narration_hi"], "prompt_en": (sc.get("image_prompt_en") or topic_en or FALLBACK_SCENE)[:400], "query_en": ""}]
-        sc["shots"] = [{k: v for k, v in (sh or {}).items() if k in KEEP} for sh in sc.get("shots") or []]
-        for sh in sc["shots"]:
-            sh["trans"] = ""
-    try:
-        snap_to_sentences(scenes, topic_en)
-    except Exception as e:  # noqa
-        log("plain mode: sentence snap failed:", str(e)[:100])
-    for sc in scenes:
-        for n_, sh in enumerate(sc.get("shots") or []):
-            if n_ > 0:
-                sh["trans"] = random.choice(SLIDE_MIX)
-            for k in list(sh):
-                if k not in KEEP and k not in ("text_hi", "trans"):
-                    if k in ("kf", "tech", "cam", "trans", "label_hi", "popup_en", "bubble_hi", "place_hi", "title_hi", "year_hi", "note_hi", "mark_hi", "fx", "fx_x", "fx_y", "focus_x", "focus_y"):
-                        sh.pop(k, None)
-    log(f"PLAIN MODE: all techniques removed ({len(scenes)} scenes)")
 
 
 def pipeline():
@@ -13511,10 +10040,7 @@ def pipeline():
             except Exception as e:  # noqa
                 log("rescale failed, continuing:", e)
     story_context(topic_en, own_story, script)
-    build_sketches(scenes, topic_en)
     director_pass(scenes, topic_en + (("\nSTORY CONTEXT (keep EVERY picture inside it; relatives and neighbours are people of this culture, never animals or objects): " + STORY_CTX["text"]) if STORY_CTX["on"] else ""))
-    if PLAIN_MODE:
-        strip_everything(scenes, topic_en)
     try:  # same people / same village in every picture (true stories only)
         cast_build(topic_en, own_story, script)
         cast_plan(scenes, topic_en)
@@ -13760,35 +10286,12 @@ def selftest():
         {"type": "photo", "tone": "suspense", "headline_hi": "", "narration_hi": n1,
          "shots": shots([("क्या आप जानते हैं कि चाँद कैसे बना था?", "planet", (20, 30, 90), (120, 60, 160)),
                          ("यह कहानी बहुत हैरान करने वाली है, आगे जानेंगे", "moon", (10, 10, 40), (60, 20, 90))])},
-        {"type": "merge", "tone": "wonder", "headline_hi": "टक्कर से चाँद बना",
-         "items": items([("युवा पृथ्वी",) + P, ("थिया ग्रह",) + R, ("हमारा चाँद",) + M]),
-         "narration_hi": "लगभग साढ़े चार अरब साल पहले, पृथ्वी से एक मंगल जितना बड़ा ग्रह टकराया, और इसी टक्कर से हमारा चाँद बना"},
         {"type": "photo", "tone": "serious", "headline_hi": "", "narration_hi": n3,
          "items": [{"w": 1, "kind": "place", "text": "आसमान", "sub": "उस दौर का"}, {"w": 6, "kind": "year", "text": "४५० करोड़ साल पहले"},
                    {"w": 9, "kind": "bubble", "text": "कितना डरावना!"}, {"w": 12, "kind": "note", "sub": "नासा रिपोर्ट, 2019",
                     "text": "शुरुआती पृथ्वी पर हर तरफ पिघली हुई चट्टानों का समुद्र था और आसमान में धुआँ और राख भरी रहती थी। वैज्ञानिकों के अनुसार तब तापमान हज़ारों डिग्री तक पहुँच गया था।", "mark": "धुआँ राख"}],
          "shots": shots([("अब ज़रा सोचिए, उस समय आसमान कितना डरावना दिखता होगा।", "rock", (255, 120, 40), (120, 20, 10)),
                          ("हर तरफ आग और धुआँ ही धुआँ था", "planet", (90, 20, 10), (20, 5, 5))])},
-        {"type": "counter", "tone": "excited", "headline_hi": "पृथ्वी की उम्र",
-         "counter": {"from": 0.0, "to": 4.5, "decimals": 1, "unit_hi": "अरब साल पहले"},
-         "narration_hi": "पृथ्वी की उम्र लगभग साढ़े चार अरब साल मानी जाती है"},
-        {"type": "sketch", "tone": "calm", "headline_hi": "टक्कर से चाँद बना", "year_hi": "४५० करोड़ साल पहले", "grade": "natural",
-         "strokes": clean_prims([{"t": "circle", "c": [64, 28], "r": 12, "fill": "soft"}, {"t": "circle", "c": [46, 20], "r": 4.5, "col": "accent", "fill": "soft"},
-                                 {"t": "arrow", "p": [[50, 22], [58, 26]], "col": "accent"}, {"t": "arc", "c": [64, 28], "r": 16, "a0": 200, "a1": 330},
-                                 {"t": "line", "p": [[78, 18], [84, 22], [88, 16]]}, {"t": "poly", "p": [[74, 38], [82, 34], [88, 42], [78, 45]], "fill": "soft"},
-                                 {"t": "text", "p": [64, 44], "s": "युवा पृथ्वी"}, {"t": "text", "p": [46, 13], "s": "थिया", "col": "accent"}]),
-         "narration_hi": "लगभग साढ़े चार अरब साल पहले, एक छोटा ग्रह युवा पृथ्वी से टकराया, और उसके मलबे से हमारा चाँद बना"},
-        {"type": "split", "tone": "wonder", "headline_hi": "एक से दो हिस्से",
-         "items": items([("पुरानी पृथ्वी",) + P, ("पृथ्वी", "planet", (200, 255, 220), (100, 200, 160)), ("मलबा",) + R]),
-         "narration_hi": "इस टक्कर के बाद एक बड़ा गोला दो हिस्सों में बँट गया, एक हिस्सा पृथ्वी बना और दूसरा मलबा बना"},
-        {"type": "bars", "tone": "calm", "headline_hi": "आकार की तुलना",
-         "bars": [{"label_hi": "पृथ्वी", "value": 12742.0, "dec": 0, "unit_hi": "किमी"},
-                  {"label_hi": "चाँद", "value": 3474.0, "dec": 0, "unit_hi": "किमी"},
-                  {"label_hi": "मंगल", "value": 6779.0, "dec": 0, "unit_hi": "किमी"}],
-         "narration_hi": "देखिए, चाँद पृथ्वी के मुक़ाबले काफ़ी छोटा है, और मंगल इन दोनों के बीच में आता है"},
-        {"type": "steps", "tone": "calm", "headline_hi": "चाँद बनने के चरण",
-         "items": items([("टक्कर",) + R, ("मलबा",) + R, ("जुड़ना",) + M, ("चाँद",) + M]),
-         "narration_hi": "पहले टक्कर हुई, फिर मलबा बना, फिर वह धीरे धीरे जुड़ता गया और आख़िर में चाँद बन गया"},
         {"type": "map", "tone": "calm", "headline_hi": "सफ़र", "grade": "natural",
          "map": {"mode": "flat", "route": True, "pins": [{"label_hi": "अफ़्रीका", "lat": 5.0, "lon": 20.0}, {"label_hi": "भारत", "lat": 22.0, "lon": 79.0}]},
          "narration_hi": "यह सफ़र अफ़्रीका से शुरू हुआ और धीरे-धीरे भारत तक पहुँचा"},
@@ -13796,17 +10299,11 @@ def selftest():
          "map": {"mode": "terrain", "route": True, "pins": [{"label_hi": "शरीफपुरा गाँव", "lat": 27.40, "lon": 79.62}, {"label_hi": "बिरपुर गाँव", "lat": 27.28, "lon": 79.50}],
                  "regions": [{"label_hi": "फ़र्रुख़ाबाद", "lat": 27.45, "lon": 79.70}, {"label_hi": "मैनपुरी", "lat": 27.20, "lon": 79.35}]},
          "narration_hi": "शरीफपुरा गाँव से बिरपुर गाँव की दूरी बस पंद्रह किलोमीटर है और बीच में दोनों जिलों की सीमा पड़ती है"},
-        {"type": "kinetic", "tone": "excited", "keywords_hi": ["टक्कर", "मलबा", "चाँद!"], "headline_hi": "",
-         "image_prompt_en": "x", "image": art(t0 / "k.png", "rock", (255, 120, 40), (60, 10, 60), 1920),
-         "narration_hi": "याद रखिए, टक्कर से मलबा बना, और उसी मलबे से हमारा चाँद"},
-        {"type": "compare", "tone": "calm", "headline_hi": "पृथ्वी बनाम चाँद",
-         "items": items([("पृथ्वी", "planet", (200, 255, 220), (100, 200, 160)), ("चाँद",) + M]),
-         "narration_hi": "पृथ्वी पर हवा और पानी है, लेकिन चाँद पर न हवा है और न पानी"},
         {"type": "photo", "tone": "calm", "headline_hi": "", "narration_hi": n10,
          "shots": shots([("तो अब आप जान गए कि चाँद कैसे बना।", "moon", (10, 20, 60), (40, 40, 110)),
                          ("और यह कहानी आज भी आसमान में चमक रही है", "planet", (20, 30, 90), (60, 90, 160))])},
     ]
-    sc[2]["shots"][0]["kf"] = [{"w": 3, "fx": 0.3, "fy": 0.4, "z": 1.7}, {"w": 7, "fx": 0.7, "fy": 0.35, "z": 1.5}]
+    sc[1]["shots"][0]["kf"] = [{"w": 3, "fx": 0.3, "fy": 0.4, "z": 1.7}, {"w": 7, "fx": 0.7, "fy": 0.35, "z": 1.5}]
     body_en = ("Sumitra was confused briefly after her revival, and did not recognize people around. She did not say anything for about a day "
                "and then began to say that she was Shiva and that she lived in Dibiyapur where she was murdered by her in-laws.")
     ttl_en = "Claims of Reincarnation: An Empirical Study of Cases in India"
@@ -13866,9 +10363,6 @@ def selftest():
                                 {"w": 8, "kind": "feature", "text": "", "query_en": "lion", "features": feats_, "png_img": feat_st, "span": 6.0},
                                 {"w": 22, "kind": "year", "text": "उन्नीस सौ चौरासी"}],
                       "shots": shots([("गुजरात के अहमदाबाद में सुमित्रा का जन्म हुआ, शेर के तेज़ दाँत, मज़बूत पंजे और घना अयाल उसकी पहचान हैं, यह बात सन उन्नीस सौ चौरासी की है", "rock", (150, 110, 70), (40, 20, 10))])})
-    ov_scenes.append({"type": "multi", "vs": True, "tone": "serious", "headline_hi": "", "narration_hi": "नया तरीका बिल्कुल अलग है और पुराना तरीका बिल्कुल अलग था",
-                      "items": [{"label_hi": "नया तरीका", "prompt_en": "x", "image": art(t0 / "vs_a.png", "rock", (150, 110, 70), (60, 30, 20), 1920), "t": 0.0},
-                                {"label_hi": "पुराना तरीका", "prompt_en": "x", "image": art(t0 / "vs_b.png", "planet", (90, 120, 150), (20, 30, 50), 1920), "t": 1.6}]})
     ba_path = t0 / "ba_after.png"
     art(ba_path, "planet", (60, 150, 90), (10, 50, 30), 1920)
     TN = "यह शेर तीस मीटर ऊँची चट्टान पर खड़ा था, आखिर ऐसा क्यों, ध्यान से देखिए, यह सबसे बड़ा राज़ है"
@@ -13916,17 +10410,6 @@ def selftest():
 
     voice = make_voice(sc, t0 / "voice", synth=fake_tts)
     total = ffprobe_dur(voice)
-    if PLAIN_MODE:
-        strip_everything(sc, "test", convert=False)
-    if os.environ.get("SELFTEST_VOX"):
-        globals()["gemini_json"] = lambda *a_, **k_: {"scenes": []}
-        log("selftest vox: rules", {k: v for k, v in det_techniques(sc).items() if v})
-        techniques_coverage(sc, "test")
-        log("selftest vox scenes:", assign_vox(sc))
-        dedupe_texts(sc)
-        calm_pass(sc)
-        for i_, s_ in enumerate(sc):
-            log(i_, s_.get("type"), "vox" if s_.get("vox") is not None else "-", [(x["w"], x["kind"]) for x in s_.get("items", []) if isinstance(x, dict) and x.get("kind") in NEW_KINDS], [k["text"] for k in s_.get("kw", [])])
     silent, ev = build_video(sc, t0 / "build", pal)
     music = t0 / "music.wav"
     mood = os.environ.get("MOOD", random.choice(MOOD_NAMES))
