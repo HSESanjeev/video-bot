@@ -1,4 +1,7 @@
 {
  "layout": "bottom",
- "accent": 4
+ "accent": 4,
+ "styles": [
+  "banner_zoom"
+ ]
 }

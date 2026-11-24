@@ -811,6 +811,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-24T00:34:41+00:00",
+   "topic_en": "Wilhelm Röntgen's Accidental Discovery of X-Rays (Würzburg, Germany, 1895)",
+   "title_hi": "विल्हेम रॉन्टजन: वो खोज जिसने दुनिया बदल दी",
+   "category": "story",
+   "style": "sawaal",
+   "theme": "sunrise",
+   "mood": "mystery",
+   "seconds": 137,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
