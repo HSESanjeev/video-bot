@@ -1191,7 +1191,7 @@ def parse_new_item(kind, it, w):
         base["text"] = clean_short(it.get("text_hi"), 18) or "BREAKING NEWS"
         return base
     if kind == "glow":
-        base["tone"] = str(it.get("tone") or "holy") if str(it.get("tone") or "holy") in ("holy", "danger", "cold") else "holy"
+        base["tone"] = str(it.get("tone") or "holy") if str(it.get("tone") or "holy") in ("holy", "danger", "cold", "rim") else "holy"
         return base
     if kind == "desk":
         return base
@@ -1455,7 +1455,7 @@ Find every moment where one of these on-screen techniques fits what is REALLY be
 - "sidelabel": the narrator contrasts two states (old/new, before/after, then/now): two short labels (1-2 words each) in the lower corners. {{"w":..,"kind":"sidelabel","a_hi":"new / after state","b_hi":"old / before state"}}
 - "bigtext": a time span or key number that is the point of the sentence (तीन महीने, 7 दिन, 1985). Big text in the lower left. {{"w":..,"kind":"bigtext","text_hi":"number + unit, max 3 words","sub_hi":"optional short caption"}}
 - "tab": the narrator talks about a newspaper / news report / headline: a news tab. {{"w":..,"kind":"tab","text_hi":"BREAKING NEWS or a short Hindi tag"}}
-- "glow": a coloured rim of light around the main person while the narrator speaks of a revered, holy, dangerous or possessed person. {{"w":..,"kind":"glow","tone":"holy (yellow-green) | danger (red) | cold (teal)"}}
+- "glow": a coloured rim of light around the main person while the narrator speaks of a revered, holy, dangerous or possessed person. {{"w":..,"kind":"glow","tone":"holy (yellow-green aura) | danger (red aura) | cold (teal aura) | rim (thin red outline of the person)"}}
 - "desk": the narrator introduces the investigation / the researcher / the study as a whole: a wooden research desk with pages and photos. Use it ONCE for the first mention of the research. {{"w":..,"kind":"desk"}}
 Never invent facts or numbers. If nothing fits a scene return an empty list.
 Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
@@ -1611,7 +1611,7 @@ def finalize_overlays(scenes, topic=""):
     for name, fn in (("declared_sources", lambda: notes_from_declared_src(scenes, topic)), ("concept_shots", lambda: concept_shots(scenes, topic)), ("semantic", lambda: semantic_review(scenes, topic)), ("context", lambda: apply_context(scenes)),
                      ("mention_timing", lambda: delay_to_mention(scenes)), ("auto", lambda: auto_overlays(scenes)),
                      ("overlays", lambda: overlay_pass(scenes, topic)), ("png_pass", lambda: png_pass(scenes, topic)),
-                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("dedupe", lambda: dedupe_texts(scenes)), ("calm", lambda: calm_pass(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
+                     ("years", lambda: resolve_years(scenes)), ("techniques", lambda: techniques_pass(scenes, topic)), ("tech_coverage", lambda: techniques_coverage(scenes, topic)), ("dedupe", lambda: dedupe_texts(scenes)), ("carry_years", lambda: carry_years(scenes)), ("calm", lambda: calm_pass(scenes)), ("forced_sources", lambda: force_source_cards(scenes, topic)),
                      ("entity_sources", lambda: notes_for_entities(scenes)), ("source_list", lambda: add_source_outro(scenes))):
         try:
             st[name] = fn()
@@ -1788,15 +1788,15 @@ TRUSTED_DOMAINS = {
     "archives.gov", "fbi.gov", "cia.gov", "scientificamerican.com", "newscientist.com", "vox.com", "bloomberg.com", "ft.com", "forbes.com",
 }
 TRUSTED_SUFFIX = (".edu", ".gov", ".gov.in", ".nic.in", ".ac.uk", ".ac.in", ".edu.au", ".gov.uk", ".int")
-STORY_CATEGORIES = [
-    "real documented cases studied by universities or scientists that still puzzle experts",
-    "real survival stories with official investigations or news coverage",
-    "real historical mysteries that investigators or historians have documented in detail",
-    "real scientific or medical discoveries and the people behind them, covered by journals and encyclopedias",
-    "real disasters, rescues and rare events documented by governments and major news agencies",
-    "real crimes or investigations with court or official records",
-    "real expeditions, explorers and unusual journeys documented by museums and geographic societies",
-    "real inventions or breakthroughs that happened by accident or against the odds",
+STORY_CATEGORIES = [  # the kind of stories of the owner's favourite videos
+    "a real incident where one alert officer, pilot or ordinary person stopped a disaster or caught dangerous criminals (a terror plot, a hijack attempt, a smuggling ring), documented by news agencies and official statements",
+    "a real undercover investigation or exposé by a journalist or an officer that shocked a country, documented by news outlets and court or police records",
+    "a real honey-trap, espionage, big scam, corporate fraud or smuggling case that was reported by major news agencies, courts or government agencies",
+    "a famous 'unexplained' or paranormal CASE (a haunted object or place, a reincarnation case, a strange disappearance) that was documented by researchers or the press and that science or officials have also explained",
+    "a place, mountain, river, forest or monument in India that suddenly became big news (a legal fight, a warning, a mystery), explained in simple steps with the real documents behind it",
+    "a shocking real crime or manhunt with court or police records, told without graphic detail",
+    "a real disaster, survival or rescue story that the whole world followed, documented by governments and major news agencies",
+    "a real strange historical mystery or an incredible true event that few people know, documented by historians, museums or encyclopedias",
 ]
 
 
@@ -1832,7 +1832,9 @@ def trusted_domains_for(topic_en):
 STORY_SEED = [  # well documented real stories (each has an encyclopedia article and many news / university sources): used when Gemini cannot propose topics
     ("Apollo 13", "अपोलो 13 का बचाव"), ("Chernobyl disaster", "चेर्नोबिल हादसा"), ("Tunguska event", "तुंगुस्का का विस्फोट"), ("Mary Celeste", "मैरी सेलेस्ट: खाली जहाज़ का रहस्य"),
     ("Dyatlov Pass incident", "डायटलोव पास हादसा"), ("2010 Copiapó mining accident", "चिली के 33 खनिकों का बचाव"), ("Bhopal disaster", "भोपाल गैस त्रासदी"),
-    ("Thai cave rescue 2018", "थाईलैंड की गुफा का बचाव"), ("Endurance expedition Shackleton", "शैकलटन की एंड्योरेंस यात्रा"), ("Operation Mincemeat", "ऑपरेशन मिंसमीट"),
+    ("Thai cave rescue 2018", "थाईलैंड की गुफा का बचाव"), ("Endurance expedition Shackleton", "शैकलटन की एंड्योरेंस यात्रा"), ("Operation Mincemeat", "ऑपरेशन मिंसमीट"), ("Annabelle doll Ed and Lorraine Warren", "एनाबेल गुड़िया का केस"), ("Miracle on the Hudson Sully", "हडसन नदी पर विमान की चमत्कारी लैंडिंग"),
+    ("Charles Sobhraj", "चार्ल्स शोभराज"), ("Bhangarh Fort", "भानगढ़ किले की चेतावनी"), ("Kuldhara village", "कुलधरा गाँव का रहस्य"), ("Hope Diamond curse", "होप डायमंड का श्राप"), ("2008 Mumbai attacks", "मुंबई हमला 2008"),
+    ("D. B. Cooper hijacking", "डी बी कूपर का अपहरण"), ("Roopkund skeleton lake", "रूपकुंड के कंकाल"),
     ("Dancing plague of 1518", "1518 का नाचने वाला प्लेग"), ("Uruguayan Air Force Flight 571", "एंडीज़ का विमान हादसा"), ("Hindenburg disaster", "हिंडनबर्ग हादसा"),
     ("Krakatoa 1883 eruption", "क्राकाटोआ का विस्फोट"), ("Disappearance of Amelia Earhart", "अमेलिया इयरहार्ट का रहस्य"), ("1996 Mount Everest disaster", "एवरेस्ट 1996 की त्रासदी"),
     ("Cottingley Fairies", "कॉटिंगली की परियाँ"), ("Piltdown Man", "पिल्टडाउन मानव का धोखा"), ("Kursk submarine disaster", "कुर्स्क पनडुब्बी हादसा"), ("Lost Colony of Roanoke", "रोअनोक की खोई बस्ती"),
@@ -1866,12 +1868,111 @@ def trusted_domains_wiki(topic_en):
         return set()
 
 
+TREND_SHARE = float(os.environ.get("TREND_SHARE", "0.6"))  # chance that a run first looks at what is trending in India (then falls back to the evergreen list)
+TREND_FEEDS = [
+    "https://trends.google.com/trending/rss?geo=IN",
+    "https://news.google.com/rss?hl=hi&gl=IN&ceid=IN:hi",
+    "https://news.google.com/rss/headlines/section/topic/NATION?hl=hi&gl=IN&ceid=IN:hi",
+    "https://news.google.com/rss/headlines/section/topic/WORLD?hl=hi&gl=IN&ceid=IN:hi",
+]
+
+
+def trending_headlines(limit=70):
+    """What India is searching / reading right now (Google Trends daily feed + Google News top stories): plain headlines, no Gemini needed."""
+    import xml.etree.ElementTree as ET
+    out = []
+    for url in TREND_FEEDS:
+        try:
+            r = requests.get(url, headers={"User-Agent": "Mozilla/5.0 (compatible; story-video-bot/1.0)"}, timeout=20)
+            if not r.ok:
+                continue
+            root = ET.fromstring(r.content)
+            for it in root.iter("item"):
+                t = (it.findtext("title") or "").strip()
+                if t:
+                    out.append(re.sub(r"\s+-\s+[^-]{2,40}$", "", t))  # "headline - Publisher" -> headline
+                for ch in it.iter():
+                    if ch.tag.endswith("news_item_title") and (ch.text or "").strip():
+                        out.append(ch.text.strip())
+        except Exception as e:  # noqa
+            log("  trend feed failed:", type(e).__name__, str(e)[:60])
+    seen, uniq = set(), []
+    for t in out:
+        k = re.sub(r"\W+", " ", t.lower()).strip()
+        if k and k not in seen:
+            seen.add(k)
+            uniq.append(t)
+    return uniq[:limit]
+
+
+def news_trusted_domains(topic):
+    """How many different trusted news organisations / agencies reported this topic (Google News search feed, no Gemini)."""
+    import xml.etree.ElementTree as ET
+    from urllib.parse import quote
+    found = set()
+    try:
+        r = requests.get(f"https://news.google.com/rss/search?q={quote(topic)}&hl=en-IN&gl=IN&ceid=IN:en", headers={"User-Agent": "Mozilla/5.0 (compatible; story-video-bot/1.0)"}, timeout=20)
+        if r.ok:
+            for it in ET.fromstring(r.content).iter("item"):
+                for ch in it:
+                    if ch.tag.endswith("source") and ch.get("url") and is_trusted(ch.get("url")):
+                        found.add(_dom(ch.get("url")))
+    except Exception as e:  # noqa
+        log("  news source check failed:", type(e).__name__, str(e)[:60])
+    return found
+
+
+def pick_trending_topic(done):
+    """A topic that is trending now AND is a story of the channel's kind (shocking real incident, investigation, scam / honey-trap / espionage, paranormal case, a place in the news...)."""
+    heads = trending_headlines()
+    if len(heads) < 3:
+        log("trending: no headlines (feeds not reachable)")
+        return None
+    covered = [v.get("topic_en", "") for v in done.get("videos", [])][-300:]
+    prompt = f"""You choose topics for a Hindi true-story YouTube channel (gripping real stories told in simple spoken Hindi, 5-10 minutes).
+These are the headlines trending in India right now:
+{chr(10).join('- ' + h for h in heads)}
+
+Pick up to 5 that can become a STORY of this kind: a shocking real incident, an officer / pilot / journalist who stopped or exposed something, a crime or terror plot that was busted, a honey-trap / espionage / big scam,
+a strange or paranormal case with a scientific explanation, a place or monument suddenly in the news, a disaster or rescue. It needs a clear beginning, middle and end, real names, dates and places, and must be documented by news agencies.
+DO NOT pick: elections, party politics, statements of politicians, religious disputes or riots, sports scores, cricket, film / TV / OTT releases, celebrity gossip, stock prices, weather, anything about a living private person's private life, anything that glorifies violence.
+Do not repeat or rephrase these already-covered topics: {json.dumps(covered, ensure_ascii=False)}
+Return ONLY JSON: [{{"topic_en": "specific English title with the name / place / year", "topic_hi": "the same in Hindi", "why": "one short line"}}]. Return [] if nothing fits."""
+    try:
+        items = gemini_json(prompt, temperature=0.4)
+    except Exception as e:  # noqa
+        log("trending: Gemini could not choose (limit?):", str(e)[:90])
+        return None
+    best = None
+    for it in items if isinstance(items, list) else []:
+        t = (it.get("topic_en") or "").strip()
+        if not t or is_dup(t, done):
+            continue
+        orgs = news_trusted_domains(t)
+        if len(orgs) < 2:
+            orgs = orgs | trusted_domains_wiki(t)
+        log(f"  trending candidate: {t[:70]} | trusted organisations found: {len(orgs)} {sorted(orgs)[:4]}")
+        if len(orgs) >= 2 and (best is None or len(orgs) > best[0]):
+            best = (len(orgs), t, it.get("topic_hi") or t)
+    if best:
+        log(f"trending topic chosen: {best[1]}")
+        return "trending", best[1], best[2]
+    return None
+
+
 def pick_story_topic(done):
+    if random.random() < TREND_SHARE:
+        try:
+            tr = pick_trending_topic(done)
+            if tr:
+                return tr
+        except Exception as e:  # noqa
+            log("trending failed:", type(e).__name__, str(e)[:90])
     cat = random.choice(STORY_CATEGORIES)
     covered = [v.get("topic_en", "") for v in done.get("videos", [])][-300:]
-    prompt = f"""You plan videos for a Hindi true-story documentary YouTube channel for general viewers in India.
+    prompt = f"""You plan videos for a Hindi true-story YouTube channel for general viewers in India. The videos open inside the most shocking moment and are told in very simple spoken Hindi.
 Category: {cat}
-Suggest 10 REAL, specific stories that actually happened. Each must have a well-known name, place and year, be gripping in 5-10 minutes, and be
+Suggest 10 REAL, specific stories that actually happened. Prefer stories that people search for and talk about, with a hero or a villain, a surprising twist and a lesson. About 6 of 10 should be from India or about Indians. Each must have a well-known name, place and year, be gripping in 5-10 minutes, and be
 documented by SEVERAL trusted organisations (universities, encyclopedias such as Britannica / Wikipedia, major news agencies such as BBC / Reuters / AP,
 governments, scientific journals, museums) so that real source pages exist. No rumours, no legends without records, no invented cases.
 Do NOT repeat or rephrase any of these already-covered topics: {json.dumps(covered, ensure_ascii=False)}
@@ -2221,12 +2322,33 @@ Every scene also has "grade" (colour grading that fits the scene: warm for fire/
 "mood" of the whole video's background music: one of mystery, epic, wonder, calm, tense, life, space.
 """
 
+STORY_VOICE = """
+=== THE STORYTELLING VOICE OF THIS CHANNEL (learned from the owner's favourite videos: study it, then write exactly like this) ===
+SENTENCES: very short, spoken, one thought per line. Average 6-9 words, many of 3-6 words, almost none above 15. A long idea is cut into 2-3 short lines.
+  Good: "रात के ग्यारह बज रहे हैं।" / "तभी बगल के कमरे से आवाज आती है।" / "कमरे में कोई नहीं था। कोई भी नहीं।"
+  Bad: one long sentence with three commas and a bracket.
+WORDS: the simplest everyday spoken Hindi, the way a friend tells a story: जांच (not अनुसंधान), सबूत, डर, हैरान, पता चला, यानी. Common English words that people really say are fine in Devanagari
+  (प्लान, इन्वेस्टिगेशन, एक्सीडेंट, लोकेशन, सीक्रेट, सिस्टम). Never a hard Sanskrit or bookish word when a simple one exists. Explain every new name or term in one easy line the moment it appears.
+HOOK (first 10-15 seconds): start INSIDE the most gripping moment, not with an introduction. Either (a) a scene with place, date and one small action that turns frightening / surprising
+  ("जून दो हज़ार चौबीस। ताइवान। आधी रात।"), or (b) a line that shows the stakes ("अगर उस दिन उस एक पोस्टर पर नज़र न पड़ती, तो आज पंद्रह लोग ज़िंदा न होते।"), then two or three teaser lines, and stop at an unanswered question or "लेकिन उस रात कुछ ऐसा हुआ".
+  No greeting, no channel name, no "आज हम बात करेंगे".
+FLOW: story in the order it happened. Every scene gives ONE new fact or event. Join the lines the way a storyteller does: "और फिर", "तभी", "इसके बाद", "लेकिन", "अब देखिए", "अब यहां से कहानी बदल जाती है", "और यहीं पर सबसे बड़ा मोड़ आता है".
+  Keep the key moments in the PRESENT tense ("वो धीरे से दरवाज़ा खोलता है") and the background in the past tense.
+QUESTIONS: use a real question only every 20-30 lines, at a turning point, and answer it a few lines later ("तो सवाल ये है कि ये सब हुआ कैसे? इसका जवाब काफी हैरान करने वाला था।").
+NUMBERS: always give the exact name, place, date, number, then ONE line that makes the number feel real ("यानी सिर्फ एक साल में करीब नब्बे गुना।", "यानी हर दो मिनट में एक आदमी।").
+TENSION: build slowly, hold back the biggest fact, give it one short line of its own. After a shocking line, a very short line ("कोई भी नहीं।").
+SOURCES AND TRUTH: say who reported it ("रिपोर्ट्स के मुताबिक", "पुलिस की जांच में पता चला", "वर्जीनिया यूनिवर्सिटी के शोधकर्ताओं के अनुसार"). If it is a claim or a legend, say clearly it is a claim and what science / the officials say. Never invent dialogue, never invent facts.
+ENDING: (1) what happened in the end, in two or three short lines, (2) one honest reflection or lesson in simple words ("ऐसे केस हमें सिखाते हैं कि हर बात पर आंख बंद करके भरोसा नहीं करना चाहिए"), (3) one question to the viewers, answered in the comments ("आपको क्या लगता है? कमेंट में बताइए।"), (4) a short thanks.
+Never read out any sponsor, link or "click here".
+"""
+
 if STORY_STYLE:  # true-story version of the rules (the reference channel: gripping, documented, never invented)
     SCRIPT_RULES = SCRIPT_RULES.replace("like an engaging documentary narrator. Short sentences. One idea per scene.", "like a gripping documentary STORYTELLER who keeps the viewer on edge. Short sentences. One moment of the story per scene, told in the order it happened.")
     SCRIPT_RULES = SCRIPT_RULES.replace("built on a TRUE surprising fact or question, does NOT reveal the answer, ends by promising it", "built on the most striking REAL moment of the story (a person, a place, a year), does NOT reveal how it ends, ends by promising it")
     SCRIPT_RULES = SCRIPT_RULES.replace("- The viewer must truly UNDERSTAND the topic by the end: define every new term when first used, use one simple everyday analogy, go in a logical order.", "- Tell it as a story with real people, places and years: set the scene, build the tension, show what investigators / witnesses / records say, and end on the strongest documented fact or the unanswered question. Name every source organisation the first time its finding is used (e.g. \"वर्जीनिया यूनिवर्सिटी के शोधकर्ताओं के अनुसार\").")
     SCRIPT_RULES = SCRIPT_RULES.replace('- Facts: only well-established science, rounded widely-accepted numbers. If something is debated say "वैज्ञानिकों का मानना है". Never invent names, dates, statistics or quotes. If unsure, leave it out.', '- Facts: ONLY what the real source passages report. Where it is a claim, a witness account or still debated, say so (\"जांचकर्ताओं के अनुसार\", \"रिपोर्ट्स के मुताबिक\", \"गाँववालों का दावा था\"). Never invent names, dates, dialogue, statistics or quotes. If unsure, leave it out.')
     SCRIPT_RULES = SCRIPT_RULES.replace('- Neutral on religion and politics; never mention or mock any belief. Say "वैज्ञानिक मान्यता के अनुसार" for origin topics.', "- Neutral on religion and politics; report what happened and what the sources say, never mock or promote any belief.")
+    SCRIPT_RULES = SCRIPT_RULES + STORY_VOICE
 
 
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
@@ -5772,7 +5894,7 @@ def draw_timeline(fr, tl, t0, t1, a, ov):
             frac = 0.0
     target = float(y) + frac
     spacing = 215.0
-    s = e_out(cl((tl - t0) / 1.2))
+    s = 1.0 if it.get("carry") else e_out(cl((tl - t0) / 1.2))
     cur = target - (1 - s) * 3.3 * step
     base_y = H - 62
     g = _TL_SCRIM.get("g")
@@ -6129,27 +6251,69 @@ def draw_tab(fr, sh, tl, t0, t1, a, ov):
 
 
 # ---- reference overlays, part 2: coloured glow around a revered / dangerous person (489s, 6:00) and the research DESK collage (3:09-3:15)
+try:
+    import cv2 as _cv2
+except Exception:  # noqa
+    _cv2 = None
+
+
+def _subject_mask(img, cx):
+    """Soft mask of the main person (GrabCut on a picture 4x smaller, recomputed every ~0.3 s while the camera moves). None when OpenCV is missing or the result is not plausible."""
+    if _cv2 is None:
+        return None
+    np = _np()
+    w, h = W // 4, H // 4
+    arr = np.asarray(img.convert("RGB").resize((w, h), Image.BILINEAR))[:, :, ::-1].copy()
+    x0 = int(max(1, (cx - 0.25) * w))
+    x1 = int(min(w - 2, (cx + 0.25) * w))
+    mask = np.zeros((h, w), np.uint8)
+    try:
+        _cv2.grabCut(arr, mask, (x0, int(0.02 * h), max(8, x1 - x0), int(0.96 * h)), np.zeros((1, 65), np.float64), np.zeros((1, 65), np.float64), 2, _cv2.GC_INIT_WITH_RECT)
+    except Exception:  # noqa
+        return None
+    m = ((mask == _cv2.GC_FGD) | (mask == _cv2.GC_PR_FGD)).astype(np.uint8)
+    n, lab, stats, _c = _cv2.connectedComponentsWithStats(m)
+    if n > 1:
+        m = (lab == 1 + int(np.argmax(stats[1:, _cv2.CC_STAT_AREA]))).astype(np.uint8)
+    if not (0.04 < float(m.mean()) < 0.7):
+        return None
+    mm = _cv2.resize(m.astype(np.float32), (W, H), interpolation=_cv2.INTER_LINEAR)
+    return _cv2.GaussianBlur(mm, (0, 0), 3.0)
+
+
 def draw_glow(fr, sh, tl, t0, t1, a, ov):
-    """A soft coloured rim of light around the main person: yellow-green for holy / revered people, red for danger or possession, teal for cold scenes."""
+    """Reference 8:09 (yellow-green aura around the revered man), 6:00 (red) and 0:36 (thin red outline of a cut-out person): light that follows the person's REAL edge
+    (GrabCut mask). Without OpenCV it is a soft ring around the subject position."""
     it = ov.get("it") or {}
-    col = {"holy": (190, 232, 60), "danger": (238, 40, 40), "cold": (60, 176, 206)}.get(str(it.get("tone") or "holy"), (190, 232, 60))
+    tone = str(it.get("tone") or "holy")
+    col = {"holy": (190, 232, 60), "danger": (238, 40, 40), "cold": (60, 176, 206), "rim": (235, 36, 40)}.get(tone, (190, 232, 60))
     q = e_out(cl((tl - t0) / 0.55)) * (1 - cl((tl - (t1 - 0.5)) / 0.5)) * a
     if q <= 0.01:
         return
     np = _np()
     cx, cy = _subj(sh)
-    key = ("glow", W, H, round(cx, 2), round(cy, 2))
-    if key not in _VX:
-        if len([k for k in _VX if isinstance(k, tuple) and k and k[0] == "glow"]) > 6:
-            for k in [k for k in _VX if isinstance(k, tuple) and k and k[0] == "glow"][:3]:
-                _VX.pop(k, None)
-        yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
-        r = np.sqrt(((xx - cx * W) / (W * 0.20)) ** 2 + ((yy - cy * H) / (H * 0.46)) ** 2)
-        _VX[key] = np.exp(-((r - 1.0) / 0.34) ** 2).astype(np.float32)
-    ring = _VX[key]
+    ck = int((tl - t0) * 10) // 3
+    cache = _VX.setdefault(("gcm", id(ov)), {})
+    if cache.get("k") != ck:
+        cache["k"] = ck
+        cache["m"] = _subject_mask(fr, cx)
+    mm = cache.get("m")
     arr = np.asarray(fr).astype(np.float32)
-    add = ring[..., None] * np.array(col, np.float32) * 0.8 * q
-    out = 255 - (255 - arr) * (255 - add) / 255  # screen blend: light spills over the edge
+    if mm is not None:
+        if tone == "rim":  # thin outline right at the edge
+            outer = np.clip(_cv2.GaussianBlur(mm, (0, 0), 1.6) * 3.0, 0, 1) * (1 - np.clip(mm * 1.15, 0, 1))
+            lightm = outer ** 0.7
+        else:  # aura: strongest next to the edge, fading outwards, never on the person
+            lightm = np.clip(_cv2.GaussianBlur(mm, (0, 0), 30) * 2.7 - mm * 1.7, 0, 1)
+        add = lightm[..., None] * np.array(col, np.float32) * (0.95 if tone == "rim" else 0.85) * q
+    else:
+        key = ("glow", W, H, round(cx, 2), round(cy, 2))
+        if key not in _VX:
+            yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+            r = np.sqrt(((xx - cx * W) / (W * 0.20)) ** 2 + ((yy - cy * H) / (H * 0.46)) ** 2)
+            _VX[key] = np.exp(-((r - 1.0) / 0.34) ** 2).astype(np.float32)
+        add = _VX[key][..., None] * np.array(col, np.float32) * 0.8 * q
+    out = 255 - (255 - arr) * (255 - add) / 255  # screen blend
     fr.paste(Image.fromarray(out.clip(0, 255).astype(np.uint8)))
 
 
@@ -7083,6 +7247,25 @@ def draw_year_pill(fr, tl, t0, t1, a, ov):
 _HI_UNITS = {"एक": 1, "दो": 2, "तीन": 3, "चार": 4, "पाँच": 5, "पांच": 5, "छह": 6, "छः": 6, "सात": 7, "आठ": 8, "नौ": 9, "दस": 10}
 
 
+def carry_years(scenes):
+    """Reference 1:24-1:42: the year slider stays on screen across the cuts. A year told late in a scene is carried into the next scene (which has no date of its own)
+    at the same date, without sliding in again."""
+    n = 0
+    for i in range(len(scenes) - 1):
+        sc, nx = scenes[i], scenes[i + 1]
+        yrs = [x for x in (sc.get("items") or []) if isinstance(x, dict) and x.get("kind") == "year" and x.get("year_num")]
+        if not yrs or any(isinstance(x, dict) and x.get("kind") == "year" for x in (nx.get("items") or [])) or nx.get("type") == "map":
+            continue
+        last = max(yrs, key=lambda x: x.get("w", 0))
+        words = max(1, len(str(sc.get("narration_hi", "")).split()))
+        if last.get("w", 0) / words < 0.5:
+            continue
+        nx.setdefault("items", []).append({"w": 0, "kind": "year", "text": last.get("text", ""), "year_num": last["year_num"], "month": last.get("month"), "carry": True})
+        n += 1
+    log(f"year slider carried over a cut: {n}")
+    return n
+
+
 def resolve_years(scenes):
     """Year items without a number (the narrator spelled the year out, 'उन्नीस सौ अड़सठ') get one, so the slider can be used."""
     todo = []
@@ -7706,6 +7889,15 @@ def name_ok(text):
     return False
 
 
+def draw_watermark(fr):
+    """Reference: a tiny grey "Generative AI" at the lower left of every AI picture (WATERMARK=0 switches it off)."""
+    key = ("wm", W, H)
+    if key not in _VX:
+        _VX[key] = text_layer("Generative AI", font_for("Generative AI", max(14, int(H * 0.021)), "geom"), fill=(235, 235, 235))
+    sp = _VX[key]
+    put(fr, sp, W * 0.012 + sp.width / 2, H * 0.957, 1.0, 0.45)
+
+
 def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     shots = build_shots(sc, dur, speech_dur, ctx, sc.get("tone"))
     dust = Dust(ctx["rnd"].random())
@@ -7789,6 +7981,19 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                     draw_ov(fr, x_["ps"], t - x_["t0"], pal)
         _items_pass(False)  # everything that lives ON the photo is drawn first ...
         _items_pass(True)
+        _gr = str(sh.get("grade") or sc.get("grade") or "")
+        if _gr in ("redwash", "dread", "bwred") and t < 1.4:  # reference 464-465 s: the scene arrives under a red wash that relaxes
+            try:
+                _n = _np()
+                _k = 0.42 * (1 - cl(t / 1.4)) ** 1.5
+                fr.paste(Image.fromarray((_n.asarray(fr).astype(_n.float32) * (1 - _k) + _n.array((190, 18, 28), _n.float32) * _k).clip(0, 255).astype(_n.uint8)))
+            except Exception:  # noqa
+                pass
+        if WATERMARK and (CAST["on"] or STORY_STYLE):
+            try:
+                draw_watermark(fr)
+            except Exception:  # noqa
+                pass
         return fr
     return draw
 
