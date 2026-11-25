@@ -2,6 +2,7 @@
  "layout": "bottom",
  "accent": 4,
  "styles": [
-  "banner_zoom"
+  "banner_zoom",
+  "hero_right"
  ]
 }
