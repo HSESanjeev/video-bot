@@ -837,6 +837,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-26T01:23:14+00:00",
+   "topic_en": "The Indonesia Illegal Gold Mine Disaster: Miners Trapped in Flooded Underground Tunnels",
+   "title_hi": "इंडोनेशिया सोने की खदान का खौफ़नाक सच",
+   "category": "trending",
+   "style": "countdown",
+   "theme": "sky",
+   "mood": "tense",
+   "seconds": 120,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
