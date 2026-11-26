@@ -850,6 +850,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-26T06:28:10+00:00",
+   "topic_en": "Tukaram Omble: The Unarmed Cop Who Took 23 Bullets to Capture Terrorist Ajmal Kasab Alive (Mumbai, 2008)",
+   "title_hi": "तुकाराम ओंबले: 23 गोलियाँ खाकर अजमल कसाब को ज़िंदा पकड़ने वाले शेर",
+   "category": "story",
+   "style": "countdown",
+   "theme": "lavender",
+   "mood": "tense",
+   "seconds": 116,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
