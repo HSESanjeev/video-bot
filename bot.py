@@ -48,18 +48,21 @@ STATE = ROOT / "state"
 DONE_FILE = STATE / "done.json"
 LICENSE_FILE = STATE / "license_log.json"
 WPM_FILE = STATE / "wpm.json"
-VOICE_PROFILE_FILE = STATE / "voice_profile.json"
 
 W, H, FPS = 1280, 720, 30
 VOICE = os.environ.get("TTS_VOICE", "hi-IN-MadhurNeural")
 TTS_RATE = os.environ.get("TTS_RATE", "+8%")
-# STEADY VOICE: the narration is spoken in short parts (never one 10-minute request - long TTS runs drift: the pitch climbs and the speed creeps up).
-# Every part is then measured and brought to the SAME speed, pitch and loudness, in every video.
-VOICE_WPM = float(os.environ.get("VOICE_WPM", "220"))  # fixed speaking speed (Hindi words per minute) from the first to the last second; the owner's 10-min reference is ~220
-VOICE_CHUNK_WORDS = max(60, int(os.environ.get("VOICE_CHUNK_WORDS", "250")))  # words per spoken part (~70 s); a bigger number = fewer Gemini requests but a little more drift inside a part
-VOICE_GAP = float(os.environ.get("VOICE_GAP", "0.35"))  # pause between two parts (always at a full stop)
-VOICE_F0 = float(os.environ.get("VOICE_F0", "0"))  # 0 = learn the pitch from the first full video and keep it for all later videos; or force a pitch in Hz (reference narrator ~165)
-VOICE_CHUNK_TRIES = max(1, int(os.environ.get("VOICE_CHUNK_TRIES", "4")))
+# SPEED ONLY: the whole narration is brought to the speaking speed of the 10-minute reference narrator (Hindi words per minute, pauses included).
+# The voice is spoken in ONE request (one voice) and only its speed is corrected - no pitch change, no extra effect.
+VOICE_SPEED = min(1.35, max(0.9, float(os.environ.get("VOICE_SPEED") or "1.12")))  # your Variable VOICE_SPEED: 1.12 = the reference narrator's speed (220 words/min); higher = faster, lower = slower
+VOICE_WPM = float(os.environ.get("VOICE_WPM") or (220.0 * VOICE_SPEED / 1.12))  # optional: a speed in words/min instead (then VOICE_SPEED is ignored)
+VOICE_FX_ON = os.environ.get("VOICE_FX_ON", "1") != "0"  # 0 = no equaliser/compressor/echo at all (dry voice)
+VOICE_STYLE = os.environ.get("VOICE_STYLE", (
+    "Speak as ONE single male Hindi storyteller - the same voice, the same average pitch and the same average speed from the very first word to the very last - "
+    "telling a gripping true story to a friend late at night, like a top Hindi YouTube mystery narrator: warm, natural, conversational and full of real emotion. "
+    "Let the feeling follow the story: curious and calm at the start, quieter and slower with a hint of dread at eerie moments, a short pause before a shocking reveal, "
+    "tension and intensity at the climax, soft sadness or wonder where it fits. Natural rise and fall of intonation in every sentence, never flat or robotic, "
+    "never shouting, never acting out different characters, no sudden change of voice"))
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "auto").strip().lower()  # auto | gemini | edge
 GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 GEMINI_TTS_MODELS = [m for m in os.environ.get(
@@ -129,6 +132,10 @@ PIXABAY_KEY = os.environ.get("PIXABAY_API_KEY", "")
 POLLI_KEY = os.environ.get("POLLINATIONS_KEY", "")
 CF_ACCOUNT = os.environ.get("CF_ACCOUNT_ID", "")
 CF_TOKEN = os.environ.get("CF_API_TOKEN", "")
+# backup Cloudflare accounts (optional): when the first account hits its daily free limit the bot continues with the next one
+CF_ACCOUNTS = [(a_, t_) for a_, t_ in ((CF_ACCOUNT, CF_TOKEN),
+                                       (os.environ.get("CF_ACCOUNT_ID_2", ""), os.environ.get("CF_API_TOKEN_2", "")),
+                                       (os.environ.get("CF_ACCOUNT_ID_3", ""), os.environ.get("CF_API_TOKEN_3", ""))) if a_ and t_]
 TG_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TG_CHAT = os.environ.get("TELEGRAM_CHAT_ID", "")
 
@@ -2774,12 +2781,8 @@ def rescale_script(script, target_words):
 
 
 # --------------------------------------------------------------------------- voice
-TONES = {  # the scene tone still drives grading/camera, but the VOICE stays the same all video long
-    "suspense": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
-    "wonder": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
-    "serious": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
-    "excited": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
-    "calm": ("+4%", "+0Hz", "steady, even and confident, exactly the same calm documentary-narrator voice and emotion throughout, no change in mood between sentences"),
+TONES = {  # the scene tone still drives grading/camera; the narrator's voice and style stay the same all video long
+    k: ("+4%", "+0Hz", VOICE_STYLE) for k in ("suspense", "wonder", "serious", "excited", "calm")
 }
 
 
@@ -2805,7 +2808,6 @@ def tts_one(text, out_path, tone=None):
 
 
 _tts_last = [0.0]
-GEMINI_LOCK = [None]  # the Gemini model that spoke the first part: all other parts of the video use the SAME model (a different model = a different voice)
 
 
 def tts_gemini(text, out_path, tone=None):
@@ -2816,13 +2818,12 @@ def tts_gemini(text, out_path, tone=None):
     if gap < GEMINI_TTS_GAP:
         time.sleep(GEMINI_TTS_GAP - gap)
     style = TONES.get(tone or "", TONES["calm"])[2]
-    prompt = (f"Say in ONE steady, calm, confident, warm male voice, at a brisk but comfortable pace like a good Hindi YouTube documentary narrator (not rushed), the SAME even emotion and energy in every sentence, never shouting, never acting out or changing mood, "
-              f"{style}, with natural pauses at commas and full stops: {text}")
+    prompt = f"{style}. Natural pauses at commas and full stops. Read this Hindi script: {text}"
     body = {"contents": [{"parts": [{"text": prompt}]}],
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_VOICE}}}}}
     last = None
-    for model in ([GEMINI_LOCK[0]] if GEMINI_LOCK[0] else GEMINI_TTS_MODELS):
+    for model in GEMINI_TTS_MODELS:
         for attempt in range(3):
             _tts_last[0] = time.time()
             try:
@@ -2868,167 +2869,12 @@ def tts_gemini(text, out_path, tone=None):
             spw = dur / max(1, len(text.split()))
             if not (0.22 <= spw <= 1.2):
                 raise RuntimeError(f"Gemini voice length looks wrong ({spw:.2f}s/word)")
-            GEMINI_LOCK[0] = model
             return
     raise RuntimeError(f"Gemini TTS failed: {last}")
 
 
 VOICE_FX = ("highpass=f=75,equalizer=f=150:t=q:w=1.2:g=2.5,equalizer=f=3200:t=q:w=1.0:g=2.2,"
             "acompressor=threshold=0.1:ratio=3:attack=8:release=150:makeup=2,aecho=0.7:0.4:38:0.10")
-
-
-# --------------------------------------------------------------------------- steady voice engine
-def voice_metrics(path):
-    """Measures a spoken clip: median pitch (Hz), loudness of the voiced part (dB) - used to bring every part of the narration to the same voice."""
-    try:
-        import numpy as np
-        from scipy.signal import medfilt
-        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", "16000", "-"], capture_output=True, check=True).stdout
-        x = np.frombuffer(raw, dtype=np.float32).astype(np.float64)
-        sr = 16000
-        hop, win = int(sr * 0.010), int(sr * 0.040)
-        n = (len(x) - win) // hop
-        if n < 80:
-            return None
-        idx = np.arange(win)[None, :] + hop * np.arange(n)[:, None]
-        fr = x[idx] * np.hanning(win)[None, :]
-        en = 10 * np.log10((fr ** 2).mean(1) + 1e-10)
-        act = en > (np.percentile(en, 95) - 22.0)  # speech frames
-        ac = np.fft.irfft(np.abs(np.fft.rfft(fr, 2 * win, axis=1)) ** 2, axis=1)[:, :win]
-        ac = ac / (ac[:, :1] + 1e-12)
-        l0, l1 = int(sr / 300.0), int(sr / 65.0)
-        seg = ac[:, l0:l1]
-        f0 = sr / (seg.argmax(1) + l0)
-        ok = act & (seg.max(1) > 0.45)
-        f0m = float(np.median(medfilt(f0[ok], 5))) if ok.sum() > 40 else None
-        lvl = float(10 * np.log10(np.mean(10 ** (en[act] / 10)) + 1e-12)) if act.any() else None
-        return {"f0": f0m, "level_db": lvl}
-    except Exception as e:  # noqa
-        log("voice measure failed:", str(e)[:100])
-        return None
-
-
-_RB = [None]
-
-
-def _has_rubberband():
-    if _RB[0] is None:
-        try:
-            r = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True)
-            _RB[0] = " rubberband " in r.stdout
-        except Exception:  # noqa
-            _RB[0] = False
-    return _RB[0]
-
-
-def split_voice_chunks(scenes):
-    """The narration as parts of ~VOICE_CHUNK_WORDS words; every part ends at a full stop (same sentences the picture timeline uses)."""
-    sents = []
-    for sc in scenes:
-        wds = sc["narration_hi"].split()
-        for a, b in (sentence_ranges(wds) or [[0, len(wds)]]):
-            sents.append(" ".join(wds[a:b]))
-    chunks, cur, n = [], [], 0
-    for t in sents:
-        cur.append(t)
-        n += len(t.split())
-        if n >= VOICE_CHUNK_WORDS:
-            chunks.append(" ".join(cur))
-            cur, n = [], 0
-    if cur:
-        if chunks and n < VOICE_CHUNK_WORDS * 0.4:
-            chunks[-1] += " " + " ".join(cur)
-        else:
-            chunks.append(" ".join(cur))
-    return chunks
-
-
-def _speak_part(synth, text, k, cdir):
-    import hashlib
-    key = hashlib.sha1(f"{getattr(synth, '__name__', 'x')}|{GEMINI_VOICE}|{VOICE}|{text}".encode("utf-8")).hexdigest()[:16]
-    raw = cdir / f"{key}.raw"
-    if raw.exists() and raw.stat().st_size > 1500:  # same text already spoken in this run (script rescale): no new request
-        return raw
-    last = None
-    for a in range(VOICE_CHUNK_TRIES):
-        try:
-            synth(text, raw, "calm")
-            return raw
-        except Exception as e:  # noqa
-            last = e
-            log(f"voice part {k + 1}: try {a + 1}/{VOICE_CHUNK_TRIES} failed: {str(e)[:110]}")
-            time.sleep(25 * (a + 1))
-    raise RuntimeError(f"voice part {k + 1} failed: {last}")
-
-
-def steady_voice(scenes, tdir, synth, master):
-    """Speaks the narration part by part, then gives EVERY part the same speed, pitch and loudness and joins them into master.wav."""
-    import statistics
-    GEMINI_LOCK[0] = None
-    cdir = WORK / "voice_cache"
-    cdir.mkdir(parents=True, exist_ok=True)
-    chunks = split_voice_chunks(scenes)
-    trim = "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.03"
-    parts = []
-    for k, text in enumerate(chunks):
-        raw = _speak_part(synth, text, k, cdir)
-        w = tdir / f"part{k:03d}.wav"
-        run(["ffmpeg", "-y", "-i", raw, "-ar", "44100", "-ac", "1", "-af", f"{trim},areverse,{trim},areverse", w])
-        nw = len(text.split())
-        parts.append({"w": w, "words": nw, "dur": ffprobe_dur(w), "m": voice_metrics(w) or {}})
-        log(f"voice part {k + 1}/{len(chunks)} spoken ({nw} words, {parts[-1]['dur']:.1f}s)")
-    learn = synth in (tts_gemini, tts_one)
-    pkey = ("gemini " + GEMINI_VOICE) if synth is tts_gemini else ("edge " + VOICE)
-    prof = load_json(VOICE_PROFILE_FILE, {})
-    saved = prof.get(pkey) or {}
-    f0s = [p["m"]["f0"] for p in parts if p["m"].get("f0") and p["words"] >= 25]
-    lvs = [p["m"]["level_db"] for p in parts if p["m"].get("level_db") is not None]
-    tf0 = VOICE_F0 or saved.get("f0") or (statistics.median(f0s) if f0s else None)
-    tlv = saved.get("level_db") if saved.get("level_db") is not None else (statistics.median(lvs) if lvs else None)
-    wps = VOICE_WPM / 60.0
-    use_rb = _has_rubberband()
-    outs = []
-    for k, p in enumerate(parts):
-        tempo = min(1.40, max(0.72, p["dur"] * wps / max(1, p["words"])))  # >1 = this part was spoken too slowly
-        f0 = p["m"].get("f0")
-        pitch = 1.0
-        if tf0 and f0 and p["words"] >= 25:
-            pitch = min(1.12, max(0.88, tf0 / f0))
-            if abs(pitch - 1.0) < 0.015:
-                pitch = 1.0
-        gain = 0.0
-        if tlv is not None and p["m"].get("level_db") is not None:
-            gain = min(6.0, max(-6.0, tlv - p["m"]["level_db"]))
-        if use_rb:
-            fl = f"rubberband=tempo={tempo:.4f}:pitch={pitch:.4f}:formant=preserved"
-        else:
-            fl = f"asetrate={44100 * pitch:.1f},aresample=44100,atempo={tempo / pitch:.4f}"
-        if abs(gain) > 0.2:
-            fl += f",volume={gain:.2f}dB"
-        if k < len(parts) - 1:
-            fl += f",apad=pad_dur={VOICE_GAP}"
-        o = tdir / f"norm{k:03d}.wav"
-        run(["ffmpeg", "-y", "-i", p["w"], "-af", fl, "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", o])
-        if tlv is not None:  # the time-stretch itself changes the level a little: measure the result once more and trim it to the target
-            m2 = voice_metrics(o) or {}
-            g2 = (tlv - m2["level_db"]) if m2.get("level_db") is not None else 0.0
-            if abs(g2) > 0.3:
-                o2 = tdir / f"norm{k:03d}b.wav"
-                run(["ffmpeg", "-y", "-i", o, "-af", f"volume={min(4.0, max(-4.0, g2)):.2f}dB", "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", o2])
-                o = o2
-        outs.append(o)
-        log(f"  part {k + 1}: speed x{tempo:.2f}, pitch x{pitch:.2f} (was {f0 or 0:.0f} Hz -> {(f0 or 0) * pitch:.0f} Hz), loudness {gain:+.1f} dB")
-    lst = tdir / "parts.txt"
-    lst.write_text("".join(f"file '{o.as_posix()}'\n" for o in outs), encoding="utf-8")
-    joined = tdir / "joined.wav"
-    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", joined])
-    run(["ffmpeg", "-y", "-i", joined, "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.6", master])
-    if learn and len(parts) >= 5 and tf0 and not saved.get("f0"):  # the first full video fixes the voice for ALL later videos
-        prof[pkey] = {"f0": round(float(tf0), 1), "level_db": round(float(tlv), 1) if tlv is not None else None}
-        save_json(VOICE_PROFILE_FILE, prof)
-        log(f"voice profile saved for '{pkey}': {prof[pkey]}")
-    return master
-
 
 
 def align_boundaries(sil, weights, total):
@@ -3081,13 +2927,81 @@ def align_boundaries(sil, weights, total):
     return [sil[j][1] for j in pick]
 
 
+def even_speed(scenes, base, master, tdir):
+    """SPEED ONLY. Long TTS recordings creep faster toward the end. The recording is cut at real pauses (between sentences) into ~25 s parts, the speed of
+    every part is measured (words / seconds) and each part gets one small tempo change so the whole video runs at VOICE_WPM. Pitch and voice are untouched."""
+    total0 = ffprobe_dur(base)
+    texts = []
+    for sc in scenes:
+        wds = sc["narration_hi"].split()
+        for a, b in (sentence_ranges(wds) or [[0, len(wds)]]):
+            texts.append(" ".join(wds[a:b]))
+    nw = [max(1, len(t.split())) for t in texts]
+    sil = [x for x in detect_silences(base) if 0.2 < x[0] and x[1] < total0 - 0.1]
+    tgt = VOICE_WPM / 60.0
+    segs = []  # [t0, t1, words]
+    if len(texts) > 1 and len(sil) >= 0.6 * len(texts):
+        starts = align_boundaries(sil, [max(1, sum(len(w) + 1 for w in t.split())) for t in texts], total0)
+        cut = []  # cut point after sentence k = the middle of the real breath before sentence k+1 (None: no real pause matched there)
+        for t in starts:
+            ps_ = next((x[0] for x in sil if t is not None and abs(x[1] - t) < 0.02), None)
+            cut.append((ps_ + t) / 2 if ps_ is not None else None)
+        a_, t_a, wsum = 0, 0.0, 0
+        for k in range(len(texts)):
+            wsum += nw[k]
+            last = k == len(texts) - 1
+            t_b = total0 if last else cut[k]
+            if t_b is None or t_b <= t_a:
+                continue
+            if last or t_b - t_a >= 25:
+                segs.append([t_a, t_b, wsum])
+                t_a, wsum = t_b, 0
+        if wsum and segs:
+            segs[-1][2] += wsum
+            segs[-1][1] = total0
+        if len(segs) > 1 and segs[-1][1] - segs[-1][0] < 12:
+            segs[-2][1], segs[-2][2] = segs[-1][1], segs[-2][2] + segs[-1][2]
+            segs.pop()
+    if not segs:  # too few real pauses to cut safely: one tempo for the whole recording
+        segs = [[0.0, total0, sum(nw)]]
+    wpm = [s_[2] / max(0.5, s_[1] - s_[0]) * 60 for s_ in segs]
+    sm = []
+    for i in range(len(wpm)):  # the natural ups and downs of the telling stay; only the slow creep is removed
+        lo_, hi_ = wpm[max(0, i - 1)], wpm[min(len(wpm) - 1, i + 1)]
+        sm.append(0.5 * wpm[i] + 0.25 * lo_ + 0.25 * hi_)
+    outs = []
+    for i, (t0, t1, _w) in enumerate(segs):
+        tempo = min(1.5, max(0.75, VOICE_WPM / sm[i]))
+        o = tdir / f"spd{i:03d}.wav"
+        af = f"atempo={tempo:.4f}" if abs(tempo - 1.0) > 0.005 else "anull"
+        run(["ffmpeg", "-y", "-ss", f"{t0:.3f}", "-t", f"{t1 - t0:.3f}", "-i", base, "-af", af, "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", o])
+        outs.append(o)
+        log(f"  speed part {i + 1}/{len(segs)}: {wpm[i]:.0f} words/min -> x{tempo:.2f} -> ~{wpm[i] * tempo:.0f} words/min")
+    lst = tdir / "speed_parts.txt"
+    lst.write_text("".join(f"file '{o.as_posix()}'\n" for o in outs), encoding="utf-8")
+    joined = tdir / "speed_joined.wav"
+    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", joined])
+    run(["ffmpeg", "-y", "-i", joined, "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.6", master])
+
+
 def make_voice(scenes, tdir, synth=None):
-    """The narration is spoken in short parts that are brought to ONE speed, pitch and loudness (steady_voice) and joined into one recording. The pauses of that
-    recording are then matched to the full stops of the text, so every sentence has an exact time slot on the voice timeline; its picture/clip/map must start and end inside that slot."""
+    """The whole narration is spoken in ONE go (one voice, one mood). The pauses of that recording are then matched to the full stops of the text, so
+    every sentence has an exact time slot on the voice timeline; its picture/clip/map must start and end inside that slot."""
     synth = synth or tts_one
     tdir.mkdir(parents=True, exist_ok=True)
-    master = tdir / "master.wav"
-    steady_voice(scenes, tdir, synth, master)
+    full = " ".join(sc["narration_hi"].strip() for sc in scenes)
+    src, master = tdir / "master.src", tdir / "master.wav"
+    synth(full, src, "calm")
+    trim = "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.03"
+    base = tdir / "base.wav"
+    run(["ffmpeg", "-y", "-i", src, "-ar", "44100", "-ac", "1", "-af", f"{trim},areverse,{trim},areverse", base])
+    try:
+        even_speed(scenes, base, master, tdir)
+    except Exception as e:  # noqa
+        log("even speed failed, one tempo for the whole voice:", str(e)[:140])
+        nwords = max(1, len(full.split()))
+        tempo = min(1.5, max(0.75, VOICE_WPM / (nwords / max(1.0, ffprobe_dur(base)) * 60)))
+        run(["ffmpeg", "-y", "-i", base, "-ar", "44100", "-ac", "1", "-af", f"atempo={tempo:.4f},apad=pad_dur=0.6", master])
     total = ffprobe_dur(master)
     speech_end = total - 0.6
     sents = []  # (scene index, first word, end word, text)
@@ -3138,7 +3052,7 @@ def make_voice(scenes, tdir, synth=None):
     raw = master
     voice = tdir / "voice.wav"
     try:
-        run(["ffmpeg", "-y", "-i", raw, "-af", VOICE_FX, "-ar", "44100", voice])
+        run(["ffmpeg", "-y", "-i", raw, "-af", VOICE_FX if VOICE_FX_ON else "anull", "-ar", "44100", voice])
     except Exception as e:  # noqa
         log("voice polish failed, using raw voice:", str(e)[:120])
         raw.replace(voice)
@@ -3454,38 +3368,44 @@ def fit_image(raw_bytes, out_png, size=(1920, 1080)):
     im.save(out_png)
 
 
-CF_STATE = {"dead": False, "used": 0}
+CF_STATE = {"dead": False, "used": 0, "i": 0}
 PILLS_ON = os.environ.get("PILLS", "0") == "1"
 SUBS_ON = os.environ.get("SUBTITLES", "0") == "1"  # subtitles are OFF: the visuals tell the story
 MAX_IMAGES = int(os.environ.get("MAX_IMAGES", "14" if TEST_SEC else str(max(48, FIXED_SEC // 7))))
 
 
 def img_cloudflare(prompt, out, size=(1920, 1080), dims=None):
-    if not (CF_ACCOUNT and CF_TOKEN) or CF_STATE["dead"]:
+    if not CF_ACCOUNTS or CF_STATE["dead"]:
         return False
-    url = f"https://api.cloudflare.com/client/v4/accounts/{CF_ACCOUNT}/ai/run/@cf/black-forest-labs/flux-1-schnell"
-    for a in range(3):
+    for a in range(3 + len(CF_ACCOUNTS)):
+        acc, tok = CF_ACCOUNTS[min(CF_STATE["i"], len(CF_ACCOUNTS) - 1)]
+        url = f"https://api.cloudflare.com/client/v4/accounts/{acc}/ai/run/@cf/black-forest-labs/flux-1-schnell"
+        hdr = {"Authorization": f"Bearer {tok}"}
         try:
             payload = {"prompt": prompt[:2000], "steps": 4}
             if dims and not CF_STATE.get("nosize"):
                 payload["width"], payload["height"] = dims  # smaller picture = fewer neurons of the free quota
-            r = requests.post(url, headers={"Authorization": f"Bearer {CF_TOKEN}"}, json=payload, timeout=120)
+            r = requests.post(url, headers=hdr, json=payload, timeout=120)
             if r.status_code in (400, 422) and "width" in payload:
                 CF_STATE["nosize"] = True
                 payload.pop("width"), payload.pop("height")
-                r = requests.post(url, headers={"Authorization": f"Bearer {CF_TOKEN}"}, json=payload, timeout=120)
+                r = requests.post(url, headers=hdr, json=payload, timeout=120)
         except requests.RequestException as e:
             note_fail("cloudflare", type(e).__name__)
             time.sleep(8)
             continue
         body = re.sub(r"\s+", " ", r.text or "")[:150]
         if r.status_code == 429 and re.search(r"daily|neuron|allocation|quota|4006", body, re.I):
+            note_fail("cloudflare", f"account {CF_STATE['i'] + 1} LIMIT MESSAGE FROM CLOUDFLARE: " + re.sub(r"\s+", " ", r.text or "")[:300])
+            if CF_STATE["i"] + 1 < len(CF_ACCOUNTS):  # a backup account is ready: same picture, next account
+                CF_STATE["i"] += 1
+                log(f"Cloudflare account {CF_STATE['i']} is at its daily limit: switched to backup account {CF_STATE['i'] + 1} of {len(CF_ACCOUNTS)}")
+                continue
             CF_STATE["dead"] = True
-            note_fail("cloudflare", "LIMIT MESSAGE FROM CLOUDFLARE: " + re.sub(r"\s+", " ", r.text or "")[:420])
             return False
         if r.status_code in (429, 500, 502, 503, 504):
             note_fail("cloudflare", f"HTTP {r.status_code} {body[:90]}")
-            time.sleep(15 * (a + 1))
+            time.sleep(15 * (a + 1) if a < 3 else 5)
             continue
         if not r.ok:
             note_fail("cloudflare", f"HTTP {r.status_code} {body[:90]}")
@@ -3858,7 +3778,10 @@ LOCAL_SD = {"pipe": None, "dead": os.environ.get("LOCAL_SD", "1") == "0", "n": 0
 
 def img_local_sd(prompt, out, size, kind="photo"):
     """Unlimited free AI pictures made on the GitHub runner itself (SD-Turbo on CPU, ~20-60 s per picture, no quota, no key)."""
-    if LOCAL_SD["dead"] or LOCAL_SD["n"] >= int(os.environ.get("LOCAL_SD_MAX", "30")):
+    cap = int(os.environ.get("LOCAL_SD_MAX", "30"))
+    if CF_STATE["dead"] or not CF_ACCOUNTS:  # the cloud picture quota is used up: the runner makes more pictures itself (the 125-minute time guard still stops it)
+        cap = max(cap, int(os.environ.get("LOCAL_SD_EMERGENCY", "90")))
+    if LOCAL_SD["dead"] or LOCAL_SD["n"] >= cap:
         return False
     try:
         import torch
@@ -10234,11 +10157,44 @@ def cast_refs(scenes, imgdir):
     log(f"cast: reference portraits made for {sorted(CAST['refs'])}")
 
 
+IMG_NOTE = [""]
+
+
+def emergency_picture(out, seed=0):
+    """Last resort when not a single picture could be made: a dark atmospheric frame (the camera moves, the source cards and labels still tell the story)."""
+    import numpy as np
+    rng = np.random.RandomState(seed + 7)
+    w, h = 1920, 1080
+    yy, xx = np.mgrid[0:h, 0:w].astype(np.float32)
+    top, bot = np.array([46, 30, 24], np.float32), np.array([8, 6, 8], np.float32)
+    k = (yy / h)[..., None]
+    im = top * (1 - k) + bot * k
+    glow = np.exp(-(((xx - w * (0.35 + 0.3 * rng.rand())) / (w * 0.35)) ** 2 + ((yy - h * 0.45) / (h * 0.45)) ** 2))[..., None]
+    im = im + glow * np.array([70, 40, 20], np.float32)
+    vig = 1 - 0.55 * (((xx - w / 2) / (w / 2)) ** 2 + ((yy - h / 2) / (h / 2)) ** 2)[..., None]
+    im = im * np.clip(vig, 0.25, 1) + rng.randn(h, w, 1).astype(np.float32) * 3.0
+    Image.fromarray(np.clip(im, 0, 255).astype(np.uint8)).save(out)
+    NATIVE[str(out)] = 1920.0
+    return out
+
+
+def pick_fill(pool, uses, prev_img, same_scene):
+    """A missing picture is filled with a picture of THIS video that was used least so far (never the one that was just shown), preferably from the same scene."""
+    cands = [q for q in same_scene if q != prev_img] or [q for q in pool if q != prev_img] or list(pool)
+    if not cands:
+        return None
+    q = min(cands, key=lambda c: (uses.get(str(c), 0), -pool.index(c) if c in pool else 0))
+    uses[str(q)] = uses.get(str(q), 0) + 1
+    return q
+
+
 def make_visuals(scenes, imgdir):
     """Generate every picture the plan asks for. Returns (failed, requested)."""
     failed = requested = 0
     prev_img = None
+    pool, uses = [], {}  # every picture made in this run (to refill missing ones)
     for i, sc in enumerate(scenes):
+        scene_imgs = []
         el_ = elapsed_min()
         if el_ > 100 and not VERIFY["off"]:
             VERIFY["off"] = True
@@ -10341,7 +10297,8 @@ def make_visuals(scenes, imgdir):
                 if not sh["prompt_en"].strip():
                     sh["prompt_en"] = FALLBACK_SCENE
                 if prev_img and CF_STATE["used"] >= MAX_IMAGES and not PIXABAY_KEY:
-                    sh["image"] = prev_img  # free-quota saver: reuse the previous picture with a new camera move
+                    prev_img = pick_fill(pool, uses, prev_img, scene_imgs) or prev_img  # free-quota saver: reuse a picture of this video (the least used one) with a new camera move
+                    sh["image"] = prev_img
                     continue
                 requested += 1
                 CF_STATE["used"] += 1
@@ -10349,11 +10306,17 @@ def make_visuals(scenes, imgdir):
                              refs=[CAST["refs"][c_] for c_ in (sh.get("cast_ids") or []) if c_ in CAST["refs"]]):
                     sh["image"] = p
                     prev_img = p
-                elif prev_img:
-                    sh["image"] = prev_img
+                    pool.append(p)
+                    scene_imgs.append(p)
+                else:  # the picture could not be made (quota used up): the video is still made - a picture of this video is used again with a new camera move
                     failed += 1
-                else:
-                    raise RuntimeError("no picture could be made for the first scene. Image problems: " + fail_summary())
+                    fill = pick_fill(pool, uses, prev_img, scene_imgs)
+                    if fill is None and CAST["refs"]:
+                        fill = list(CAST["refs"].values())[0]
+                    if fill is None:
+                        fill = emergency_picture(p, i)
+                    sh["image"] = fill
+                    prev_img = fill
         if i % 4 == 0:
             log(f"visuals scene {i + 1}/{len(scenes)} (failed pictures so far: {failed}/{requested})")
     return failed, requested
@@ -10490,7 +10453,11 @@ def pipeline():
     except Exception as e:  # noqa
         log("cast refs failed:", type(e).__name__, str(e)[:120])
     failed, requested = make_visuals(scenes, imgdir)
-    if failed > requested * 0.35:
+    abort_pct = float(os.environ.get("IMAGE_ABORT_PCT") or "0")  # 0 = the video is ALWAYS made; e.g. 35 = the old rule (cancel when more than 35% of the pictures are missing)
+    if failed:
+        log(f"{failed}/{requested} pictures could not be made (quota): pictures of this video are used again. Image problems: {fail_summary()}")
+        IMG_NOTE[0] = f"⚠️ {failed}/{requested} picture quota ki wajah se nayi nahi ban payi (purani pictures dobara use hui). Kal ke run mein limit reset hoti hai.\n"
+    if abort_pct and failed > requested * abort_pct / 100.0:
         raise RuntimeError(f"too many pictures missing ({failed}/{requested}); not publishing junk. "
                            f"Image problems: {fail_summary()}")
 
@@ -10560,7 +10527,7 @@ def pipeline():
     fb_id = facebook_upload(final, meta)
 
     head = (f"✅ Nayi video ready: {meta['title']}\nLambai: {fmt_time(total)}\nTopic: {topic_en}\n"
-            f"Awaaz: {VOICE_USED[0]}\nMusic mood: {mood}\n")
+            f"Awaaz: {VOICE_USED[0]}\nMusic mood: {mood}\n" + IMG_NOTE[0])
     if yt_id:
         head += f"YouTube (private): https://studio.youtube.com/video/{yt_id}/edit\n"
     if fb_id:
