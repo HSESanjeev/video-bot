@@ -86,6 +86,11 @@ jobs:
           POLLINATIONS_KEY: ${{ secrets.POLLINATIONS_KEY }}
           CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
           CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          # backup Cloudflare accounts (optional, each free account = 10,000 neurons/day): when the first is at its daily limit the bot continues with the next
+          CF_ACCOUNT_ID_2: ${{ secrets.CF_ACCOUNT_ID_2 }}
+          CF_API_TOKEN_2: ${{ secrets.CF_API_TOKEN_2 }}
+          CF_ACCOUNT_ID_3: ${{ secrets.CF_ACCOUNT_ID_3 }}
+          CF_API_TOKEN_3: ${{ secrets.CF_API_TOKEN_3 }}
           YT_CLIENT_ID: ${{ secrets.YT_CLIENT_ID }}
           YT_CLIENT_SECRET: ${{ secrets.YT_CLIENT_SECRET }}
           YT_REFRESH_TOKEN: ${{ secrets.YT_REFRESH_TOKEN }}
@@ -93,6 +98,7 @@ jobs:
           FB_PAGE_TOKEN: ${{ secrets.FB_PAGE_TOKEN }}
           TTS_PROVIDER: ${{ vars.TTS_PROVIDER || 'auto' }}
           GEMINI_VOICE: ${{ vars.GEMINI_VOICE || 'Charon' }}
+          VOICE_SPEED: ${{ vars.VOICE_SPEED || '1.12' }}   # voice speed: 1.12 = reference narrator (220 words/min); higher = faster, lower = slower
           # telegram = video comes to you on Telegram (safe default)
           # youtube  = bot uploads to YouTube as private (only after YouTube API audit passes)
           UPLOAD_MODE: ${{ vars.UPLOAD_MODE || 'telegram' }}
@@ -103,6 +109,8 @@ jobs:
           # speed guards (the job is cancelled after 240 min): optional Gemini calls pause when Gemini is slow, picture work stops early
           OPTIONAL_LLM_MAX: ${{ vars.OPTIONAL_LLM_MAX || '150' }}
           LOCAL_SD_MAX: ${{ vars.LOCAL_SD_MAX || '30' }}
+          LOCAL_SD_EMERGENCY: ${{ vars.LOCAL_SD_EMERGENCY || '90' }}   # pictures the runner paints itself once the cloud picture quota is used up
+          IMAGE_ABORT_PCT: ${{ vars.IMAGE_ABORT_PCT || '0' }}            # 0 = the video is ALWAYS made, even if many pictures are missing; 35 = the old rule (cancel)
           # TRUE-STORY channel (reference-video look). Change a Variable only if you want to go back:
           #   TOPIC_MODE = story (real documented stories with trusted sources) | science (the old nature / science topics)
           TOPIC_MODE: ${{ vars.TOPIC_MODE || 'story' }}
