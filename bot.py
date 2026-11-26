@@ -48,12 +48,18 @@ STATE = ROOT / "state"
 DONE_FILE = STATE / "done.json"
 LICENSE_FILE = STATE / "license_log.json"
 WPM_FILE = STATE / "wpm.json"
+VOICE_PROFILE_FILE = STATE / "voice_profile.json"
 
 W, H, FPS = 1280, 720, 30
 VOICE = os.environ.get("TTS_VOICE", "hi-IN-MadhurNeural")
 TTS_RATE = os.environ.get("TTS_RATE", "+8%")
-# measured: the 10-minute reference narrator speaks ~19% faster (syllables per voiced second) than the bot voice -> speed up whatever voice engine is used, pitch stays the same
-VOICE_SPEED = min(1.35, max(0.9, float(os.environ.get("VOICE_SPEED", "1.12"))))
+# STEADY VOICE: the narration is spoken in short parts (never one 10-minute request - long TTS runs drift: the pitch climbs and the speed creeps up).
+# Every part is then measured and brought to the SAME speed, pitch and loudness, in every video.
+VOICE_WPM = float(os.environ.get("VOICE_WPM", "220"))  # fixed speaking speed (Hindi words per minute) from the first to the last second; the owner's 10-min reference is ~220
+VOICE_CHUNK_WORDS = max(60, int(os.environ.get("VOICE_CHUNK_WORDS", "250")))  # words per spoken part (~70 s); a bigger number = fewer Gemini requests but a little more drift inside a part
+VOICE_GAP = float(os.environ.get("VOICE_GAP", "0.35"))  # pause between two parts (always at a full stop)
+VOICE_F0 = float(os.environ.get("VOICE_F0", "0"))  # 0 = learn the pitch from the first full video and keep it for all later videos; or force a pitch in Hz (reference narrator ~165)
+VOICE_CHUNK_TRIES = max(1, int(os.environ.get("VOICE_CHUNK_TRIES", "4")))
 TTS_PROVIDER = os.environ.get("TTS_PROVIDER", "auto").strip().lower()  # auto | gemini | edge
 GEMINI_VOICE = os.environ.get("GEMINI_VOICE", "Charon")
 GEMINI_TTS_MODELS = [m for m in os.environ.get(
@@ -2799,6 +2805,7 @@ def tts_one(text, out_path, tone=None):
 
 
 _tts_last = [0.0]
+GEMINI_LOCK = [None]  # the Gemini model that spoke the first part: all other parts of the video use the SAME model (a different model = a different voice)
 
 
 def tts_gemini(text, out_path, tone=None):
@@ -2815,7 +2822,7 @@ def tts_gemini(text, out_path, tone=None):
             "generationConfig": {"responseModalities": ["AUDIO"],
                                  "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_VOICE}}}}}
     last = None
-    for model in GEMINI_TTS_MODELS:
+    for model in ([GEMINI_LOCK[0]] if GEMINI_LOCK[0] else GEMINI_TTS_MODELS):
         for attempt in range(3):
             _tts_last[0] = time.time()
             try:
@@ -2861,12 +2868,167 @@ def tts_gemini(text, out_path, tone=None):
             spw = dur / max(1, len(text.split()))
             if not (0.22 <= spw <= 1.2):
                 raise RuntimeError(f"Gemini voice length looks wrong ({spw:.2f}s/word)")
+            GEMINI_LOCK[0] = model
             return
     raise RuntimeError(f"Gemini TTS failed: {last}")
 
 
 VOICE_FX = ("highpass=f=75,equalizer=f=150:t=q:w=1.2:g=2.5,equalizer=f=3200:t=q:w=1.0:g=2.2,"
             "acompressor=threshold=0.1:ratio=3:attack=8:release=150:makeup=2,aecho=0.7:0.4:38:0.10")
+
+
+# --------------------------------------------------------------------------- steady voice engine
+def voice_metrics(path):
+    """Measures a spoken clip: median pitch (Hz), loudness of the voiced part (dB) - used to bring every part of the narration to the same voice."""
+    try:
+        import numpy as np
+        from scipy.signal import medfilt
+        raw = subprocess.run(["ffmpeg", "-v", "error", "-i", str(path), "-f", "f32le", "-ac", "1", "-ar", "16000", "-"], capture_output=True, check=True).stdout
+        x = np.frombuffer(raw, dtype=np.float32).astype(np.float64)
+        sr = 16000
+        hop, win = int(sr * 0.010), int(sr * 0.040)
+        n = (len(x) - win) // hop
+        if n < 80:
+            return None
+        idx = np.arange(win)[None, :] + hop * np.arange(n)[:, None]
+        fr = x[idx] * np.hanning(win)[None, :]
+        en = 10 * np.log10((fr ** 2).mean(1) + 1e-10)
+        act = en > (np.percentile(en, 95) - 22.0)  # speech frames
+        ac = np.fft.irfft(np.abs(np.fft.rfft(fr, 2 * win, axis=1)) ** 2, axis=1)[:, :win]
+        ac = ac / (ac[:, :1] + 1e-12)
+        l0, l1 = int(sr / 300.0), int(sr / 65.0)
+        seg = ac[:, l0:l1]
+        f0 = sr / (seg.argmax(1) + l0)
+        ok = act & (seg.max(1) > 0.45)
+        f0m = float(np.median(medfilt(f0[ok], 5))) if ok.sum() > 40 else None
+        lvl = float(10 * np.log10(np.mean(10 ** (en[act] / 10)) + 1e-12)) if act.any() else None
+        return {"f0": f0m, "level_db": lvl}
+    except Exception as e:  # noqa
+        log("voice measure failed:", str(e)[:100])
+        return None
+
+
+_RB = [None]
+
+
+def _has_rubberband():
+    if _RB[0] is None:
+        try:
+            r = subprocess.run(["ffmpeg", "-hide_banner", "-filters"], capture_output=True, text=True)
+            _RB[0] = " rubberband " in r.stdout
+        except Exception:  # noqa
+            _RB[0] = False
+    return _RB[0]
+
+
+def split_voice_chunks(scenes):
+    """The narration as parts of ~VOICE_CHUNK_WORDS words; every part ends at a full stop (same sentences the picture timeline uses)."""
+    sents = []
+    for sc in scenes:
+        wds = sc["narration_hi"].split()
+        for a, b in (sentence_ranges(wds) or [[0, len(wds)]]):
+            sents.append(" ".join(wds[a:b]))
+    chunks, cur, n = [], [], 0
+    for t in sents:
+        cur.append(t)
+        n += len(t.split())
+        if n >= VOICE_CHUNK_WORDS:
+            chunks.append(" ".join(cur))
+            cur, n = [], 0
+    if cur:
+        if chunks and n < VOICE_CHUNK_WORDS * 0.4:
+            chunks[-1] += " " + " ".join(cur)
+        else:
+            chunks.append(" ".join(cur))
+    return chunks
+
+
+def _speak_part(synth, text, k, cdir):
+    import hashlib
+    key = hashlib.sha1(f"{getattr(synth, '__name__', 'x')}|{GEMINI_VOICE}|{VOICE}|{text}".encode("utf-8")).hexdigest()[:16]
+    raw = cdir / f"{key}.raw"
+    if raw.exists() and raw.stat().st_size > 1500:  # same text already spoken in this run (script rescale): no new request
+        return raw
+    last = None
+    for a in range(VOICE_CHUNK_TRIES):
+        try:
+            synth(text, raw, "calm")
+            return raw
+        except Exception as e:  # noqa
+            last = e
+            log(f"voice part {k + 1}: try {a + 1}/{VOICE_CHUNK_TRIES} failed: {str(e)[:110]}")
+            time.sleep(25 * (a + 1))
+    raise RuntimeError(f"voice part {k + 1} failed: {last}")
+
+
+def steady_voice(scenes, tdir, synth, master):
+    """Speaks the narration part by part, then gives EVERY part the same speed, pitch and loudness and joins them into master.wav."""
+    import statistics
+    GEMINI_LOCK[0] = None
+    cdir = WORK / "voice_cache"
+    cdir.mkdir(parents=True, exist_ok=True)
+    chunks = split_voice_chunks(scenes)
+    trim = "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.03"
+    parts = []
+    for k, text in enumerate(chunks):
+        raw = _speak_part(synth, text, k, cdir)
+        w = tdir / f"part{k:03d}.wav"
+        run(["ffmpeg", "-y", "-i", raw, "-ar", "44100", "-ac", "1", "-af", f"{trim},areverse,{trim},areverse", w])
+        nw = len(text.split())
+        parts.append({"w": w, "words": nw, "dur": ffprobe_dur(w), "m": voice_metrics(w) or {}})
+        log(f"voice part {k + 1}/{len(chunks)} spoken ({nw} words, {parts[-1]['dur']:.1f}s)")
+    learn = synth in (tts_gemini, tts_one)
+    pkey = ("gemini " + GEMINI_VOICE) if synth is tts_gemini else ("edge " + VOICE)
+    prof = load_json(VOICE_PROFILE_FILE, {})
+    saved = prof.get(pkey) or {}
+    f0s = [p["m"]["f0"] for p in parts if p["m"].get("f0") and p["words"] >= 25]
+    lvs = [p["m"]["level_db"] for p in parts if p["m"].get("level_db") is not None]
+    tf0 = VOICE_F0 or saved.get("f0") or (statistics.median(f0s) if f0s else None)
+    tlv = saved.get("level_db") if saved.get("level_db") is not None else (statistics.median(lvs) if lvs else None)
+    wps = VOICE_WPM / 60.0
+    use_rb = _has_rubberband()
+    outs = []
+    for k, p in enumerate(parts):
+        tempo = min(1.40, max(0.72, p["dur"] * wps / max(1, p["words"])))  # >1 = this part was spoken too slowly
+        f0 = p["m"].get("f0")
+        pitch = 1.0
+        if tf0 and f0 and p["words"] >= 25:
+            pitch = min(1.12, max(0.88, tf0 / f0))
+            if abs(pitch - 1.0) < 0.015:
+                pitch = 1.0
+        gain = 0.0
+        if tlv is not None and p["m"].get("level_db") is not None:
+            gain = min(6.0, max(-6.0, tlv - p["m"]["level_db"]))
+        if use_rb:
+            fl = f"rubberband=tempo={tempo:.4f}:pitch={pitch:.4f}:formant=preserved"
+        else:
+            fl = f"asetrate={44100 * pitch:.1f},aresample=44100,atempo={tempo / pitch:.4f}"
+        if abs(gain) > 0.2:
+            fl += f",volume={gain:.2f}dB"
+        if k < len(parts) - 1:
+            fl += f",apad=pad_dur={VOICE_GAP}"
+        o = tdir / f"norm{k:03d}.wav"
+        run(["ffmpeg", "-y", "-i", p["w"], "-af", fl, "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", o])
+        if tlv is not None:  # the time-stretch itself changes the level a little: measure the result once more and trim it to the target
+            m2 = voice_metrics(o) or {}
+            g2 = (tlv - m2["level_db"]) if m2.get("level_db") is not None else 0.0
+            if abs(g2) > 0.3:
+                o2 = tdir / f"norm{k:03d}b.wav"
+                run(["ffmpeg", "-y", "-i", o, "-af", f"volume={min(4.0, max(-4.0, g2)):.2f}dB", "-ar", "44100", "-ac", "1", "-c:a", "pcm_s16le", o2])
+                o = o2
+        outs.append(o)
+        log(f"  part {k + 1}: speed x{tempo:.2f}, pitch x{pitch:.2f} (was {f0 or 0:.0f} Hz -> {(f0 or 0) * pitch:.0f} Hz), loudness {gain:+.1f} dB")
+    lst = tdir / "parts.txt"
+    lst.write_text("".join(f"file '{o.as_posix()}'\n" for o in outs), encoding="utf-8")
+    joined = tdir / "joined.wav"
+    run(["ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", lst, "-c", "copy", joined])
+    run(["ffmpeg", "-y", "-i", joined, "-ar", "44100", "-ac", "1", "-af", "apad=pad_dur=0.6", master])
+    if learn and len(parts) >= 5 and tf0 and not saved.get("f0"):  # the first full video fixes the voice for ALL later videos
+        prof[pkey] = {"f0": round(float(tf0), 1), "level_db": round(float(tlv), 1) if tlv is not None else None}
+        save_json(VOICE_PROFILE_FILE, prof)
+        log(f"voice profile saved for '{pkey}': {prof[pkey]}")
+    return master
+
 
 
 def align_boundaries(sil, weights, total):
@@ -2920,15 +3082,12 @@ def align_boundaries(sil, weights, total):
 
 
 def make_voice(scenes, tdir, synth=None):
-    """The whole narration is spoken in ONE go (one voice, one mood). The pauses of that recording are then matched to the full stops of the text, so
-    every sentence has an exact time slot on the voice timeline; its picture/clip/map must start and end inside that slot."""
+    """The narration is spoken in short parts that are brought to ONE speed, pitch and loudness (steady_voice) and joined into one recording. The pauses of that
+    recording are then matched to the full stops of the text, so every sentence has an exact time slot on the voice timeline; its picture/clip/map must start and end inside that slot."""
     synth = synth or tts_one
     tdir.mkdir(parents=True, exist_ok=True)
-    full = " ".join(sc["narration_hi"].strip() for sc in scenes)
-    src, master = tdir / "master.src", tdir / "master.wav"
-    synth(full, src, "calm")
-    trim = "silenceremove=start_periods=1:start_threshold=-50dB:start_silence=0.03"
-    run(["ffmpeg", "-y", "-i", src, "-ar", "44100", "-ac", "1", "-af", f"{trim},areverse,{trim},areverse,atempo={VOICE_SPEED:.3f},apad=pad_dur=0.6", master])
+    master = tdir / "master.wav"
+    steady_voice(scenes, tdir, synth, master)
     total = ffprobe_dur(master)
     speech_end = total - 0.6
     sents = []  # (scene index, first word, end word, text)
