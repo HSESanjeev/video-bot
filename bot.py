@@ -27,7 +27,7 @@ import math
 import os
 import random
 
-BOT_VERSION = "round-12 reference-only true-story bot"
+BOT_VERSION = "round-84 comprehensive-reference-integration (no presenter)"
 import re
 import shutil
 import subprocess
@@ -416,12 +416,14 @@ def gemini_json(prompt, temperature=0.8, optional=False):
 
 
 # --------------------------------------------------------------------------- director pass (voice first, then visuals on exact words)
-ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "note": 6.6, "place": 3.8, "year": 16.0, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8,
-              "measure": 4.0, "qmark": 2.8, "lens": 4.2, "beforeafter": 5.0, "compare": 5.6, "mark": 3.4, "chart": 5.6, "tline": 6.0, "hl": 3.6, "sidelabel": 5.0, "bigtext": 4.0, "tab": 3.6, "glow": 5.0, "desk": 5.5}
-ITEM_SLOT = {"quote": "N", "bubble": "A", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P",
-             "measure": "N", "qmark": "N", "lens": "N", "beforeafter": "N", "compare": "N", "mark": "N", "chart": "N", "tline": "N", "hl": "N", "sidelabel": "N", "bigtext": "N", "tab": "N", "glow": "N", "desk": "N"}
+ITEM_KINDS = {"quote": 3.6, "bubble": 3.4, "dialogue": 3.8, "note": 6.6, "place": 3.8, "year": 16.0, "title": 3.4, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.6, "srclist": 4.6, "action": 3.6, "name": 3.8, "feature": 6.8, "id_doc": 6.0, "archive": 6.2, "press": 6.5, "dossier": 6.8, "network": 7.0,
+              "measure": 4.0, "qmark": 2.8, "lens": 4.2, "beforeafter": 5.0, "compare": 5.6, "mark": 3.4, "chart": 5.6, "tline": 6.0, "hl": 3.6, "sidelabel": 5.0, "bigtext": 4.0, "tab": 3.6, "glow": 5.0, "desk": 5.5, "chapter": 4.2, "photocollage": 6.2, "callout": 4.0}
+ITEM_SLOT = {"quote": "N", "bubble": "A", "dialogue": "B", "note": "N", "place": "N", "year": "N", "title": "N", "popup": "P", "person": "N", "stat": "N", "verdict": "P", "explain": "P", "srclist": "N", "action": "P", "name": "N", "feature": "P", "id_doc": "M", "archive": "M", "press": "M", "dossier": "M", "network": "M",
+             "measure": "N", "qmark": "N", "lens": "N", "beforeafter": "N", "compare": "N", "mark": "N", "chart": "N", "tline": "N", "hl": "N", "sidelabel": "N", "bigtext": "N", "tab": "N", "glow": "N", "desk": "N", "chapter": "M", "photocollage": "M", "callout": "M"}
 
 DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi nature/science documentary (the polished "AI documentary explainer" style). The narration is ALREADY recorded. For each scene you get the narration words as index:word(second spoken). You decide what the viewer SEES and which editing technique is used at which exact word, so that even on mute the video explains everything.
+
+NON-NEGOTIABLE USER STYLE: NO PRESENTER, NO HOST, NO TALKING-HEAD INSERTS, AND NO PRESENTER CUTOUTS. Tell the story only through cinematic real-world visuals, historical/reconstructed scenes, maps, documents, portraits, timelines, evidence and graphics.
 
 === STEP 1: READ THE MOMENT (do this silently for every scene) ===
 - WHAT is said: a subject (animal / place / object / phenomenon), a part of a subject, a movement, a number, a date, a quote, a real source or evidence, a comparison, a process, a mystery, a reveal.
@@ -434,7 +436,7 @@ DIRECTOR_RULES = """You are the DIRECTOR and senior film editor of a Hindi natur
 === CATALOGUE of the 150 techniques (what exists, and what the engine can do) ===
 MAP (1-20): map zoom, pins, route line, distance counter, globe, borders, expansion, army arrows, GPS, compass, scale, comparison -> the engine has a MAP scene type (script decides); inside photo scenes use "place" items for locations.
 DATA (21-40): counters, %, year counter, bars, pie, line graphs, ranking, odometer -> engine scene types counter / bars; inside photo scenes use "year" for dates/periods.
-HISTORY/DOCUMENT (41-60): timeline, old photo, Ken Burns, document reveal, newspaper, manuscript, evidence highlight -> use ONLY "note" (source card) when a real document / paper / report / study / book / inscription is mentioned; archival look = "grade":"bwred" or "dark".
+HISTORY/DOCUMENT (41-60): timeline, old photo, Ken Burns, document reveal, newspaper, manuscript, evidence highlight -> use ONLY "note" (source card) when a real document / paper / report / study / book / inscription is mentioned; exact source phrases may be highlighted on multiple lines; archival look = "grade":"bwred" or "dark".
 CAMERA (61-80): push in, pull out, pan, tilt, orbit, parallax, drone reveal, rack/focus pull, handheld, whip pan, match move, tracking, cinematic reveal -> "cam": push, pull, pan_lr, pan_rl, tilt_up, tilt_down, orbit, handheld, push_tl, push_br; "kf" keyframes (below) for focus-follow, rack/focus pull and tracking.
 TEXT (81-100): kinetic type, text reveal, word highlight, lower third, chapter title, date & location title, callout -> items "title", "place" (location title), "year" (date title), "bubble" (quote), "note" (highlighted words).
 DIAGRAM (101-115): flowchart, steps, compare, layers, labels -> engine scene types steps / compare / merge / split / layers; not in photo scenes.
@@ -447,7 +449,7 @@ Read the scene sentence by sentence and clause by clause. Split it into BEATS: e
 
 === SPECIAL SCENE LAYOUTS (use them whenever the narration calls for them - they are the signature of the polished style) ===
  "split": use it when the narrator names/lists/compares 2 or 3 separate subjects in this scene (e.g. "lion and rabbit", "two universities", "three cities", before/after). The scene becomes a SPLIT SCREEN of real photos with a red brush label card for each, each appearing exactly on its word. Return "split": [{"w": word index where the subject is named (first one w=0 or its own word), "label_hi": "name as spoken (1-5 words)", "query_en": "1-3 English words for a REAL photo", "entity_en": "exact Wikipedia-style name of that subject or empty", "prompt_en": "..."}, ...] (2-3 items). Do not also plan mains for the same words; still return normal mains as a fallback.
- "terrain": use it when the narration names TWO real places (villages, cities, districts, parks, countries within about 1000 km) and says a distance, a journey or "from X to Y". The scene becomes a tilted real-satellite map with the two places tagged, an animated arrow and the distance. Return "terrain": {"pins":[{"label_hi":"first place as spoken","lat":..,"lon":..},{"label_hi":"second place as spoken","lat":..,"lon":..}], "regions":[{"label_hi":"district/state around","lat":..,"lon":..}]} with CORRECT real coordinates (never guess a place you do not know; omit terrain then).
+ "terrain": use it when the narration names TWO real places (villages, cities, districts, parks, countries within about 1000 km) and says a distance, a journey or "from X to Y". The scene becomes a tilted real-satellite map with the two places tagged, an animated arrow and the distance. Return "terrain": {"pins":[{"label_hi":"first place as spoken","label_en":"established English place name if known","lat":..,"lon":..},{"label_hi":"second place as spoken","label_en":"established English place name if known","lat":..,"lon":..}], "regions":[{"label_hi":"district/state around","label_en":"English name if known","lat":..,"lon":..}]} with CORRECT real coordinates (never guess a place you do not know; omit terrain then).
  "note" items (source caption) as described below.
  Aim to use "split" at least once whenever a scene really names two or more subjects together.
 
@@ -466,14 +468,16 @@ Read the scene sentence by sentence and clause by clause. Split it into BEATS: e
 "items": things drawn ON TOP of the current main, exactly on the word that names them:
    - "place": "text_hi" = place name, "sub_hi" = small line (region/country). Only for a real, named place.
    - "year": "text_hi" = date/year/period exactly as spoken.
-   - "bubble": "text_hi" (max 6 words) when someone's words are quoted.
-   - "note": SOURCE CAPTION shown on the empty side of the picture while the narrator tells a fact that one of the REAL SOURCES (listed below the rules) supports. Return {"w": word where the fact starts, "kind": "note", "src": "<paragraph id exactly as listed, e.g. 2.1>", "mark_en": "1-4 consecutive English words copied exactly from that paragraph that contain the fact being told"}. The engine prints the real source title and the real paragraph, with your marked words underlined in red. Whether or not the narrator says the source name, show it when that fact is told. Use a note on EVERY scene that tells an important fact (a number, name, claim, place) that a paragraph supports (at most one note per scene, a different paragraph from the previous scene where possible), only if a listed paragraph really supports what is said; never invent a source, never write the text yourself. If no real sources are listed, use no notes.
+   - "bubble": "text_hi" (max 6 exact words) ONLY when a visible reenactment character is speaking; use the compact white speech balloon with a small tail pointing to that character.
+   - "dialogue": a separate lower dialogue caption for an exact spoken line (max 12 words) when a balloon is unsuitable or no clear speaker is visible; optional "speaker_hi" only when the speaker is explicitly named. Never duplicate one line in both.
+   - "note": SOURCE CAPTION / DOCUMENT PAGE shown while the narrator tells a fact that one of the REAL SOURCES (listed below the rules) supports. Return {"w": word where the fact starts, "kind": "note", "src": "<paragraph id exactly as listed, e.g. 2.1>", "mark_en": "1-4 consecutive English words copied exactly from that paragraph that contain the fact being told"}. If the visible source paragraph contains several separate lines that directly support the narration, you may instead return "marks_en": ["exact phrase 1", "exact phrase 2", ...] (maximum four phrases, each copied verbatim from that same source paragraph). The engine displays the real source title and real paragraph with the exact matching phrases highlighted; never paraphrase or invent a highlighted phrase. Whether or not the narrator says the source name, show it when that fact is told. Use a note on EVERY scene that tells an important fact (a number, name, claim, place) that a paragraph supports (at most one note per scene, a different paragraph from the previous scene where possible), only if a listed paragraph really supports what is said; never invent a source, never write the text yourself. If no real sources are listed, use no notes.
    - "title": "text_hi" (1-3 words): the name of the main character / subject when first introduced, or the biggest reveal (at most 2 per video).
    - "year": may also carry "year_num" (the calendar year as a number, only when a real year 1000-2100 is spoken) and "month" (1-12 or null): the engine then slides a timeline to it.
    - "person": a REAL, notable public person (scientist, author, leader) named for the first time: {"w", "kind": "person", "text_hi": "name as spoken", "entity_en": "exact English Wikipedia article title"}. Never for private people, victims, villagers or fictional characters.
    - "stat": {"w", "kind": "stat", "text_hi": "1-3 words"} a striking short duration / number / count said for emphasis (e.g. "३ महीने", "४५ मिनट"), shown as huge red text.
    - "verdict": {"w", "kind": "verdict", "text_hi": "", "circles": [{"query_en": "1-3 English words of a REAL photo", "mark": "cross" or "tick", "label_hi": "1-2 words"}]} (2-3 circles) when the narrator says what is false / true, a myth / fact, what did not happen / what did.
-   - "bubble" may carry "side": "left" or "right" = which of the two people on screen speaks (two people talking = two bubbles, first left, second right).
+   - "bubble" may carry "side": "left" or "right" = which visible reenactment character speaks; use a compact white balloon with a small tail pointing toward that character.
+   - "dialogue": use a separate lower dialogue caption for an exact spoken line when a speech balloon is unsuitable or no clear speaker is visible. Maximum 12 words; preserve the exact quoted words, never paraphrase. Do not duplicate the same line as both bubble and dialogue.
    - NO "popup" stickers exist any more.
    Never two items on the same word. No item before its word.
 Return JSON only: {"scenes":[{"i": <scene number>, "read": "<who is addressed + how it is said, 6 words>", "beats":[...], "mains":[...], "items":[...]}]}"""
@@ -544,8 +548,8 @@ def apply_special(sc, d):
     tr = d.get("terrain")
     if isinstance(tr, dict):
         try:
-            pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (tr.get("pins") or [])[:5]]
-            regs = [{"label_hi": clean_short(r_.get("label_hi"), 20), "lat": float(r_["lat"]), "lon": float(r_["lon"])} for r_ in (tr.get("regions") or [])[:4]
+            pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "label_en": clean_short(p_.get("label_en"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (tr.get("pins") or [])[:5]]
+            regs = [{"label_hi": clean_short(r_.get("label_hi"), 20), "label_en": clean_short(r_.get("label_en"), 24), "lat": float(r_["lat"]), "lon": float(r_["lon"])} for r_ in (tr.get("regions") or [])[:4]
                     if clean_short(r_.get("label_hi"), 20)]
             ok_ = len(pins) >= 2 and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins)
             if ok_ and max(hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins) < 1500:
@@ -686,9 +690,14 @@ def apply_direction(sc, d):
             sp_ = SRC_PARAS.get(str(it.get("src") or "").strip())
             if not sp_:
                 continue
-            mk_ = clean_short(it.get("mark_en"), 50)
-            if mk_ and mk_.lower() not in sp_["text"].lower():
-                mk_ = ""
+            # Reference pages show more than one highlighted line. Accept up to four
+            # exact passages from the retrieved source paragraph; do not invent wording.
+            raw_marks = it.get("mark_en") or it.get("marks_en") or ""
+            if isinstance(raw_marks, list):
+                raw_marks = "||".join(str(x) for x in raw_marks[:4])
+            candidates = [clean_short(x, 70) for x in str(raw_marks).split("||")[:4]]
+            valid_marks = [m for m in candidates if m and m.casefold() in sp_["text"].casefold()]
+            mk_ = "||".join(valid_marks)
             if TRUSTED_ONLY and not is_trusted(sp_.get("url", "")):
                 continue
             if not note_supports(" ".join(wds[max(0, w - 10):w + 16]), sp_["text"]):
@@ -721,6 +730,10 @@ def apply_direction(sc, d):
                     rec["year_num"], rec["month"] = yn, mo
             if kind == "bubble" and str(it.get("side") or "") in ("left", "right"):
                 rec["side"] = str(it["side"])
+            if kind == "dialogue":
+                speaker = clean_short(it.get("speaker_hi"), 32)
+                if speaker:
+                    rec["speaker_hi"] = speaker
         else:
             continue
         used.add((w, kind))
@@ -731,12 +744,12 @@ def apply_direction(sc, d):
 
 
 DIRECTOR_REPORT = [""]
-DIR_CAMS = {"suspense": ["push", "push_br", "tilt_down", "push_tl"], "wonder": ["pull", "tilt_up", "pan_lr", "orbit"],
-             "serious": ["push", "pan_rl", "push_tl", "pull"], "excited": ["handheld", "push_br", "pan_lr", "push"],
+DIR_CAMS = {"suspense": ["push", "tilt_down", "pull"], "wonder": ["pull", "tilt_up", "pan_lr"],
+             "serious": ["push", "pan_rl", "pull"], "excited": ["handheld", "pan_lr", "push"],
              "calm": ["pan_lr", "pull", "pan_rl", "tilt_up"]}
 SLIDE_MIX = ["slide_l", "slide_r", "slide_l", "slide_u", "slide_d", "pandark"]  # reference look: the next picture slides in from any side, one continuous move
-DIR_TRANS = {"suspense": ["slide_l", "pandark", "slide_r", "flash"], "wonder": ["slide_l", "slide_u", "slide_r", "pandark"],
-              "serious": ["slide_l", "pandark", "slide_d", "cut"], "excited": ["slide_l", "slide_r", "slide_u", "slide_d"], "calm": ["slide_r", "pandark", "slide_l", "slide_u"]}
+DIR_TRANS = {"suspense": ["slide_l", "pandark", "slide_r", "dipblack", "tint_red", "blurin"], "wonder": ["slide_l", "slide_u", "slide_r", "pandark"],
+              "serious": ["slide_l", "pandark", "slide_d", "cut", "tint_blue", "tear"], "excited": ["slide_l", "slide_r", "slide_u", "slide_d", "slash"], "calm": ["slide_r", "pandark", "slide_l", "slide_u", "curl"]}
 
 
 def ensure_techniques(sc, k0=0):
@@ -746,7 +759,7 @@ def ensure_techniques(sc, k0=0):
     for n, sh in enumerate(sc.get("shots", [])):
         if sh.get("clip"):
             continue
-        if not sh.get("kf") and sh.get("cam") not in CAMS:
+        if not sh.get("kf") and (sh.get("cam") not in CAMS or (REF_ONLY and sh.get("cam") not in REF_CAMS)):
             opts = [c for c in DIR_CAMS[tone] if c != last_cam] or DIR_CAMS[tone]
             sh["cam"] = opts[(k0 + n) % len(opts)]
             sh["tech"] = (sh.get("tech") or "") + ("," if sh.get("tech") else "") + "cam:" + sh["cam"]
@@ -906,8 +919,8 @@ def director_extras(scenes, topic=""):
         prompt = f"""Film editor task. Hindi narration, every word numbered (index:word). Video topic: {topic}
 For EACH scene decide ONLY these two things:
 (1) "split": the narrator names or lists 2 or 3 SEPARATE subjects in this scene (two animals, two cities, two universities, before/after...). Add "vs": true next to "split" when it is exactly TWO subjects that are an explicit contrast (old vs new, before vs after, then vs now, myth vs fact, wrong vs right): the screen then becomes a bright-vs-red-black comparison. Return a list of 2-3 {{"w": word index where that subject is first spoken (the first item's w may be its own word), "label_hi": "name as spoken", "query_en": "1-3 English words for a real photo of exactly it", "entity_en": "exact Wikipedia article title or empty", "prompt_en": "realistic photo of it"}}.
-(2) "terrain": the narrator names EXACTLY TWO real places (a start and an end: villages, cities, districts, parks, less than ~1000 km apart) as a journey, distance or 'from X to Y'. Return {{"pins":[{{"label_hi":"start place as spoken","lat":..,"lon":..}},{{"label_hi":"end place as spoken","lat":..,"lon":..}}],"regions":[{{"label_hi":"district/state around","lat":..,"lon":..}}]}} with CORRECT coordinates; never guess unknown places. (If the scene names THREE or more places use "map" below instead.)
-(3) "map": the narrator names 1-5 real places (a named country/state/city/forest only: NOT "the world", "Earth", "planet" or "universe", which show a photo of Earth instead) (country, state, forest, city) where the story happens and no split/terrain applies. Return {{"pins":[{{"label_hi":"place as spoken","lat":..,"lon":..}}]}} with correct coordinates (never guess).
+(2) "terrain": the narrator names EXACTLY TWO real places (a start and an end: villages, cities, districts, parks, less than ~1000 km apart) as a journey, distance or 'from X to Y'. Return {{"pins":[{{"label_hi":"start place as spoken","label_en":"established English name if known","lat":..,"lon":..}},{{"label_hi":"end place as spoken","label_en":"established English name if known","lat":..,"lon":..}}],"regions":[{{"label_hi":"district/state around","label_en":"English name if known","lat":..,"lon":..}}]}} with CORRECT coordinates; never guess unknown places. (If the scene names THREE or more places use "map" below instead.)
+(3) "map": the narrator names 1-5 real places (a named country/state/city/forest only: NOT "the world", "Earth", "planet" or "universe", which show a photo of Earth instead) (country, state, forest, city) where the story happens and no split/terrain applies. Return {{"pins":[{{"label_hi":"place as spoken","label_en":"established English place name if known","lat":..,"lon":..}}],"insets":[{{"label_hi":"short factual photo label","query_en":"specific real archival subject to search","entity_en":"exact named person/family/place if stated","lat":..,"lon":..,"shape":"rect|circle"}}]}}. Add an inset ONLY when the reference-like map scene genuinely includes a relevant historical photograph or family/person photo attached to a named map location; otherwise use an empty insets list. Never invent an identity, relationship, caption, or photograph. Use max 2 insets, exact source-supported subject, and valid coordinates for the map location.
 Use null when it does not apply. Do not force it.{story_map} Return ONLY JSON: {{"scenes":[{{"i":0,"split":null,"vs":false,"terrain":null,"map":null}}]}}
 {listing}"""
         try:
@@ -967,17 +980,30 @@ Use null when it does not apply. Do not force it.{story_map} Return ONLY JSON: {
         else:
             ok_ = False
             try:
-                pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (r["map"].get("pins") or [])[:5]]
+                pins = [{"label_hi": clean_short(p_.get("label_hi"), 28), "label_en": clean_short(p_.get("label_en"), 28), "lat": float(p_["lat"]), "lon": float(p_["lon"])} for p_ in (r["map"].get("pins") or [])[:5]]
                 if pins and not any(re.search(r"दुनिया|पृथ्वी|धरती|विश्व|संसार|ग्रह|brahm|ब्रह्मांड|world|earth|planet|universe", p_["label_hi"], re.I) for p_ in pins) and all(p_["label_hi"] and -80 <= p_["lat"] <= 80 and -180 <= p_["lon"] <= 180 for p_ in pins):
-                    spread = max([hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins] + [0])
+                    inset_defs = []
+                    for inset in (r["map"].get("insets") or [])[:1]:
+                        if not isinstance(inset, dict):
+                            continue
+                        try:
+                            ila, ilo = float(inset.get("lat")), float(inset.get("lon"))
+                        except Exception:
+                            continue
+                        ilabel, iquery = clean_short(inset.get("label_hi"), 24), clean_short(inset.get("query_en"), 90)
+                        if ilabel and iquery and -80 <= ila <= 80 and -180 <= ilo <= 180:
+                            inset_defs.append({"label_hi": ilabel, "query_en": iquery,
+                                               "entity_en": clean_short(inset.get("entity_en"), 90),
+                                               "prompt_en": clean_short(inset.get("prompt_en"), 300) or ("documentary-style historical reconstruction photograph of " + iquery + ", no text, no watermark"),
+                                               "lat": ila, "lon": ilo, "shape": "circle" if inset.get("shape") == "circle" else "rect"})
                     if len(pins) == 2 and spread < 1500:  # exactly two places: the terrain map with the distance
                         mp_ = {"pins": pins, "route": True, "mode": "terrain", "regions": []}
-                    elif len(pins) >= 3 and spread < 1500:  # several places close together: terrain background, pins in the order named, an arrow from each to the next
+                    elif len(pins) >= 3 and spread < 1500:  # several places close together: terrain background, pins in the order named, an arrow from each place to the next
                         mp_ = {"pins": pins, "route": True, "mode": "terrain", "regions": []}
                     elif len(pins) >= 2:
-                        mp_ = {"pins": pins, "route": True, "mode": "globe" if spread > 2500 else "flat"}
+                        mp_ = {"pins": pins, "route": True, "mode": "globe" if spread > 2500 else "flat", "insets": inset_defs}
                     else:
-                        mp_ = {"pins": pins, "route": False, "mode": "flat"}
+                        mp_ = {"pins": pins, "route": False, "mode": "flat", "insets": inset_defs}
                     part["type"], part["map"], part["headline_hi"] = "map", mp_, ""
                     ok_ = True
                     kind = "map"
@@ -1013,7 +1039,7 @@ SCENES:
                 sp_ = SRC_PARAS.get(str(m.get("src") or "").strip())
                 if sc is None or not sp_ or sc["type"] != "photo" or not (0 <= w < len(sc["narration_hi"].split())):
                     continue
-                if any(isinstance(it, dict) and it.get("kind") == "note" for it in sc.get("items", [])):
+                if any(isinstance(it, dict) and it.get("kind") in ("note", "press") for it in sc.get("items", [])):
                     continue
                 mk = clean_short(m.get("mark_en"), 50)
                 if mk and mk.lower() not in sp_["text"].lower():
@@ -1037,7 +1063,7 @@ SCENES:
                         rows_.append(f'S{i}.{k}: {sh["text_hi"]}')
             if not rows_:
                 continue
-            prompt = f"""Hindi narration phrases of a nature documentary (topic: {topic}). For every phrase in which the narrator describes a visible ACTION or MOVEMENT (walking, running, hunting, eating, drinking, flying, swimming, roaring, resting, flowing water, fire, spinning...), give the English stock-footage search "subject + exact action" (1-4 words) that shows EXACTLY that action by that subject: chalna = "lion walking", daudna = "lion running", pani peena = "lion drinking water". Skip phrases that describe no visible action (facts, numbers, places, ideas).
+            prompt = f"""Hindi narration phrases of {CH_DESC} (topic: {topic}). For every phrase in which the narrator describes a visible ACTION or MOVEMENT (walking, running, hunting, eating, drinking, flying, swimming, roaring, resting, flowing water, fire, spinning...), give the English stock-footage search "subject + exact action" (1-4 words) that shows EXACTLY that action by that subject: chalna = "lion walking", daudna = "lion running", pani peena = "lion drinking water". Skip phrases that describe no visible action (facts, numbers, places, ideas).
 Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 """ + "\n".join(rows_)
             try:
@@ -1078,13 +1104,13 @@ Return ONLY JSON: {{"clips":[{{"id":"S0.1","clip_en":"lion walking"}}]}}
 
 
 # =========================================================================== techniques_pass: puts every technique at the moment the narrator calls for it, then guarantees coverage
-# REFERENCE ONLY: overlays that never appear in the 10-minute reference video are switched off (REF_ONLY=0 brings them back)
+# REFERENCE ONLY: overlays outside the reviewed 39:57 reference video stay gated (REF_ONLY=0 brings them back)
 REF_ONLY = os.environ.get("REF_ONLY", "1") != "0"
-REF_BLOCK = {"mark", "hl", "srclist", "stat", "measure", "chart", "feature", "explain", "action", "qmark", "compare", "beforeafter", "tline"}  # red circle / red-line text, pink caption bar, SOURCES list, big red stat, ruler, chart, pop-up cards
+REF_BLOCK = {"hl", "srclist", "stat", "measure", "chart", "feature", "explain", "action", "qmark", "compare", "beforeafter", "dossier"}  # Keep techniques without a complete photo-scene renderer gated in reference-only mode.
 CALM_MAX_ITEMS = 999  # no limit: an animation appears every time the narration calls for it
 CALM_GAP = 1.0  # only the SAME kind of animation twice within one second is treated as a duplicate
-CALM_PRI = {"note": 10, "srclist": 10, "person": 9, "name": 9, "place": 9, "title": 9, "year": 8, "stat": 8, "verdict": 8, "explain": 7, "action": 7, "feature": 7, "compare": 7, "chart": 7, "tline": 7,
-            "measure": 6, "beforeafter": 6, "lens": 5, "mark": 4, "quote": 4, "bubble": 3, "qmark": 3, "hl": 2}
+CALM_PRI = {"note": 10, "srclist": 10, "press": 9, "person": 9, "name": 9, "place": 9, "title": 9, "year": 8, "stat": 8, "verdict": 8, "archive": 8, "photocollage": 8, "network": 8, "explain": 7, "action": 7, "feature": 7, "id_doc": 7, "compare": 7, "chart": 7, "tline": 7,
+            "measure": 6, "beforeafter": 6, "lens": 5, "mark": 4, "quote": 4, "bubble": 3, "qmark": 3, "hl": 2, "callout": 6}
 PERMANENT_TECHNIQUES = {
     "split": "split screen (multi scene) - two/three subjects named together",
     "terrain": "terrain map - a journey / distance between two places",
@@ -1099,6 +1125,10 @@ PERMANENT_TECHNIQUES = {
     "chart": "Vox animated chart - numbers said by the narrator",
     "tline": "Vox multi-event timeline - 3-5 dated events in order",
     "hl": "Vox highlight bar - the key claim in big text",
+    "archive": "reference-style archival photo grid using distinct real scene stills; clean rectangular panels, no invented labels or evidence metadata",
+    "dossier": "monochrome subject dossier portrait card with restrained identity-file graphics; reconstruction only, no invented facts",
+    "press": "reference-style source clipping: one off-white document page on the right over a darkened scene, with only the exact narration-backed excerpt highlighted in blue or yellow; do not invent mastheads, article filler, dates, bylines or citations",
+    "id_doc": "historical identity-document layout: pale archival paper with a real, licence-checked portrait asset for the exact named person inset on the right and only narration/source-backed name and field text on the left; use only when entity_en is explicitly known and a real portrait can be verified; never invent ID numbers, dates, seals, official logos or personal details",
 }
 TECH_PER_MIN = {"qmark": 0.0, "lens": 0.0, "mark": 0.5, "hl": 0.0, "measure": 0.6, "compare": 0.4, "beforeafter": 0.3, "chart": 0.4, "tline": 0.3}
 TECH_MIN_ABS = {"qmark": 0, "lens": 0, "mark": 1, "hl": 0, "measure": 1, "compare": 1, "beforeafter": 1, "chart": 1, "tline": 1}
@@ -1183,6 +1213,42 @@ def parse_new_item(kind, it, w):
             except Exception:  # noqa
                 pass
         return base
+    if kind == "callout":
+        labels = []
+        for row in (it.get("labels") or [])[:4]:
+            if not isinstance(row, dict):
+                continue
+            label = clean_short(row.get("text_hi"), 36)
+            try:
+                fx, fy = float(row.get("fx")), float(row.get("fy"))
+            except Exception:
+                continue
+            if label and len(label.split()) <= 5 and 0.08 <= fx <= 0.92 and 0.08 <= fy <= 0.92:
+                side = str(row.get("side") or "auto")
+                try:
+                    delay = max(0.0, min(2.5, float(row.get("delay", 0) or 0)))
+                except Exception:
+                    delay = 0.0
+                labels.append({"text": label, "fx": fx, "fy": fy,
+                               "side": side if side in ("auto", "left", "right", "top", "bottom") else "auto",
+                               "delay": delay})
+        if labels:
+            base.update({"labels": labels, "span": 5.4})
+            return base
+        if not txt or len(txt.split()) > 5:
+            return None
+        for k_ in ("fx", "fy"):
+            try:
+                v = float(it.get(k_))
+                if 0.08 <= v <= 0.92:
+                    base[k_] = v
+            except Exception:  # noqa
+                pass
+        if "fx" not in base or "fy" not in base:
+            return None
+        side = str(it.get("side") or "auto")
+        base["side"] = side if side in ("auto", "left", "right", "top", "bottom") else "auto"
+        return base
     if kind == "hl":
         if not txt or len(txt.split()) > 9:
             return None
@@ -1254,6 +1320,83 @@ def parse_new_item(kind, it, w):
         base.update({"events": ev, "span": 6.2, "ci": _TECH_SEQ[0] % len(VOX_BG)})
         _TECH_SEQ[0] += 1
         return base
+    if kind == "chapter":
+        # Reference footage uses short, large event words such as CRACKDOWN / JOB LOSS.
+        # Keep only a concise phrase copied from the narration; never invent a heading.
+        if not txt or len(txt.split()) > 3:
+            return None
+        base["text"] = txt
+        base["span"] = 4.2
+        return base
+    if kind in ("archive", "photocollage"):
+        # The renderer builds its grid only from distinct real shot assets already
+        # present in this scene. It deliberately skips the effect when fewer than
+        # four distinct photographs are available; no image is duplicated.
+        base.update({"span": 6.2})
+        return base
+    if kind == "press":
+        # A newspaper/document page must be grounded in an actual supplied source
+        # excerpt. Narration-only snippets are not accepted as article text.
+        source_text = str(it.get("source_text") or "").strip()
+        if not source_text or it.get("source_verified") is not True:
+            return None
+        paragraphs = [str(x).strip() for x in (it.get("paragraphs") or [source_text]) if str(x).strip()][:8]
+        columns = [str(x).strip() for x in (it.get("columns") or []) if str(x).strip()][:2]
+        if not paragraphs and not columns:
+            return None
+        highlights = [str(x).strip() for x in (it.get("highlights") or []) if str(x).strip()][:6]
+        # Keep only exact phrases that literally occur in the supplied source text.
+        full_source = "\n".join(paragraphs + columns)
+        highlights = [x for x in highlights if x in full_source]
+        base.update({"text": clean_short(source_text, 190),
+                     "title": clean_short(it.get("source_title"), 64),
+                     "paragraphs": paragraphs, "columns": columns,
+                     "highlights": highlights,
+                     "highlight_color": str(it.get("highlight_color") or "blue").lower() if str(it.get("highlight_color") or "blue").lower() in ("blue", "yellow") else "blue",
+                     "photo_entity_en": clean_short(it.get("photo_entity_en"), 100) if clean_short(it.get("photo_entity_en"), 100).isascii() else "",
+                     "source_verified": True, "span": 6.5})
+        return base
+    if kind == "dossier":
+        if REF_ONLY:
+            return None
+        if not txt:
+            return None
+        base.update({"text": clean_short(txt, 54), "span": 6.8})
+        return base
+    if kind == "id_doc":
+        name = clean_short(it.get("text_hi") or it.get("name_hi"), 100)
+        entity = clean_short(it.get("entity_en"), 100)
+        fields = [clean_short(x, 90) for x in (it.get("fields_hi") or []) if clean_short(x, 90)][:5]
+        if not name or not entity or not entity.isascii():
+            return None
+        base.update({"text": name, "entity_en": entity, "fields": fields, "span": 6.0})
+        return base
+    if kind == "network":
+        nodes = []
+        for node in (it.get("nodes") or [])[:9]:
+            if not isinstance(node, dict):
+                continue
+            name = clean_short(node.get("name_hi"), 22)
+            role = clean_short(node.get("role_hi"), 24)
+            # entity_en is an exact, explicitly supplied entity name used only for
+            # a licence-checked real portrait lookup; never infer it from Hindi text.
+            entity = clean_short(node.get("entity_en"), 100)
+            if name:
+                nodes.append({"name": name, "role": role, "entity_en": entity})
+        edges = []
+        for edge in (it.get("edges") or [])[:16]:
+            if not isinstance(edge, dict):
+                continue
+            try:
+                a_, b_ = int(edge.get("a")), int(edge.get("b"))
+            except Exception:
+                continue
+            if 0 <= a_ < len(nodes) and 0 <= b_ < len(nodes) and a_ != b_:
+                edges.append({"a": a_, "b": b_, "label": clean_short(edge.get("label_hi"), 18)})
+        if len(nodes) < 3 or not edges:
+            return None
+        base.update({"nodes": nodes, "edges": edges, "heading": clean_short(it.get("heading_hi"), 28), "span": 7.0})
+        return base
     return None
 
 
@@ -1267,6 +1410,7 @@ HOLY_WORDS = ("संत", "साधु", "महात्मा", "महा�
 DANGER_WORDS = ("भूत", "प्रेत", "शैतान", "आत्मा", "चुड़ैल", "बुरी", "खौफ़", "ख़ौफ़")
 RESEARCH_WORDS = ("शोधकर्ता", "शोधकर्ताओं", "प्रोफेसर", "जांचकर्ता", "जांचकर्ताओं", "विश्वविद्यालय", "यूनिवर्सिटी")
 _DESK_DONE = [False]  # the desk collage appears once, at the first mention of the research (as in the reference)
+ARCHIVE_WORDS = ("दस्तावेज़", "दस्तावेज", "फाइल", "फ़ाइल", "अभिलेख", "रिकॉर्ड", "पुरानी तस्वीर", "तस्वीर", "फोटो", "फ़ोटो", "पत्र", "चिट्ठी")
 NEWS_WORDS = ("अख़बार", "अखबार", "अख़बारों", "अखबारों", "समाचार", "खबर", "ख़बर", "ख़बरें", "खबरें", "सुर्ख़ियाँ", "सुर्खियां", "सुर्खियाँ")
 TIME_UNITS = ("महीने", "महीना", "महीनों", "सालों", "साल", "दिन", "दिनों", "हफ़्ते", "हफ्ते", "घंटे", "घंटों", "मिनट", "सदी")
 Q_STRICT = ("क्यों", "कैसे", "आखिर", "रहस्य", "पहेली", "सवाल")
@@ -1334,8 +1478,12 @@ def det_techniques(scenes):
             if t_ in RESEARCH_WORDS and not _DESK_DONE[0]:
                 _DESK_DONE[0] = True
                 add({"w": i, "kind": "desk", "text": ""}, 6)
+            if t_ in ARCHIVE_WORDS or (i + 1 < len(wds) and (t_ + " " + _tw(wds[i + 1])) in ARCHIVE_WORDS):
+                add({"w": i, "kind": "archive", "text": ""}, 12)
             if t_ in NEWS_WORDS:
-                add({"w": i, "kind": "tab", "text": "BREAKING NEWS"}, 6)
+                # The tag is the exact spoken word. A press/document page is added
+                # separately only when a verified source paragraph is available.
+                add({"w": i, "kind": "tab", "text": clean_short(wds[i], 18)}, 6)
             if has_num and t_ in TIME_UNITS:
                 add({"w": i, "kind": "bigtext", "text": f"{prev} {t_}", "sub": ""}, 6)
             if "?" in w_ or t_ in Q_STRICT:
@@ -1369,7 +1517,7 @@ def norm_txt(t):
     return re.sub(r"[\s।,.!?\"'“”‘’:;()\-–—…]+", "", str(t or ""))
 
 
-TXT_PRI = {"person": 9, "name": 9, "place": 8, "title": 8, "year": 7, "stat": 7, "quote": 7, "note": 6, "bubble": 6, "measure": 5, "compare": 5, "chart": 5, "tline": 5, "hl": 4, "mark": 3, "kw": 1}
+TXT_PRI = {"person": 9, "name": 9, "place": 8, "title": 8, "year": 7, "stat": 7, "quote": 7, "chapter": 8, "note": 6, "bubble": 6, "dialogue": 7, "measure": 5, "compare": 5, "chart": 5, "tline": 5, "hl": 4, "mark": 3, "kw": 1}
 
 
 def calm_pass(scenes):
@@ -1455,13 +1603,15 @@ REFERENCE OVERLAY GRAMMAR (every overlay says WHY it appears; there is NO limit 
 - lens: only when the narrator asks the viewer to look closely at one small physical detail.
 - qmark: only when the narrator raises a real question or a mystery.
 - place / map: when a village, city or journey is named for the first time.
+- chapter: a short dramatic event / section word visibly emphasized in the reference (examples seen: CRACKDOWN, JOB LOSS). Use ONLY a concise phrase actually spoken in this scene, max 3 words; never invent a heading. {"w":..,"kind":"chapter","text_hi":"exact phrase spoken"}
 Find every moment where one of these on-screen techniques fits what is REALLY being said (each exactly on its word, never two on one word, up to 5 per scene, use them generously):
 - "measure": a size / length / height / depth / weight / distance / duration is said. {{"w":..,"kind":"measure","text_hi":"value + unit as spoken, e.g. ३० मीटर","orient":"h" or "v" (v for height / depth),"sub_hi":"what is measured, 1-2 words"}}
 - "qmark": ONE question mark, only when the narrator really asks an open question or opens a mystery the viewer should wonder about (क्यों, कैसे, आखिर...). Every time it happens (no limit), never on a plain statement. {{"w":..,"kind":"qmark"}}
 - "lens": magnifier, ONLY when the narrator tells the viewer to look closely at a small physical detail or a line of a document (बारीकी से देखें, गौर से, ध्यान से). Never on an ordinary word like small / near / eye. Every time the narrator says it (no limit). {{"w":..,"kind":"lens","fx":0.1-0.9,"fy":0.1-0.9}} (position of the detail on the picture)
 - "beforeafter": then vs now, a change, a before and an after of the SAME thing. {{"w":..,"kind":"beforeafter","after_en":"1-4 English words naming the REAL photo that shows the AFTER state","label_a_hi":"पहले","label_b_hi":"बाद में"}} (the picture already on screen is the before)
 - "compare": two things compared with numbers or qualities. {{"w":..,"kind":"compare","a_hi":"first","b_hi":"second","rows":[{{"label_hi":"what is compared","a_hi":"value of A as spoken","b_hi":"value of B as spoken","na":number or 0,"nb":number or 0}}]}} 1-3 rows, values only as the narrator says them.
-- "mark": the important thing on screen that the narrator points at. {{"w":..,"kind":"mark","shape":"circle"|"underline"|"arrow","text_hi":"1-3 word label or empty"}}
+- "mark": the important thing on screen that the narrator points at. {{"w":..,"kind":"mark","shape":"circle"|"underline"|"arrow","fx":0.1-0.9,"fy":0.1-0.9,"text_hi":"1-3 word label or empty"}}
+- "callout": ONLY when the reference shows small white object labels connected to specific pictured parts by thin pointer lines (e.g. Morse-code tool, radio equipment, tube, can, sign or document detail). Return either one label {{"w":..,"kind":"callout","text_hi":"exact short object name from narration (1-5 words)","fx":0.1-0.9,"fy":0.1-0.9,"side":"auto|left|right|top|bottom"}} or a single item with up to 4 individually anchored labels: {{"w":..,"kind":"callout","labels":[{{"text_hi":"exact part name","fx":0.1-0.9,"fy":0.1-0.9,"side":"left|right|top|bottom","delay":0.0}},...]}}. fx/fy point to the actual visible part. Only source/narration-backed labels; never use for general captions or person names.
 - "chart": 2-6 numbers the narrator says that can be compared or that change. {{"w":..,"kind":"chart","type":"bar"|"line","title_hi":"short title","pts":[{{"label_hi":"short label","v":number,"show_hi":"as spoken"}}]}} Numbers ONLY as spoken, never invented.
 - "tline": 3-5 dated events told in order. {{"w":..,"kind":"tline","events":[{{"when_hi":"year / date as spoken","what_hi":"2-4 words"}}]}}
 - "hl": THE key claim / conclusion of the scene in at most 8 words, exactly as said. {{"w":..,"kind":"hl","text_hi":"the claim"}}
@@ -1470,6 +1620,9 @@ Find every moment where one of these on-screen techniques fits what is REALLY be
 - "tab": the narrator talks about a newspaper / news report / headline: a news tab. {{"w":..,"kind":"tab","text_hi":"BREAKING NEWS or a short Hindi tag"}}
 - "glow": a coloured rim of light around the main person while the narrator speaks of a revered, holy, dangerous or possessed person. {{"w":..,"kind":"glow","tone":"holy (yellow-green aura) | danger (red aura) | cold (teal aura) | rim (thin red outline of the person)"}}
 - "desk": the narrator introduces the investigation / the researcher / the study as a whole: a wooden research desk with pages and photos. Use it ONCE for the first mention of the research. {{"w":..,"kind":"desk"}}
+- "photocollage": when narration refers to a group of related historical/archival moments or photographs and this scene contains at least 4 distinct relevant picture shots. Use only those actual scene pictures (up to 9); never duplicate one image to fill a tile. {"w":..,"kind":"photocollage"}
+- "id_doc": only when the reference-style archival identity document is genuinely useful for an explicitly named, identifiable public historical person. Return {"w":..,"kind":"id_doc","text_hi":"exact name as spoken","entity_en":"exact English article title of that same person","fields_hi":["only source/narration-backed short fields"]}. The engine must verify a real portrait; if it cannot, the card is skipped. Never invent ID numbers, dates, seals, signatures, government logos or personal details.
+- "network": when 3 or more named people/groups are explicitly connected in the narration (spy network, family, team, chain of command, informants or a business-cover structure). Use ONLY names and relationships stated in the narration; do not infer unknown links. {{"w":..,"kind":"network","heading_hi":"optional short heading copied exactly from words spoken (e.g. BUSINESS COVER); empty if not spoken","nodes":[{{"name_hi":"name exactly as spoken","role_hi":"short role stated in narration","entity_en":"optional exact English Wikipedia article title for this same explicitly named real person; omit if uncertain or if this is a group"}}],"edges":[{{"a":0,"b":1,"label_hi":"relationship stated"}}]}} Include 3-9 nodes and only explicit relationships; indexes refer to nodes array. entity_en is ONLY for an exact named real person; never translate/guess identities or attach a similar-looking person's photo.
 Never invent facts or numbers. If nothing fits a scene return an empty list.
 Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
 {listing}"""
@@ -1511,6 +1664,13 @@ def techniques_gemini(scenes, topic, only=None, per=5):
                     continue
                 if not _free_word(have, w, kind, 4):
                     continue
+                if kind == "chapter":
+                    # Strict source check: heading must be the exact contiguous phrase spoken at this word.
+                    spoken = sc["narration_hi"].split()
+                    phrase = clean_short(it.get("text_hi"), 40).split()
+                    norm = lambda z: re.sub(r"[^\w]", "", str(z or "")).lower()
+                    if not phrase or len(phrase) > 3 or [norm(x) for x in spoken[w:w + len(phrase)]] != [norm(x) for x in phrase]:
+                        continue
                 rec = parse_new_item(kind, it, w)
                 if rec:
                     have.append(rec)
@@ -1701,7 +1861,7 @@ def director_pass(scenes, topic=""):
     DIRECTOR_REPORT[0] = (f"Director: {ok}/{len(todo)} scenes planned | beats {nbeats} | keyframe moves {sum(1 for sh in allsh if sh.get('kf'))} | "
                           f"video clips planned {sum(1 for sh in allsh if sh.get('motion') and sh.get('clip_en'))} | transitions {sum(1 for sh in allsh if sh.get('trans'))} | cams {sum(1 for sh in allsh if sh.get('cam'))} | "
                           f"split-screens {sum(1 for sc in scenes if sc.get('type') == 'multi' and sc.get('directed'))} | terrain maps {sum(1 for sc in scenes if sc.get('type') == 'map' and sc.get('directed'))} | "
-                          f"source cards {sum(1 for sc in scenes if sc.get('type') == 'photo' for it in sc.get('items', []) if isinstance(it, dict) and it.get('kind') == 'note')} | "
+                          f"source cards {sum(1 for sc in scenes if sc.get('type') == 'photo' for it in sc.get('items', []) if isinstance(it, dict) and it.get('kind') in ('note', 'press'))} | "
                           f"techniques used: {', '.join(techs) or 'none'}")
     log(DIRECTOR_REPORT[0])
 
@@ -1727,12 +1887,18 @@ def is_dup(topic_en, done):
 
 
 def pick_topic(done):
-    cat_key, cat_desc = random.choice(CATEGORIES)
+    if STORY_STYLE:
+        cat_key, cat_desc = "true_story", random.choice(STORY_CATEGORIES)
+        channel_desc = "a Hindi true-story documentary YouTube channel for general viewers in India"
+        topic_brief = ("Suggest 8 NEW, specific, well-documented true-story topics in this category. Each must have a clear narrative arc and be supported by reliable news archives, official records, court documents, museums or established reference works. Exclude rumours and unverified claims.")
+    else:
+        cat_key, cat_desc = random.choice(CATEGORIES)
+        channel_desc = "a Hindi nature & science documentary YouTube channel for general viewers in India"
+        topic_brief = "Suggest 8 NEW, specific video topics in this category. Each must be answerable clearly in 3-5 minutes, be genuinely interesting, and rest on well-established science (no myths, no unproven claims)."
     covered = [v.get("topic_en", "") for v in done.get("videos", [])][-300:]
-    prompt = f"""You plan videos for a Hindi nature & science documentary YouTube channel for general viewers in India.
+    prompt = f"""You plan videos for {channel_desc}.
 Category: {cat_desc}
-Suggest 8 NEW, specific video topics in this category. Each must be answerable clearly in 3-5 minutes,
-be genuinely interesting, and rest on well-established science (no myths, no unproven claims).
+{topic_brief}
 Do NOT repeat or rephrase any of these already-covered topics: {json.dumps(covered, ensure_ascii=False)}
 Return JSON: [{{"topic_en": "...", "topic_hi": "..."}}]"""
     try:
@@ -1780,13 +1946,46 @@ REF_CATALOGUE = (
     "OVERLAYS (30-45): 30 source card (torn strip) and 31 source banner = every time a study / investigator / newspaper / record / witness is quoted (note); 32 dark side panel and 33 document page with highlight (note styles); "
     "34 year slider = every spoken year or date (year); 35 typed name label = first introduction of a person (name); 36 speech bubble = retold first-person words (bubble); 37 quote text (quote); 38 verdict circles = myth / fact (verdict); "
     "39 magnifier inset = look closely at a small detail (lens); 40 side labels = old / new (sidelabel); 41 big time text = a time span (bigtext); 42 news tab = newspaper (tab); 43 glow around a revered / dangerous person (glow); "
-    "44 research desk = the investigation is introduced (desk); 45 terrain map with pins, avatars and arrow = two named places or a journey (terrain scene).\n"
+    "44 research desk = the investigation is introduced (desk); 45 terrain map with pins, avatars and arrow = two named places or a journey (terrain scene). 46 large red event/chapter word = short phrase actually spoken (chapter).\n"
     "GRADE (50-55): 50 warm, 51 bwred (dread, supernatural), 52 redwash (shock), 53 cold blue (night, death), 54 sepia (archive, past), 55 dark vignette -> \"grade\".\n"
-    "Never use counters, bars, charts, flowcharts, cartoons or sketches: this is a true-story film made of story pictures, source cards, maps and these overlays.\n"
+    "Use charts, timelines, comparisons, highlights and other implemented overlays when the spoken facts genuinely support them; never invent values. Keep the film grounded in real story pictures, source cards, maps and evidence.\n"
+)
+
+
+# Additive reference-video editing lessons. This supplements the existing catalogue and
+# renderer; it deliberately does not remove or replace any old scene type or technique.
+REF_EDITING_PLAYBOOK = (
+    "\n\n=== REFERENCE VIDEO EDITING PLAYBOOK (ADDITIVE - KEEP ALL EXISTING CAPABILITIES) ===\n"
+    "VISUAL IDENTITY: Treat the film as a polished Hindi true-story documentary. Keep one coherent visual world: warm, low-key studio-like lighting for neutral narration; cinematic realistic reenactments for events; archival sepia / monochrome for historical evidence; restrained cold blue for night, prison, surveillance or death; restrained red only for danger, betrayal, arrest or a major reveal. Do not apply a new grade on every shot.\n"
+    "EDITING RHYTHM: Let important evidence breathe. Use a purposeful establishing image, then 2-4 relevant cutaways as the narration advances. Prefer roughly 3-6 seconds for a meaningful image and shorter inserts only for a specific reveal, detail or rapid sequence. Do not cut merely to create activity. Keep the main subject large and readable.\n"
+    "B-ROLL MATCHING: Match every cutaway to the exact spoken noun or action: the named city gets that city; a named person gets a verified public/archival image when available; a described action gets footage of that action; a document claim gets the actual document or a clearly labelled illustrative evidence page. Never use unrelated generic stock footage as decoration.\n"
+    "EVIDENCE / ARCHIVE SEQUENCE: When the story mentions a file, report, newspaper, letter, photograph, identity paper or witness statement, reveal it as a physical evidence object: slow push-in, subtle page tilt, paper texture, edge shadow, selective highlight or underline, and a source strip/banner (no simulated 2.5D parallax). If several clues are discussed, arrange them as a clean investigation board with 2-4 photographs/cards and thin connecting lines; introduce each clue on its spoken word. Do not invent readable document text, dates, stamps, signatures or source names.\n"
+    "MAP SEQUENCE: For a journey, escape, operation or movement between named places, use a real geographic map, restrained zoom/pan, labelled pins and one animated route arrow. Reveal origin first, destination second, then the route. Keep labels away from important geography and do not guess coordinates. For a single location, use a location tag over the relevant real image instead of an unnecessary map.\n"
+    "PERSON / IDENTITY GRAPHICS: On first introduction, use a compact typed name label; add a role or location only when stated. For a person connected to a dangerous or secret operation, a subtle edge glow or silhouette emphasis may be used, but never turn every person into a glowing cut-out. Use speech bubbles only for clearly attributed words; use quote cards for documented quotations, and distinguish paraphrase from a verbatim quote.\n"
+    "KINETIC OVERLAYS: Use year/date sliders for spoken dates; lower-third place labels for named locations; torn source banners for cited evidence; dark side panels for document context; magnifier insets for a detail the narrator explicitly asks viewers to inspect; old/new side labels for a genuine comparison; and verdict marks only when the narration clearly distinguishes a verified fact from a false claim. Animate overlays with a short ease-in, a readable hold, and a soft exit.\n"
+    "TRANSITION GRAMMAR: Continue using the existing transition renderer and transition names. Use directional slides for a move to a new place or beat; paper tear/curl/shred for a document or file reveal; dip-to-black for a major time jump, chapter break or death; cold-blue wash for night/prison/sadness; red wash for danger or shock; blur-in for a realisation or memory; zoom-blur for sudden panic; split/slash only for simultaneous events or a direct contrast; hard cut for a continuation in the same moment. Never repeat the same conspicuous transition three times in a row. Most cuts should remain simple and clean.\n"
+    "NON-REFERENCE EFFECTS: Do not select match-cut, whip-pan, rack-focus simulation, 2.5D parallax simulation, or any other experimental effect unless it is independently visible in the supplied reference. These may exist in the codebase for optional use, but are not part of this reference-matched edit.\n"
+    "MOTION / CAMERA: Give still photographs a slow, smooth push, pull or pan; use keyframes to move toward the exact face, object, map pin or document detail being discussed. Keep easing gentle. Use handheld drift only for unstable, urgent or on-the-ground moments. Do not zoom beyond the image sharpness limit.\n"
+    "FINISHING: Preserve legible Hindi subtitles and keep them clear of source cards and lower-thirds. Use subtle grain, vignette and light texture only when they support the archival/cinematic mood. Keep sound effects quiet and tied to an actual visual event. No constant flashes, random glitch, excessive particles, decorative stickers, fake UI, invented headlines or unreadable tiny text.\n"
+    "RENDERER AVAILABILITY: Reference-mode photo scenes now also render multi-event timelines (3-5 dated events) with staggered date/caption reveals. RENDERER AVAILABILITY: Reference-mode photo scenes now also render animated red marker circles, underlines and arrows targeted by normalized image coordinates. RENDERER AVAILABILITY: Reference-mode photo scenes currently render source notes/cards, date sliders, typed names, people, quotes, speech bubbles, verdict marks, place labels, magnifier insets, side labels, big time text, news tabs, person glow, research-desk collages, archival evidence boards, reconstructed newspaper/report clippings, monochrome subject dossier cards and animated people-relationship networks, large spoken event/chapter words and archival photo montages made from distinct scene images. Dossier cards are visual reconstructions, not authentic records. Other advanced overlays remain gated until their complete frame renderers are validated; do not select a gated kind in reference-only mode.\n"
+    "FILM FINISH AVAILABILITY: The finishing pass adds subtle grade-aware film grain, rare warm light leaks, restrained highlight halation and sub-pixel gate weave on archival/dark grades; keep these effects subtle and never force an archival look onto clean present-day scenes.\n"
+    "IMPORTANT COMPATIBILITY RULE: This playbook is guidance for choosing and timing the existing supported effects. Do not remove, rename, disable or replace any existing scene type, overlay kind, transition, camera move, audio effect, fallback path or renderer capability. If a requested look has no supported renderer, use the closest existing supported technique and keep the scene functional.\n"
+)
+
+# User-selected reference lock: the supplied 39:57 documentary is the sole visual basis.
+# Keep optional experimental renderers in the code, but do not select them in reference-only mode.
+REFERENCE_LOCK_RULES = (
+    "\n\n=== STRICT REFERENCE LOCK (USER REQUEST) ===\n"
+    "The supplied reference is a 39 minute 57 second documentary. Match only visual techniques actually visible in its sampled footage: realistic historical reenactments and archival photographs; animated geographic maps with labels, pins, country highlights and route lines; dated event timelines; source/document pages with readable highlighted passages, including a page-and-photo side-by-side spread; newspaper/report layouts; photo collages made from multiple distinct historical photographs and split screens; typed person-name graphics; speech bubbles and dialogue captions; relationship/business-network diagrams; large event/chapter words (e.g. CRACKDOWN / JOB LOSS) taken only from spoken narration; source strips and compact information panels.\n"
+    "PRESENTER BAN: Never show a presenter, host, talking head, studio narrator, or a person speaking directly to camera. The narration is voice-over only. Use story-relevant scenes, evidence, maps, documents, photographs and graphics instead.\n"
+    "REFERENCE-ONLY SELECTION: In REF_ONLY mode, select only camera moves and transitions documented in the reference catalogue. Do not select experimental match cuts, whip pans, simulated rack focus, simulated 2.5D parallax, or invented cinematic effects merely because a renderer exists. Preserve the existing code and renderers; this is a selection restriction, not a deletion.\n"
+    "SOUND: Keep event SFX optional and restrained. Do not claim that a particular sound effect was copied from the reference unless it has been directly verified from the original audio.\n"
+    "SOURCE FIDELITY: Any readable document excerpt, date, name, map location, relationship, quote or headline must come from supplied narration/source data. Mark reconstructed pages as visual reconstructions; never fabricate authentic-looking evidence.\n"
 )
 
 if STORY_STYLE:
     DIRECTOR_RULES = DIRECTOR_RULES.replace("a Hindi nature/science documentary", "a " + CH_DESC)
+    DIRECTOR_RULES += REF_EDITING_PLAYBOOK + REFERENCE_LOCK_RULES
     _i0 = DIRECTOR_RULES.index("=== CATALOGUE of the 150 techniques")
     _i1 = DIRECTOR_RULES.index("TRANSITION (136-150):")
     DIRECTOR_RULES = DIRECTOR_RULES[:_i0] + REF_CATALOGUE + DIRECTOR_RULES[_i1:].replace("TRANSITION (136-150):", "TRANSITIONS (9-25), details:", 1)
@@ -2316,7 +2515,7 @@ SCRIPT_RULES = """RULES FOR THE SCRIPT
 - Every scene has a "tone" for the narrator's voice: suspense, wonder, serious, excited or calm. Vary it with the content.
 
 VISUAL PLAN: the picture must TEACH and must match the exact words being spoken at that moment. Every scene has a "type":
-- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (0) include now and then a macro close-up DETAIL shot (a hand, an eye, a cracked object, a texture) of something just mentioned, and sometimes a high aerial wide shot to show where a place is; (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. EVERY shot must also have "label_hi" (1-3 Hindi words) AND "popup_en": an English description of ONE concrete object, animal, body part or symbol that the phrase mentions (e.g. "a raw carrot", "a human brain", "a burning flame", "a red heart", "a clock", "a lion"), shown as a pop-up sticker on top of the picture at the moment the word is spoken, so a viewer watching on mute still understands every sentence. Leave "popup_en" empty only if the phrase names no object at all. MOVING FOOTAGE: only when the phrase describes something that MOVES or CHANGES POSITION (an animal running or flying, water flowing, fire burning, clouds moving, a planet spinning, people walking), set "motion": true and "clip_en": 1-3 English words for real stock footage of it (e.g. "lion running", "ocean waves", "flying bat"); at most one shot in four, never for still things, abstract ideas or old history; those use pictures. Optional on-screen helpers per shot (at most ONE per shot, and in total on about every second shot, only when they truly help the viewer): "bubble_hi" (a short quote, max 6 words, ONLY when the narration quotes what a person or animal said, shown as a comic speech bubble), "place_hi" (the name of a place or person introduced for the first time, 1-2 words, with "place_sub_hi" a small line such as the region or role; shown as a bold location tag), "title_hi" (1-3 huge Hindi words, ONLY for the single biggest reveal of the video, e.g. the name of the main subject; shown as a glowing title), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
+- "photo": a cinematic full-screen picture with camera movement. The picture must follow the narrator WORD BY WORD like a professional documentary edit. Split the scene narration into 3-6 consecutive "shots" ("text_hi" = a phrase of about 3-8 words, together EXACTLY the scene narration, in order). Each shot is what the viewer sees WHILE that phrase is spoken, and it starts exactly when the phrase starts. Rules: (0) include now and then a macro close-up DETAIL shot (a hand, an eye, a cracked object, a texture) of something just mentioned, and sometimes a high aerial wide shot to show where a place is; (1) EVERY time the phrase names a thing (an animal, flower, tree, object, place, event, body part, process) that is not the main subject of the previous shot, give it a NEW "prompt_en" that shows EXACTLY that named thing and nothing else: if the narrator says lion the picture is a lion, if flower then a flower, if volcano then an erupting volcano. Start prompt_en with the literal subject (e.g. "a close-up of a lion's face, ..."), one clear subject large in the frame, realistic, no text in the image. Never show something different from what is being said; (2) when the phrase just continues or zooms into a detail of the same thing, leave "prompt_en" EMPTY ("") and give "focus_x" and "focus_y" (0.15-0.85, where in the previous picture that detail is, e.g. the head of an ant is left-top = 0.3, 0.3) so the camera pushes onto that part (only when the phrase talks about the SAME subject); never keep a picture on screen after the narrator moved to something else. Each shot with a new picture also has "query_en": 1-3 plain English words for a REAL stock photo of that exact thing if such a photo exists (e.g. "lion", "red rose flower", "volcano eruption", "ant colony", "full moon"); use "" for things that cannot be photographed (young molten Earth, atoms, the distant past, microscopic or imaginary things) so an AI picture is made instead; never a person. EVERY shot must also have "label_hi" (1-3 Hindi words) AND "popup_en": an English description of ONE concrete object, animal, body part or symbol that the phrase mentions (e.g. "a raw carrot", "a human brain", "a burning flame", "a red heart", "a clock", "a lion"), shown as a pop-up sticker on top of the picture at the moment the word is spoken, so a viewer watching on mute still understands every sentence. Leave "popup_en" empty only if the phrase names no object at all. MOVING FOOTAGE: only when the phrase describes something that MOVES or CHANGES POSITION (an animal running or flying, water flowing, fire burning, clouds moving, a planet spinning, people walking), set "motion": true and "clip_en": 1-3 English words for real stock footage of it (e.g. "lion running", "ocean waves", "flying bat"); at most one shot in four, never for still things, abstract ideas or old history; those use pictures. Optional on-screen helpers per shot (at most ONE per shot, and in total on about every second shot, only when they truly help the viewer): "bubble_hi" (a short exact quote, max 6 words, ONLY when the narration quotes what a visible character said, shown in a compact speech balloon; also set "bubble_side" to "left" or "right" to identify which character is speaking in a two-person frame), "dialogue_hi" (an exact spoken line, max 12 words, shown as a lower dialogue caption only when a speech balloon is unsuitable; optionally set "dialogue_speaker_hi" only when the speaker is explicitly named), "place_hi" (the name of a place or person introduced for the first time, 1-2 words, with "place_sub_hi" a small line such as the region or role; shown as a bold location tag), "title_hi" (1-3 huge Hindi words, ONLY for the single biggest reveal of the video, e.g. the name of the main subject; shown as a glowing title), "year_hi" (a date or time such as "१९६८" or "साढ़े चार अरब साल पहले" ONLY when the narration states it, shown on a timeline marker), "note_hi" (one key fact copied from the narration, max 12 words, shown on a torn-paper "source" card) with "mark_hi" (the 1-3 most important words of note_hi, highlighted yellow). Each shot may have "label_hi" (1-3 Hindi words naming the key thing being said, shown as an animated tag). Optional "headline_hi" (2-4 Hindi words) as a chapter label when a new section starts. The first shot of a scene always needs a "prompt_en".
 - "merge": two things come together and create a third (e.g. young Earth + a Mars-sized planet -> the Moon). items = [A, B, RESULT]. First half of the narration names A and B, the second half announces the result.
 - "split": one thing breaks into two parts. items = [WHOLE, PART1, PART2].
 - "steps": a sequence, life cycle, timeline or evolution (3 or 4 items in order, e.g. egg -> larva -> pupa -> butterfly).
@@ -2324,7 +2523,7 @@ VISUAL PLAN: the picture must TEACH and must match the exact words being spoken 
 - "multi": REAL-PHOTO SPLIT SCREEN, the documentary way to enumerate 2-3 things the narrator lists one after another (two universities, two animals, three cities, before/after, different examples). items = 2-3 of {"label_hi": "short name shown on a red brush card (1-5 words, may be English proper noun)", "query_en": "1-3 English words for a REAL stock photo of exactly that thing", "prompt_en": "realistic description of the same thing"}. The picture of each item appears, with its red label card, exactly when the narrator names it. Use this whenever 2-3 separate things are named in a row; never invent names.
 - "counter": one striking number counting up on screen (age, distance, size, speed, count). "counter": {"from": 0, "to": 4.5, "decimals": 1, "unit_hi": "अरब साल पहले"} plus "headline_hi" (what the number is). The narration says the number in words.
 - "bars": compare 2-4 real sizes as animated bars. "bars": [{"label_hi": "पृथ्वी", "value": 12742, "unit_hi": "किमी"}, ...]. Same unit for all, rounded well-established values only.
-- "map": use whenever the narrator names a country, region, city, route, journey or migration. "map": {"mode": "flat", "route": false, "pins": [{"label_hi": "भारत", "lat": 22.0, "lon": 79.0}, ...]} (1-4 real places with correct latitude/longitude; route true draws an animated line through the pins in order, e.g. a journey or spread; mode "globe" for far-apart places). The narration says the place names.
+- "map": use whenever the narrator names a country, region, city, route, journey or migration. "map": {"mode": "flat", "route": false, "pins": [{"label_hi": "भारत", "label_en": "India", "lat": 22.0, "lon": 79.0}, ...], "insets": [{"label_hi": "परिवार", "query_en": "documented historical family photograph", "entity_en": "exact named family/person if stated", "lat": 22.0, "lon": 79.0, "shape": "circle"}]} (1-4 real places with correct latitude/longitude; route true draws an animated line through the pins in order, e.g. a journey or spread; mode "globe" for far-apart places). Use at most ONE photo inset per map shot, and ONLY when that specific reference frame calls out a relevant archival/person/family photograph at a location. The rectangular archival still and circular family portrait are alternative treatments across separate shots, not a pair to stack on one map. Use a real, source-grounded subject; do not invent a person, family, relationship, date or caption. Leave insets empty otherwise. The narration says the place names.
 - "map" with mode "terrain" (BEST for a distance or "from this place to that place" within about 1000 km, e.g. two villages/cities/districts): a tilted satellite-style terrain map with big region names on the ground, two yellow place tags, an animated arrow between them and the distance written on it; the camera follows each point. Format: "map": {"mode": "terrain", "pins": [{"label_hi": "शरीफपुरा गाँव", "lat": 27.4, "lon": 79.6}, {"label_hi": "बिरपुर गाँव", "lat": 27.3, "lon": 79.5}], "regions": [{"label_hi": "फ़र्रुख़ाबाद", "lat": 27.4, "lon": 79.6}, {"label_hi": "मैनपुरी", "lat": 27.2, "lon": 79.0}]} where regions are the 2-4 districts/states/countries around the two places (centre lat/lon). Use terrain ONLY when exactly two places are named (a start and an end): the distance is computed automatically. When THREE OR MORE places are named in a row use terrain with 3-5 pins in the order named: no distance, just pins and an arrow from each place to the next on the same ground.
 - "sketch": ANIMATED LINE-ART DIAGRAM drawn stroke by stroke on parchment (like a premium explainer film) that makes a MECHANISM visible: how something forms, collides, flows, grows, splits, is built from layers, or how two things differ. Use it for about 20-30% of the scenes (the scenes that explain HOW or WHY; at least two in the video, never scene 1 or the last scene). Fields: "type": "sketch", "headline_hi" (2-5 Hindi words, the key claim, shown big on the left word by word), "sketch_brief_en" (one precise English sentence: exactly what the drawing shows, e.g. "a small planet Theia hitting the young Earth from the left, debris flying out, then the Moon forming from the debris"), "year_hi" (a date / time like "४५० करोड़ साल पहले" ONLY if the narration says one, else ""), narration 18-34 words. The drawing is made later from sketch_brief_en, so describe it concretely.
 - "kinetic": a punchy key sentence: "keywords_hi": 2-4 short Hindi words/phrases that slam onto the screen one by one, plus "image_prompt_en" for a dramatic background picture. Use for the re-hook and key insights.
@@ -2365,7 +2564,7 @@ if STORY_STYLE:  # true-story version of the rules (the reference channel: gripp
 
 
 GRADES = ["warm", "cool", "cinematic", "vivid", "dark", "natural", "dread", "bwred", "redwash"]
-TRANS_NAMES = ["pandark", "split", "ink", "curl", "shred", "blurin", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "cut"]
+TRANS_NAMES = ["pandark", "split", "ink", "curl", "shred", "blurin", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "whip", "wipe", "circle", "flash", "match", "cut"]
 TONE_GRADE = {"suspense": "dark", "wonder": "cinematic", "serious": "cool", "excited": "vivid", "calm": "natural"}
 MOOD_NAMES = ["mystery", "epic", "wonder", "calm", "tense", "life", "space"]
 TONE_NAMES = ["suspense", "wonder", "serious", "excited", "calm"]
@@ -2508,7 +2707,7 @@ def validate_script(s, verbatim=False, min_scenes=None):
                     continue
                 if -80 <= la <= 80 and -180 <= lo <= 180 and clean_short(pn.get("label_hi"), 20) \
                         and not re.search(r"दुनिया|पृथ्वी|धरती|विश्व|संसार|ब्रह्मांड|world|earth|planet|universe", str(pn.get("label_hi")), re.I):
-                    pins.append({"label_hi": clean_short(pn.get("label_hi"), 20), "lat": la, "lon": lo})
+                    pins.append({"label_hi": clean_short(pn.get("label_hi"), 20), "label_en": clean_short(pn.get("label_en"), 24), "lat": la, "lon": lo})
             if pins:
                 regs = []
                 for rg in (mp.get("regions") or [])[:5]:
@@ -2517,13 +2716,29 @@ def validate_script(s, verbatim=False, min_scenes=None):
                     except Exception:  # noqa
                         continue
                     if -80 <= la <= 80 and -180 <= lo <= 180 and clean_short(rg.get("label_hi"), 20):
-                        regs.append({"label_hi": clean_short(rg.get("label_hi"), 20), "lat": la, "lon": lo})
+                        regs.append({"label_hi": clean_short(rg.get("label_hi"), 20), "label_en": clean_short(rg.get("label_en"), 24), "lat": la, "lon": lo})
                 md = str(mp.get("mode"))
                 if md == "terrain" and len(pins) >= 2 and max(hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in pins for b_ in pins) < 1500:
                     sc["map"] = {"pins": pins[:5], "route": True, "mode": "terrain", "regions": regs}
                 else:
+                    insets = []
+                    for inset in (mp.get("insets") or [])[:1]:
+                        if not isinstance(inset, dict):
+                            continue
+                        try:
+                            ila, ilo = float(inset.get("lat")), float(inset.get("lon"))
+                        except Exception:
+                            continue
+                        ilabel = clean_short(inset.get("label_hi"), 24)
+                        iquery = clean_short(inset.get("query_en"), 90)
+                        if ilabel and iquery and -80 <= ila <= 80 and -180 <= ilo <= 180:
+                            insets.append({"label_hi": ilabel, "query_en": iquery,
+                                           "entity_en": clean_short(inset.get("entity_en"), 90),
+                                           "prompt_en": clean_short(inset.get("prompt_en"), 300) or ("authentic-looking archival documentary photograph of " + iquery + ", no text, no watermark"),
+                                           "lat": ila, "lon": ilo,
+                                           "shape": "circle" if inset.get("shape") == "circle" else "rect"})
                     sc["map"] = {"pins": pins, "route": bool(mp.get("route")) and len(pins) >= 2,
-                                 "mode": "globe" if md == "globe" else "flat"}
+                                 "mode": "globe" if md == "globe" else "flat", "insets": insets}
             else:
                 typ = "photo"
         else:
@@ -2553,7 +2768,8 @@ def validate_script(s, verbatim=False, min_scenes=None):
                               "ov": (({"kind": "title", "text": clean_short(sh.get("title_hi"), 24)} if str(sh.get("title_hi") or "").strip() else
                                       {"kind": "place", "text": clean_short(sh.get("place_hi"), 28) + "|" + clean_short(sh.get("place_sub_hi"), 40)}
                                       if str(sh.get("place_hi") or "").strip() else
-                                      {"kind": "bubble", "text": clean_short(sh.get("bubble_hi"), 40)} if str(sh.get("bubble_hi") or "").strip() else
+                                      {"kind": "bubble", "text": clean_short(sh.get("bubble_hi"), 40), "side": str(sh.get("bubble_side") or "")} if str(sh.get("bubble_hi") or "").strip() else
+                                      {"kind": "dialogue", "text": clean_short(sh.get("dialogue_hi"), 90), "speaker_hi": clean_short(sh.get("dialogue_speaker_hi"), 32)} if str(sh.get("dialogue_hi") or "").strip() else
                                       {"kind": "year", "text": clean_short(sh.get("year_hi"), 22)} if str(sh.get("year_hi") or "").strip() else
                                       {"kind": "note", "text": clean_short(sh.get("note_hi"), 90), "mark": clean_short(sh.get("mark_hi"), 30)}
                                       if str(sh.get("note_hi") or "").strip() else None)), "fx": fr_(sh.get("focus_x")), "fy": fr_(sh.get("focus_y"))})
@@ -2754,7 +2970,7 @@ Improve this {"true-story" if STORY_STYLE else "explainer-video"} script JSON:
 - Replace difficult words with simple ones; make sure a 15-year-old understands everything on first listen.
 - Keep scene 1 a truthful suspense hook (25-30 words, type "photo") that does not reveal the answer.
 - Check that every picture matches the words spoken at that moment (each shot's prompt_en must show exactly what its text_hi says; a merge scene must really show A and B combining into the result named in the narration; counter/bars numbers must be correct and round). Fix types/items/labels/headlines/shots where they do not teach.
-- Keep at least 60% of the scenes as type photo (real-photo documentary scenes) and keep the "sketch" scenes (with their sketch_brief_en, headline_hi, year_hi) where a mechanism is explained; no merge/split/steps/compare/bars/kinetic cards; map or multi (split-screen list of real photos) are welcome; and a grade + transition on every scene. Every shot must show what is spoken at that moment.
+- Keep at least 60% of the scenes as type photo (real-photo documentary scenes) and keep the "sketch" scenes (with their sketch_brief_en, headline_hi, year_hi) where a mechanism is explained; avoid cartoon-style merge/split/steps/compare/bars SCENE layouts, but do use the implemented photo-scene overlays (comparison, charts, timelines, highlights, measuring marks, source cards and labels) whenever the spoken facts support them; map or multi (split-screen list of real photos) are welcome; and a grade + transition on every scene. Every shot must show what is spoken at that moment.
 - Keep roughly the same number of scenes (+/-2) and total narration length (never shorter, +/-10%, now about {word_count(script)} words).
 - Keep numbers in narration written in Hindi words, no English letters in narration, keep every field and the exact JSON shape.
 Return ONLY the improved JSON.
@@ -4092,10 +4308,56 @@ def sfx_glitch(gain=1.0):
     return y * np.linspace(1, 0, n, dtype=np.float32) * 0.28 * gain
 
 
+def sfx_paper_rustle(gain=1.0):
+    """Short soft paper movement for a document/archive card reveal; no harsh crackle."""
+    np = _np()
+    n = int(0.62 * SR)
+    rng = np.random.default_rng(random.randint(0, 999999))
+    noise = rng.normal(0, 1, n).astype(np.float32)
+    soft = _filt(noise, "bp", (500, 5200), order=2)
+    t = np.linspace(0, 1, n, dtype=np.float32)
+    env = (np.maximum(0.0, np.sin(np.pi * t)) ** 1.4) * (0.35 + 0.65 * np.maximum(0.0, np.sin(np.pi * np.minimum(1, t * 1.8))) ** 2)
+    return soft * env * 0.22 * gain
+
+
+def sfx_marker_swipe(gain=1.0):
+    """Felt-tip marker stroke: a brief filtered friction swish."""
+    np = _np()
+    n = int(0.42 * SR)
+    rng = np.random.default_rng(random.randint(0, 999999))
+    noise = _filt(rng.normal(0, 1, n).astype(np.float32), "bp", (900, 4300), order=2)
+    t = np.linspace(0, 1, n, dtype=np.float32)
+    env = np.maximum(0.0, np.sin(np.pi * t)) ** 1.7
+    return noise * env * 0.16 * gain
+
+
+def sfx_camera_shutter(gain=1.0):
+    """Restrained archival-camera shutter click, not a loud modern camera effect."""
+    np = _np()
+    n = int(0.24 * SR)
+    t = np.arange(n, dtype=np.float32) / SR
+    click = _filt(np.random.randn(n).astype(np.float32), "highpass", 1500) * np.exp(-t * 65)
+    body = (np.sin(2 * np.pi * 880 * t) + 0.35 * np.sin(2 * np.pi * 1320 * t)) * np.exp(-t * 32)
+    return (click * 0.12 + body * 0.12) * gain
+
+
+def sfx_map_ping(gain=1.0):
+    """Soft location ping with a short low body and a clear but quiet upper partial."""
+    np = _np()
+    n = int(0.72 * SR)
+    t = np.arange(n, dtype=np.float32) / SR
+    env = np.exp(-t * 5.8)
+    y = np.sin(2 * np.pi * 740 * t) + 0.28 * np.sin(2 * np.pi * 1110 * t)
+    low = np.sin(2 * np.pi * 185 * t) * np.exp(-t * 12)
+    return (y * env * 0.13 + low * 0.09) * gain
+
+
 SFX = {
     "whoosh": lambda g: sfx_whoosh(0.7, True, g), "whoosh_soft": lambda g: sfx_whoosh(0.45, True, g * 0.55),
     "whoosh_down": lambda g: sfx_whoosh(0.7, False, g), "impact": sfx_impact, "pop": sfx_pop, "tick": sfx_tick,
     "ding": sfx_ding, "sparkle": sfx_sparkle, "riser": sfx_riser, "glitch": sfx_glitch,
+    "paper_rustle": sfx_paper_rustle, "marker_swipe": sfx_marker_swipe,
+    "camera_shutter": sfx_camera_shutter, "map_ping": sfx_map_ping,
 }
 
 
@@ -4575,19 +4837,43 @@ def par_mask():
     return _C["par"]
 
 
-def fx_apply(img, t, fi, phase=0.0, vig=True, grain=True, leak=True):
-    """Film look: vignette, film grain, occasional warm light leak."""
+def fx_apply(img, t, fi, phase=0.0, vig=True, grain=True, leak=True, look="natural"):
+    """Finishing pass: restrained vignette/grain/light leak plus archival halation and gate weave when appropriate."""
     np = _np()
-    arr = np.asarray(img, dtype=np.float32)
+    look = str(look or "natural").lower()
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+    archival = look in ("bwred", "dread", "dark")
+    # Tiny exposure breathing: almost invisible on clean footage, slightly more organic on archival grades.
+    flicker = (0.0025 if archival else 0.0012) * math.sin(t * 7.1 + phase * 1.7)
+    arr *= (1.0 + flicker)
     if vig:
         arr = arr * vig_mask()
     if grain:
-        arr = arr + grain_bank()[fi % 6]
+        # Keep the original fine-grain bank; archival footage receives a little more texture.
+        grain_gain = 1.65 if archival else 1.0
+        arr = arr + grain_bank()[fi % 6] * grain_gain
     if leak:
-        v = max(0.0, math.sin(t * 0.8 + phase)) ** 8 * 0.30
-        if v > 0.01:
+        # Light leaks are rare and brief rather than a constant orange wash.
+        v = max(0.0, math.sin(t * 0.8 + phase)) ** 10 * (0.24 if archival else 0.18)
+        if v > 0.008:
             arr = arr + leak_mask() * (np.array([255, 150, 70], dtype=np.float32) * v)
-    return Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8))
+    out = Image.fromarray(np.clip(arr, 0, 255).astype(np.uint8), "RGB")
+    if archival:
+        # Warm halation around only the brightest areas, emulating light scattering on old film stock.
+        lum = np.asarray(out.convert("L"), dtype=np.uint8)
+        hi = Image.fromarray(np.where(lum > 190, (lum.astype(np.float32) - 190) * 3.8, 0).clip(0, 255).astype(np.uint8), "L")
+        # Quarter-resolution blur keeps the broad halation soft without a full-frame 13px blur per frame.
+        hw, hh = max(1, out.width // 4), max(1, out.height // 4)
+        halo = hi.resize((hw, hh), Image.Resampling.BILINEAR).filter(ImageFilter.GaussianBlur(3.25)).resize(out.size, Image.Resampling.BICUBIC)
+        tint = Image.new("RGB", out.size, (255, 116, 62))
+        alpha = halo.point(lambda v: int(v * (0.12 if look != "bwred" else 0.08)))
+        out = Image.composite(tint, out, alpha)
+        # Sub-pixel gate weave is limited to archival grades and kept below one pixel.
+        dx = 0.35 * math.sin(t * 2.2 + phase)
+        dy = 0.28 * math.sin(t * 1.7 + phase * 0.7)
+        out = out.transform(out.size, Image.Transform.AFFINE,
+                            (1, 0, -dx, 0, 1, -dy), resample=Image.Resampling.BICUBIC)
+    return out
 
 
 class Dust:
@@ -4677,6 +4963,49 @@ def shot_state(shot, tl):
     return cam_state(shot["cam"], p, tl)
 
 
+def parallax_2p5d(src, z, cx, cy, p, phase=0.0):
+    """Simulated 2.5D depth move for a still image.
+
+    Three softly masked crops move at different rates. This creates a restrained
+    depth illusion without pretending that the source photograph was segmented
+    into true foreground/background objects.
+    """
+    np = _np()
+    p = cl(p)
+    # Slow lateral drift with a tiny vertical counter-move between depth planes.
+    wave = math.sin(math.pi * p)
+    dx = 0.010 * wave * math.sin(phase + p * math.pi * 0.7)
+    dy = 0.006 * wave * math.cos(phase + p * math.pi * 0.7)
+    base = src.resize((W, H), Image.BICUBIC, box=crop_box(z, cx, cy))
+
+    zm = min(2.2, z * 1.035)
+    zf = min(2.2, z * 1.075)
+    mm = (1 - 1 / zm) / 2
+    mf = (1 - 1 / zf) / 2
+    cmx = min(0.5 + mm, max(0.5 - mm, cx - dx * 0.55))
+    cmy = min(0.5 + mm, max(0.5 - mm, cy - dy * 0.55))
+    cfx = min(0.5 + mf, max(0.5 - mf, cx + dx))
+    cfy = min(0.5 + mf, max(0.5 - mf, cy + dy))
+    mid = src.resize((W, H), Image.BICUBIC, box=crop_box(zm, cmx, cmy))
+    fore = src.resize((W, H), Image.BICUBIC, box=crop_box(zf, cfx, cfy))
+
+    yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
+    # Feathered center/foreground windows avoid hard seams at the layer edges.
+    dm = np.sqrt(((xx - W * 0.50) / (W * 0.49)) ** 2 + ((yy - H * 0.50) / (H * 0.49)) ** 2)
+    df = np.sqrt(((xx - W * (0.50 + dx * 0.7)) / (W * 0.30)) ** 2 + ((yy - H * (0.50 + dy * 0.7)) / (H * 0.34)) ** 2)
+    am = (np.clip((1.04 - dm) / 0.20, 0, 1) ** 1.35 * 255).astype(np.uint8)
+    af = (np.clip((1.02 - df) / 0.22, 0, 1) ** 1.15 * 255).astype(np.uint8)
+    out = Image.composite(mid, base, Image.fromarray(am, "L"))
+    out = Image.composite(fore, out, Image.fromarray(af, "L"))
+    # Slight depth-of-field separation at the outermost edge only.
+    edge = np.clip((dm - 0.78) / 0.30, 0, 1)
+    if float(edge.max()) > 0.01:
+        soft = out.filter(ImageFilter.GaussianBlur(1.0))
+        mask = Image.fromarray((edge * 58).astype(np.uint8), "L")
+        out = Image.composite(soft, out, mask)
+    return out
+
+
 def shot_frame(shot, tl):
     """One camera frame of a still picture: push / pull / pan / tilt / orbit / handheld, optional 2.5D parallax + rack focus."""
     src = shot["img"]
@@ -4702,10 +5031,10 @@ def shot_frame(shot, tl):
         z = zc
         m_ = (1 - 1 / z) / 2
         cx, cy = min(0.5 + m_, max(0.5 - m_, cx)), min(0.5 + m_, max(0.5 - m_, cy))
-    fr = src.resize((W, H), Image.BICUBIC, box=crop_box(z, cx, cy))
     if shot.get("par"):
-        fg = src.resize((W, H), Image.BICUBIC, box=crop_box(min(zc, z * (1 + 0.07 * p)), cx, cy))
-        fr = Image.composite(fg, fr, par_mask())
+        fr = parallax_2p5d(src, z, cx, cy, p, shot.get("phase", 0.0))
+    else:
+        fr = src.resize((W, H), Image.BICUBIC, box=crop_box(z, cx, cy))
     if shot.get("focus") and tl < 0.8:
         r = (1 - tl / 0.8) * 9
         if r > 0.4:
@@ -4740,7 +5069,7 @@ def pan_dark(prev, cur, p):
 
 
 # ---- more reference transitions (seen in the 10-minute reference): dip to black, red/blue colour-wash cut, zoom-blur cut, diagonal slash, paper tear
-TRANS_DUR = {"split": 0.85, "ink": 0.9, "curl": 0.85, "shred": 0.8, "blurin": 0.7, "dipblack": 0.8, "tint_red": 0.7, "tint_blue": 0.7, "blurzoom": 0.5, "slash": 0.6, "tear": 0.7}
+TRANS_DUR = {"match": 0.65, "split": 0.85, "ink": 0.9, "curl": 0.85, "shred": 0.8, "blurin": 0.7, "dipblack": 0.8, "tint_red": 0.7, "tint_blue": 0.7, "blurzoom": 0.5, "slash": 0.6, "tear": 0.7}
 TRANS_BY_TONE = {  # which transition suits which feeling of the story (reference: slides and dark slides most, wash / blur on shocks, black between chapters)
     "suspense": ["split", "slide_l", "pandark", "tint_red", "blurzoom", "slide_r", "dipblack", "tear", "blurin", "ink", "shred"],
     "serious": ["split", "slide_l", "pandark", "dipblack", "slide_d", "tint_blue", "slide_r", "tear", "blurin", "ink", "curl"],
@@ -4973,6 +5302,47 @@ def slide_push(prev, cur, p, d):
     return fr
 
 
+def directional_motion_blur(img, dx=0, dy=0, samples=9):
+    """Small, edge-safe directional blur used only at fast transition moments."""
+    np = _np()
+    arr = np.asarray(img.convert("RGB"), dtype=np.float32)
+    h, w = arr.shape[:2]
+    dx, dy = int(round(dx)), int(round(dy))
+    if dx == 0 and dy == 0:
+        return img.convert("RGB")
+    n = max(3, int(samples) | 1)
+    px, py = abs(dx), abs(dy)
+    pad = np.pad(arr, ((py, py), (px, px), (0, 0)), mode="edge")
+    out = np.zeros_like(arr, dtype=np.float32)
+    for q in np.linspace(-0.5, 0.5, n):
+        ox, oy = int(round(dx * q)), int(round(dy * q))
+        x0, y0 = px + ox, py + oy
+        out += pad[y0:y0 + h, x0:x0 + w]
+    out /= float(n)
+    return Image.fromarray(np.clip(out, 0, 255).astype(np.uint8), "RGB")
+
+
+def match_cut(prev, cur, p):
+    """Center-anchored match cut: both images share a brief scale/position beat."""
+    p = cl(p)
+    # The common center acts as the default visual anchor when no tracked points exist.
+    peak = math.sin(math.pi * p)
+    z_a = 1.0 + 0.105 * e_out(cl(p / 0.58))
+    z_b = 1.105 - 0.105 * e_out(cl((p - 0.42) / 0.58))
+    def centered_zoom(im, z):
+        if z <= 1.002:
+            return im.convert("RGB")
+        return im.convert("RGB").resize((W, H), Image.BICUBIC,
+            box=(W / 2 - W / (2 * z), H / 2 - H / (2 * z), W / 2 + W / (2 * z), H / 2 + H / (2 * z)))
+    a = centered_zoom(prev, z_a)
+    b = centered_zoom(cur, z_b)
+    # Keep both images visible briefly around the hand-off, then settle on the new shot.
+    q = e_io(cl((p - 0.34) / 0.32))
+    out = Image.blend(a, b, q)
+    blur = directional_motion_blur(out, dx=int(10 * peak), dy=int(2 * peak), samples=7)
+    return Image.blend(out, blur, 0.42 * peak)
+
+
 def blend_trans(prev, cur, p, kind):
     np = _np()
     p = cl(p)
@@ -5013,10 +5383,13 @@ def blend_trans(prev, cur, p, kind):
         canvas.paste(prev, (0, 0))
         canvas.paste(cur, (W, 0))
         fr = canvas.crop((off, 0, off + W, H))
-        k = 1 + int(14 * math.sin(math.pi * p))
-        if k > 1:
-            fr = fr.resize((max(8, W // k), H), Image.BILINEAR).resize((W, H), Image.BILINEAR)
+        # Real directional smear at peak speed; avoid the old coarse pixelation-only look.
+        strength = math.sin(math.pi * p)
+        if strength > 0.015:
+            fr = directional_motion_blur(fr, dx=int(34 * strength), dy=int(3 * strength), samples=11)
         return fr
+    if kind == "match":
+        return match_cut(prev, cur, p)
     if kind == "wipe":
         if "wipeg" not in _C:
             yy, xx = np.mgrid[0:H, 0:W].astype(np.float32)
@@ -5184,9 +5557,13 @@ def zoom_cap(path):
     return max(1.06, min(2.1, 1.3 * nat / W))
 
 
+REF_CAMS = {"push", "pull", "pan_lr", "pan_rl", "tilt_up", "tilt_down", "handheld"}
+REF_TRANSITIONS = {"pandark", "split", "ink", "curl", "shred", "blurin", "tint_red", "tint_blue", "blurzoom", "dipblack", "slash", "tear", "slide_l", "slide_r", "slide_u", "slide_d", "fade", "zoom", "cut"}
+
 def pick_cam(ctx):
     rnd = ctx["rnd"]
-    c = rnd.choice([x for x in CAMS if x != ctx.get("last_cam")])
+    pool = sorted(REF_CAMS) if REF_ONLY else CAMS
+    c = rnd.choice([x for x in pool if x != ctx.get("last_cam")] or pool)
     ctx["last_cam"] = c
     return c
 
@@ -5263,14 +5640,14 @@ def build_shots(sc, dur, speech_dur, ctx, tone):
                         kfs.append((ta, zz, tx, ty))
                 if len(kfs) < 2:
                     kfs = None
-            if s_.get("cam") in CAMS and new_img and kfs is None:
+            if s_.get("cam") in CAMS and (not REF_ONLY or s_.get("cam") in REF_CAMS) and new_img and kfs is None:
                 cam = s_["cam"]
-            if s_.get("trans") in TRANS_NAMES and shots and j == 0:
+            if s_.get("trans") in TRANS_NAMES and (not REF_ONLY or s_.get("trans") in REF_TRANSITIONS) and shots and j == 0:
                 trans = "none" if s_["trans"] == "cut" else s_["trans"]
             shots.append({"img": graded_image(ctx, s_["image"], s_.get("grade") if s_.get("grade") in GRADES else sc.get("grade", "natural")), "kfs": kfs, "label": ((s_.get("label_hi") or "") if (j == 0 and not (s_.get("ov") and s_["ov"]["kind"] in ("place", "title"))) else ""),
                           "pulse": ((rnd.choice([(200, 20, 30), (20, 120, 140), (255, 255, 255)]) if (new_img and shots and rnd.random() < (0.4 if tone in ("suspense", "serious", "excited") else 0.12)) else None)),
                           "t0": a + j * sd, "t1": a + (j + 1) * sd, "dur": sd, "cam": cam, "fx": fx, "fy": fy,
-                          "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.45,
+                          "par": cam in ("push", "pull", "orbit") and rnd.random() < 0.62,
                           "focus": (not shots), "trans": trans, "tdur": (min(0.9, 0.4 * sd) if trans == "pandark" else min(0.6, 0.4 * sd) if str(trans).startswith("slide_") else min(TRANS_DUR[trans], 0.4 * sd) if trans in TRANS_DUR else 0.3 if trans in ("fade", "zoom") else 0.4), "zcap": zoom_cap(s_["image"]),
                           "ov": (s_.get("ov") if j == 0 else None), "popup": (s_.get("popup_img") if j == 0 else None),
                           "clip": s_.get("clip"), "reader": None, "grade": s_.get("grade") if s_.get("grade") in GRADES else sc.get("grade", "natural"),
@@ -5289,21 +5666,46 @@ def ov_sprite(kind, text, mark, pal):
     if key in _OV:
         return _OV[key]
     probe = ImageDraw.Draw(Image.new("L", (4, 4)))
-    if kind == "bubble":  # comic speech bubble with the quote
-        lay = text_layer(text, load_font(42, "head"), fill=(25, 25, 25), max_w=360, spacing=8)
-        w, h = lay.width + 56, lay.height + 40
-        big = Image.new("RGBA", (w + 30, h + 60), (0, 0, 0, 0))
+    if kind == "bubble":  # compact white dialogue balloon, as in the supplied reenactment frames
+        lay = text_layer(text, font_for(text, 31, "geo"), fill=(22, 24, 27), max_w=330, spacing=4)
+        w, h = lay.width + 34, lay.height + 22
+        # Tail tip sits on the sprite edge so the renderer can anchor it to the speaker.
+        big = Image.new("RGBA", (w + 24, h + 38), (0, 0, 0, 0))
         d = ImageDraw.Draw(big)
-        d.rounded_rectangle([4, 4, w + 4, h + 4], radius=34, fill=(0, 0, 0, 255))
-        d.polygon([(46, h), (28, h + 54), (96, h)], fill=(0, 0, 0, 255))
-        d.rounded_rectangle([10, 10, w - 2, h - 2], radius=30, fill=(255, 252, 240, 255))
-        d.polygon([(54, h - 4), (36, h + 44), (88, h - 4)], fill=(255, 252, 240, 255))
-        if mark == "R":  # tail on the right: the speaker stands to the right of the bubble (only the SHAPE is mirrored, never the letters)
-            big = ImageOps.mirror(big)
-            big.alpha_composite(lay, (26 + (w - lay.width) // 2, 4 + (h - lay.height) // 2))
+        body_left, body_top = 12, 2
+        body_right, body_bottom = w + 12, h
+        if mark == "R":
+            d.polygon([(body_right - 58, body_bottom - 3), (body_right + 12, body_bottom + 34),
+                       (body_right - 28, body_bottom - 3)], fill=(252, 251, 246, 255),
+                      outline=(62, 65, 68, 255))
         else:
-            big.alpha_composite(lay, (4 + (w - lay.width) // 2, 4 + (h - lay.height) // 2))
-        sp = big.rotate(-2 if mark == "R" else 2, expand=True, resample=Image.BICUBIC)
+            d.polygon([(body_left + 28, body_bottom - 3), (0, body_bottom + 34),
+                       (body_left + 58, body_bottom - 3)], fill=(252, 251, 246, 255),
+                      outline=(62, 65, 68, 255))
+        d.rounded_rectangle([body_left, body_top, body_right, body_bottom], radius=18,
+                            fill=(252, 251, 246, 255), outline=(62, 65, 68, 255), width=2)
+        big.alpha_composite(lay, (body_left + 17 + (w - lay.width) // 2,
+                                  body_top + 11 + (h - lay.height) // 2))
+        sp = big
+    elif kind == "dialogue":
+        # Lower dialogue caption observed over reenactment stills: compact dark strip, exact spoken words.
+        speaker, sep, line = text.partition("|")
+        if not sep:
+            speaker, line = "", text
+        f = font_for(line, 27, "geo")
+        fs = font_for(speaker, 22, "geo") if speaker else font_for(line, 22, "geo")
+        line_layer = text_layer(line, f, fill=(248, 248, 244), max_w=900, spacing=4)
+        head_layer = text_layer(speaker, fs, fill=(232, 190, 72), max_w=900) if speaker else None
+        w = min(980, max(line_layer.width, head_layer.width if head_layer else 0) + 42)
+        h = line_layer.height + (head_layer.height + 5 if head_layer else 0) + 28
+        sp = Image.new("RGBA", (w, h), (7, 9, 12, 218))
+        dd = ImageDraw.Draw(sp)
+        dd.rectangle((0, 0, 5, h), fill=(205, 35, 42, 255))
+        yy = 10
+        if head_layer:
+            sp.alpha_composite(head_layer, (18, yy))
+            yy += head_layer.height + 5
+        sp.alpha_composite(line_layer, (18, yy))
     elif kind in ("note", "note0", "note_u"):  # SOURCE caption: plain text straight on the picture (no paper), discussed phrase underlined in red
         body, _, src = text.rpartition("|")
         if not body:
@@ -5421,11 +5823,11 @@ def ov_sprite(kind, text, mark, pal):
 # Source cards in 4 styles (banner / torn paper / dark text page / document page), sliding year timeline, person name card with real photo,
 # round pop-ups with cross / tick, big red stat text.  Every card is drawn from REAL page text only (never written by the bot).
 SRC_STYLES = ["banner", "paper", "dark", "doc", "strip", "box"]
-STYLE_CYCLE = ["strip", "box", "strip", "paper", "strip", "dark", "box", "doc", "banner"]  # small lower-left cards are the most common in the reference
+STYLE_CYCLE = ["strip", "box", "strip", "paper", "strip", "dark", "box", "doc", "spread", "banner"]  # includes the reference page-and-photo spread among source-card layouts
 V2_KINDS = ("quote", "note", "year", "person", "stat", "verdict", "explain", "srclist", "action", "place", "name", "feature",
-            "measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab", "glow", "desk")
+            "measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab", "glow", "desk", "archive", "press", "dossier", "network", "chapter", "photocollage", "callout", "id_doc")
 OV_MAXT = {"quote": 4.4, "place": 5.0, "year": 18.0, "note": 6.6, "bubble": 4.2, "title": 4.2, "person": 4.4, "stat": 3.6, "verdict": 5.0, "explain": 4.8, "srclist": 4.8, "action": 5.0, "name": 4.4, "place": 4.8, "feature": 7.6,
-         "measure": 6.0, "qmark": 5.0, "lens": 6.0, "beforeafter": 7.0, "compare": 7.6, "mark": 5.0, "chart": 7.6, "tline": 8.0, "hl": 5.0, "sidelabel": 5.0, "bigtext": 4.2, "tab": 3.8, "glow": 6.0, "desk": 6.5}
+         "measure": 6.0, "qmark": 5.0, "lens": 6.0, "beforeafter": 7.0, "compare": 7.6, "mark": 5.0, "chart": 7.6, "tline": 8.0, "hl": 5.0, "sidelabel": 5.0, "bigtext": 4.2, "tab": 3.8, "glow": 6.0, "desk": 6.5, "press": 6.5, "dossier": 6.8, "network": 7.0, "chapter": 4.8, "photocollage": 6.2, "callout": 4.8, "id_doc": 6.0}
 _BLACK = {}
 
 
@@ -5445,9 +5847,13 @@ def _dom(url):
 
 
 def font_for(text, size, role):
-    """English text may use the fancy Latin fonts; Hindi text always uses a Devanagari font."""
-    if role in ("serif", "type", "cond", "comic", "geo", "geom") and not all(ord(c) < 0x250 for c in (text or "")):
-        role = "title"
+    """Select a script-capable font; Hindi/Devanagari labels must never fall back to Latin-only display fonts."""
+    is_latin = all(ord(c) < 0x250 for c in (text or ""))
+    if not is_latin:
+        # The label/geo roles are deliberately redirected to the bundled/system
+        # Devanagari family for place names, captions and distance readouts.
+        if role in ("serif", "type", "cond", "comic", "geo", "geom", "label"):
+            role = "title"
     return load_font(size, role)
 
 
@@ -5456,16 +5862,25 @@ def _norm_tok(w):
 
 
 def _mark_idx(words, mark):
-    mt = [_norm_tok(x) for x in (mark or "").split() if _norm_tok(x)]
-    if not mt:
-        return set()
+    """Find one or several exact source phrases. Multiple phrases are separated by ||."""
+    phrases = [p.strip() for p in str(mark or "").split("||") if p.strip()]
     nw = [_norm_tok(w) for w in words]
-    n = len(mt)
-    for i in range(len(nw) - n + 1):
-        if nw[i:i + n] == mt:
-            return set(range(i, i + n))
-    s = set(mt)
-    return {i for i, w in enumerate(nw) if w in s and len(w) > 2}
+    found = set()
+    for phrase in phrases:
+        mt = [_norm_tok(x) for x in phrase.split() if _norm_tok(x)]
+        if not mt:
+            continue
+        n = len(mt)
+        matched = False
+        for i in range(len(nw) - n + 1):
+            if nw[i:i + n] == mt:
+                found.update(range(i, i + n))
+                matched = True
+        if not matched:
+            # Conservative fallback: only highlight exact whole-word matches.
+            wanted = set(mt)
+            found.update(i for i, w in enumerate(nw) if w in wanted and len(w) > 2)
+    return found
 
 
 def _flow(probe, body, font, maxw, max_lines=99):
@@ -5740,7 +6155,7 @@ def build_card(style, body, title, dom, mark):
         if dom:
             dt.text((42, y + 26), dom.upper(), font=fG, fill=(255, 196, 60, 255), anchor="ls")
             y += 36
-        dt.line([(42, y + 6), (maxw, y + 6)], fill=(255, 255, 255, 90), width=2)
+        dt.line([(42, y + 6), (maxw, y + 6)], fill=(205, 220, 235, 24), width=2)
         y += 24
         _draw_words(dt, lines, fB, 40, y, lh, (236, 228, 214, 255))
         runs = _runs_of(lines, idx, 40, y, lh, fB.size)
@@ -5872,6 +6287,45 @@ def draw_note(fr, ps, tl, ov, t0, t1, a):
         style = "banner"  # reference-only card: the real source name and a one-line note
         body = "The facts in this part of the video are based on this source."
     title, dom = it.get("sub") or "", it.get("dom") or ""
+    if style == "spread" and body:
+        # Reference composition: a real source/document page with its highlighted passage
+        # beside the current story photograph. The page text remains the verified source
+        # paragraph; the adjacent picture is the current scene image, not a claimed source scan.
+        source_frame = fr.copy().convert("RGB")
+        card = build_card("doc", body, title, dom, it.get("mark") or ov.get("mark", ""))
+        qin = e_out(cl((tl - t0) / 0.62))
+        qout = 1.0 - e_out(cl((tl - (t1 - 0.42)) / 0.38))
+        if qin <= 0.001 or qout <= 0.001:
+            return
+        page = card.frame(e_out(cl((tl - t0 - 0.30) / 0.95)), 0.0, _rv)
+        # Keep both elements readable in a 16:9 frame: page on the left, scene photo on the right.
+        target_h = int(H * 0.76)
+        page_scale = min(0.56, target_h / max(1, page.height), (W * 0.47) / max(1, page.width))
+        page = page.resize((max(2, int(page.width * page_scale)), max(2, int(page.height * page_scale))), Image.LANCZOS)
+        photo_w, photo_h = int(W * 0.37), int(H * 0.57)
+        photo = ImageOps.fit(source_frame, (photo_w, photo_h), Image.LANCZOS, centering=(0.5, 0.45)).convert("RGBA")
+        # The reference uses rectangular documentary stills beside pages; a restrained paper mount separates them.
+        mount = Image.new("RGBA", (photo_w + 24, photo_h + 24), (235, 231, 218, 255))
+        mount.alpha_composite(photo, (12, 12))
+        mount = _with_shadow(mount, (5, 8), 11, 0.42, 14)
+        page = _with_shadow(page, (5, 8), 11, 0.38, 10)
+        # Slightly dim the underlying scene to make the two reference elements legible.
+        dim = Image.blend(source_frame, Image.new("RGB", source_frame.size, (8, 10, 14)), 0.40)
+        fr.paste(dim)
+        gap = int(W * 0.018)
+        total_w = page.width + gap + mount.width
+        scale = min(1.0, (W * 0.94) / max(1, total_w), (H * 0.84) / max(1, max(page.height, mount.height)))
+        if scale < 0.999:
+            page = page.resize((max(2, int(page.width * scale)), max(2, int(page.height * scale))), Image.LANCZOS)
+            mount = mount.resize((max(2, int(mount.width * scale)), max(2, int(mount.height * scale))), Image.LANCZOS)
+            gap = int(gap * scale)
+        total_w = page.width + gap + mount.width
+        x0 = (W - total_w) // 2
+        y_page = (H - page.height) // 2
+        y_photo = (H - mount.height) // 2
+        put(fr, page, x0 + page.width / 2 + (1 - qin) * -W * 0.08, y_page + page.height / 2, 1.0, qin * qout)
+        put(fr, mount, x0 + page.width + gap + mount.width / 2 + (1 - qin) * W * 0.08, y_photo + mount.height / 2, 1.0, qin * qout)
+        return
     if it.get("center") and it.get("text"):  # ninth round: the real article line, big, in the middle; nothing dims the picture; overlay cards live below it
         if style not in ("paper", "doc"):
             style = "paper"
@@ -6159,7 +6613,7 @@ def draw_verdict(fr, ps, tl, t0, t1, a, ov):
 
 # =========================================================================== TECHNIQUES v4: measuring, question mark, magnifier lens, before/after slider, comparison panel,
 # VOX-style marker annotations, animated charts, multi-event timeline, highlight bar and the Vox paper-collage frame.  (Never remove: see PERMANENT_TECHNIQUES)
-NEW_KINDS = ("measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab", "glow", "desk")
+NEW_KINDS = ("measure", "qmark", "lens", "beforeafter", "compare", "mark", "chart", "tline", "hl", "sidelabel", "bigtext", "tab", "glow", "desk", "archive", "press", "dossier", "network", "chapter", "photocollage", "callout", "id_doc")
 VOX_CHART_COLS = [(0, 150, 170), (236, 84, 64), (58, 98, 200), (240, 160, 30), (112, 176, 66), (146, 86, 188)]
 HL_COLS = [((255, 64, 120), (255, 255, 255)), ((0, 190, 220), (10, 14, 24)), ((150, 226, 60), (10, 14, 24)), ((255, 255, 255), (10, 14, 24))]
 _VX = {}
@@ -6305,6 +6759,34 @@ def draw_bigtext(fr, sh, tl, t0, t1, a, ov):
     if sub:
         sp = _lbl(sub, int(H * 0.034), (225, 225, 225))
         put(fr, sp, W * 0.06 - (1 - q) * 160 + sp.width / 2, cy + size * 0.74, 1.0, a * out * q)
+
+
+def draw_chapter(fr, sh, tl, t0, t1, a, ov):
+    """Reference-supported large event/chapter word (e.g. CRACKDOWN / JOB LOSS), using only the exact spoken phrase."""
+    it = ov.get("it") or {}
+    text = re.sub(r"\s+", " ", str(it.get("text") or ov.get("text") or "")).strip()
+    if not text or len(text.split()) > 3:
+        return
+    key = ("chapter_overlay", text, W, H)
+    spr = _VX.get(key)
+    if spr is None:
+        size = int(H * (0.115 if len(text) <= 11 else 0.092))
+        f = font_for(text.upper(), size, "cond")
+        layer = Image.new("RGBA", (W - int(W * 0.10), int(H * 0.22)), (0, 0, 0, 0))
+        d = ImageDraw.Draw(layer)
+        x, y = 0, int(layer.height * 0.10)
+        d.text((x + 3, y + 5), text.upper(), font=f, fill=(0, 0, 0, 205), stroke_width=2, stroke_fill=(0, 0, 0, 190))
+        d.text((x, y), text.upper(), font=f, fill=(232, 42, 52, 255), stroke_width=1, stroke_fill=(35, 8, 12, 210))
+        tw = int(d.textlength(text.upper(), font=f))
+        rule_y = min(layer.height - 12, y + int(size * 1.12))
+        d.rectangle((0, rule_y, min(tw, int(W * 0.56)), rule_y + max(3, int(H * 0.005))), fill=(232, 42, 52, 235))
+        spr = layer.crop((0, 0, min(layer.width, max(8, tw + 10)), layer.height))
+        _VX[key] = spr
+    q = e_out(cl((tl - t0) / 0.38))
+    out = 1.0 - cl((tl - (t1 - 0.30)) / 0.30)
+    cw = max(1, min(spr.width, int(spr.width * q)))
+    piece = spr.crop((0, 0, cw, spr.height))
+    put(fr, piece, W * 0.06 + piece.width / 2, H * 0.55, 1.0, a * out)
 
 
 def _tab_sprite(text):
@@ -6471,10 +6953,864 @@ def draw_desk(fr, sh, tl, t0, t1, a, ov):
         put(fr, pol, W * fx - ex, H * fy, 1.0 + (1 - qq) * 0.18, qq * (1 - out))
 
 
+def draw_photo_collage(fr, sh, tl, t0, t1, a, ov):
+    """Use the same clean editorial archival grid as the reference, not polaroid cards."""
+    return draw_archive(fr, sh, tl, t0, t1, a, ov)
+
+
+def draw_archive(fr, sh, tl, t0, t1, a, ov):
+    """Reference-style adaptive 2x2 / 3x2 / 3x3 archival still grid; use distinct supplied images and per-image crop focus."""
+    entries, fingerprints = [], []
+    np = _np()
+    for entry in (sh.get("collage_imgs") or []):
+        im = entry.get("img") if isinstance(entry, dict) else entry
+        if im is None:
+            continue
+        try:
+            rgb = im.convert("RGB")
+            # Perceptual duplicate guard catches copied/reloaded versions of the same still.
+            thumb = np.asarray(ImageOps.fit(rgb, (16, 16), Image.LANCZOS).convert("RGB"), dtype=np.int16)
+            # Compare colour thumbnails directly: a coarse grayscale hash can
+            # incorrectly discard genuinely different archival photos with similar composition.
+            duplicate = any(float(np.abs(thumb.astype(np.float32) - old.astype(np.float32)).mean()) < 2.5
+                            for old in fingerprints)
+            if duplicate:
+                continue
+            fingerprints.append(thumb)
+            focus = entry.get("focus", (0.5, 0.45)) if isinstance(entry, dict) else (0.5, 0.45)
+            try:
+                fx, fy = float(focus[0]), float(focus[1])
+                fx, fy = max(0.0, min(1.0, fx)), max(0.0, min(1.0, fy))
+            except Exception:
+                fx, fy = 0.5, 0.45
+            entries.append((rgb, (fx, fy)))
+        except Exception:
+            continue
+        if len(entries) >= 9:
+            break
+    # Never manufacture a photo grid by duplicating the current frame or cropping it.
+    if len(entries) < 4:
+        return
+    q = e_out(cl((tl - t0) / 0.48))
+    out = 1.0 - cl((tl - (t1 - 0.32)) / 0.32)
+    if q <= 0.001 or out <= 0.001:
+        return
+    src = fr.copy()
+    canvas = Image.new("RGB", (W, H), (13, 16, 20))
+    # Reference boards include compact 2x2, 3x2 and 3x3 historical-photo grids.
+    # Choose the closest full grid without duplicating or inventing missing images.
+    cols, rows = (2, 2) if len(entries) == 4 else (3, 2) if len(entries) <= 6 else (3, 3)
+    gap = max(3, int(W * 0.004))
+    margin_x, margin_y = int(W * 0.025), int(H * 0.085)
+    cell_w = (W - 2 * margin_x - (cols - 1) * gap) // cols
+    cell_h = (H - 2 * margin_y - (rows - 1) * gap) // rows
+    for idx, (im, focus) in enumerate(entries[:9]):
+        col, row = idx % cols, idx // cols
+        panel = ImageOps.fit(im, (cell_w, cell_h), Image.LANCZOS, centering=focus)
+        x = margin_x + col * (cell_w + gap)
+        y = margin_y + row * (cell_h + gap)
+        canvas.paste(panel, (x, y))
+        # Thin neutral separators only; no labels, dates, fake frames or source stamps.
+        ImageDraw.Draw(canvas).rectangle((x, y, x + cell_w - 1, y + cell_h - 1), outline=(185, 185, 180), width=1)
+    blended = Image.blend(src, canvas, q * 0.96)
+    fr.paste(Image.blend(src, blended, out * a))
+    if q < 1:
+        overlay = Image.new("RGB", (W, H), (0, 0, 0))
+        fr.paste(Image.blend(fr, overlay, 0.10 * (1 - q)))
+
+
+def draw_press(fr, sh, tl, t0, t1, a, ov):
+    """Reference-matched source clipping: one restrained page insert with only
+    narration-backed wording. Never fabricate a newspaper masthead, article body,
+    date, byline, publication or source citation."""
+    q = e_out(cl((tl - t0) / 0.55))
+    out = 1.0 - cl((tl - (t1 - 0.38)) / 0.38)
+    if q <= 0.001 or out <= 0.001:
+        return
+    it = ov.get("it") or {}
+    excerpt = clean_short(str(ov.get("text") or it.get("text") or ""), 190)
+    if not excerpt:
+        return
+    title = clean_short(str(it.get("title_hi") or it.get("title") or ""), 64)
+    # The reference shows a real-looking document page over a dark scene. Keep
+    # the source shot visible on the left and let the page enter from the right.
+    shade = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    ImageDraw.Draw(shade).rectangle((0, 0, W, H), fill=(0, 0, 0, int(82 * q * out)))
+    fr.paste(Image.alpha_composite(fr.convert("RGBA"), shade).convert("RGB"))
+
+    pw, ph = int(W * 0.43), int(H * 0.78)
+    # Subtle aged-paper surface: restrained grain and a soft edge falloff.
+    # It is texture only; no fabricated print, masthead, or source metadata.
+    np = _np()
+    yy, xx = np.mgrid[0:ph, 0:pw].astype(np.float32)
+    edge = np.minimum.reduce((xx / max(1, pw), (pw - 1 - xx) / max(1, pw),
+                              yy / max(1, ph), (ph - 1 - yy) / max(1, ph)))
+    vignette = np.clip(edge / 0.075, 0.0, 1.0)
+    rng = np.random.default_rng(65)
+    grain = rng.normal(0.0, 1.15, (ph, pw)).astype(np.float32)
+    paper_rgb = np.empty((ph, pw, 3), dtype=np.float32)
+    for channel, base in enumerate((240.0, 237.0, 226.0)):
+        paper_rgb[:, :, channel] = base - (1.0 - vignette) * 4.0 + grain
+    paper_rgb = np.clip(paper_rgb, 0, 255).astype(np.uint8)
+    page = Image.fromarray(paper_rgb, "RGB").convert("RGBA")
+    d = ImageDraw.Draw(page)
+    # A restrained top rule and paper edge, not a fictional newspaper masthead.
+    d.rectangle((0, 0, pw, 7), fill=(35, 39, 43, 255))
+    d.line((24, 25, pw - 24, 25), fill=(120, 116, 104, 190), width=1)
+    y = 48
+    if title:
+        title_role = "serif" if all(ord(ch) < 0x250 for ch in title) else "head"
+        title_layer = text_layer(title, load_font(max(23, int(H * 0.040)), title_role),
+                                 fill=(28, 30, 31), max_w=pw - 52, spacing=5)
+        page.alpha_composite(title_layer, (26, y))
+        y += title_layer.height + 22
+        d.line((26, y, pw - 26, y), fill=(100, 96, 86, 180), width=1)
+        y += 22
+
+    # Body text is rendered only from explicit source/narration-backed fields.
+    # `columns` may contain two supplied text blocks; `paragraphs` is a single flow.
+    raw_columns = it.get("columns")
+    raw_paragraphs = it.get("paragraphs")
+    raw_highlights = it.get("highlights")
+    highlights = [clean_short(str(x), 190) for x in raw_highlights
+                  if str(x).strip()] if isinstance(raw_highlights, (list, tuple)) else []
+    highlights = [x for x in highlights if x][:6]
+
+    def draw_source_block(block, bx, by, max_width, font_size, font_role="sub",
+                          line_gap=7, default_highlight=False):
+        """Render supplied text with highlights on the exact matched words, not the whole paragraph."""
+        block = str(block or "").strip()
+        if not block:
+            return by
+        font = load_font(font_size, font_role)
+        painter = ImageDraw.Draw(page)
+        # Locate only literal, source-supplied phrases. No fuzzy or generated matching.
+        spans = []
+        for hi_idx, phrase in enumerate(highlights):
+            start_at = 0
+            while phrase and True:
+                pos = block.find(phrase, start_at)
+                if pos < 0:
+                    break
+                spans.append((pos, pos + len(phrase), hi_idx))
+                start_at = pos + max(1, len(phrase))
+        if default_highlight and not spans:
+            spans.append((0, len(block), 0))
+        tokens = list(re.finditer(r"\S+", block))
+        if not tokens:
+            return by
+        space_w = painter.textlength(" ", font=font)
+        lines, current, current_w = [], [], 0.0
+        for match in tokens:
+            word = match.group(0)
+            ww = painter.textlength(word, font=font)
+            need = ww if not current else space_w + ww
+            if current and current_w + need > max_width:
+                lines.append(current)
+                current, current_w = [], 0.0
+                need = ww
+            hit = next((idx for a0, b0, idx in spans
+                        if match.start() < b0 and match.end() > a0), None)
+            current.append((word, hit))
+            current_w += need
+        if current:
+            lines.append(current)
+        line_h = max(font_size + 7, int(font_size * 1.38))
+        for line in lines:
+            xcur = bx
+            for word, hi_idx in line:
+                ww = painter.textlength(word, font=font)
+                if hi_idx is not None:
+                    color_spec = it.get("highlight_colors")
+                    if isinstance(color_spec, (list, tuple)) and hi_idx < len(color_spec):
+                        hi_color = str(color_spec[hi_idx]).lower()
+                    else:
+                        hi_color = str(it.get("highlight_color") or it.get("highlight") or "blue").lower()
+                    if hi_color not in ("blue", "yellow"):
+                        hi_color = "blue"
+                    rgba = (188, 211, 244, 235) if hi_color == "blue" else (255, 235, 145, 235)
+                    painter.rectangle((int(xcur - 2), int(by + 1), int(xcur + ww + 3), int(by + line_h - 2)), fill=rgba)
+                painter.text((int(xcur), int(by + 2)), word, font=font, fill=(29, 31, 32))
+                xcur += ww + space_w
+            by += line_h
+        return by + line_gap
+
+    if isinstance(raw_columns, (list, tuple)) and len(raw_columns) >= 2:
+        body_blocks = [clean_short(str(x), 900) for x in raw_columns[:2] if str(x).strip()]
+        column_gap = 18
+        col_w = (pw - 58 - column_gap) // 2
+        for ci, block in enumerate(body_blocks):
+            bx = 29 + ci * (col_w + column_gap)
+            by = y
+            parts = [part.strip() for part in str(block).splitlines() if part.strip()] or [str(block)]
+            for part in parts:
+                by = draw_source_block(part, bx, by, col_w, max(15, int(H * 0.021)),
+                                       "serif" if all(ord(ch) < 0x250 for ch in part) else "sub", 8)
+                if by > ph - 78:
+                    break
+    else:
+        if isinstance(raw_paragraphs, (list, tuple)) and raw_paragraphs:
+            body_blocks = [clean_short(str(x), 500) for x in raw_paragraphs[:8] if str(x).strip()]
+        else:
+            body_blocks = highlights or [excerpt]
+        for idx, line in enumerate(body_blocks):
+            # A lone excerpt remains highlighted by default; with supplied paragraphs,
+            # only exact `highlights` substrings receive colour, word by word.
+            use_default = not highlights and len(body_blocks) == 1 and not raw_paragraphs
+            y = draw_source_block(line, 29, y + 2, pw - 58,
+                                  max(17, int(H * 0.025)),
+                                  "serif" if all(ord(ch) < 0x250 for ch in line) else "sub",
+                                  10, default_highlight=use_default)
+            if y > ph - 82:
+                break
+
+    # Small reconstruction disclosure; no invented provenance is shown.
+    tag = text_layer("VISUAL RECONSTRUCTION", load_font(max(13, int(H * 0.018)), "cond"),
+                     fill=(142, 43, 37), max_w=pw - 40)
+    page.alpha_composite(tag, (24, ph - tag.height - 22))
+    page = _with_shadow(page, (7, 10), 14, 0.42, 20)
+    try:
+        page_angle = float(it.get("page_angle", -1.2))
+    except (TypeError, ValueError):
+        page_angle = -1.2
+    page_angle = max(-3.0, min(3.0, page_angle))
+    page = page.rotate(page_angle, resample=Image.BICUBIC, expand=True)
+
+    # Reference contact sheets 4-5 also show a compact clipping laid over the
+    # live scene (upper-right), rather than a full side-by-side document spread.
+    # Enable only when the script explicitly requests this composition.
+    clip_layout = str(it.get("layout") or "").lower() in (
+        "photo_clipping_overlay", "clipping_overlay", "photo_overlay"
+    ) or bool(it.get("clip_overlay"))
+    if clip_layout:
+        target_w = int(W * 0.34)
+        target_h = int(H * 0.48)
+        scale = min(target_w / max(1, page.width), target_h / max(1, page.height))
+        compact_page = page.resize((max(1, int(page.width * scale)),
+                                    max(1, int(page.height * scale))), Image.LANCZOS)
+        # Preserve the scene underneath; the clipping is a single floating page
+        # with no invented photo, captions, masthead, date or source details.
+        put(fr, compact_page, W * 0.79 + (1 - q) * W * 0.18,
+            H * 0.34 + (1 - q) * 18, 1.0, a * out * q)
+        return
+
+    # When the script supplies a real archival photograph, use the reference's
+    # side-by-side photo + highlighted-document spread. Never substitute the
+    # presenter/background frame or invent a historical photograph.
+    photo_source = it.get("photo_img")
+    photo = None
+    if photo_source is not None:
+        try:
+            photo = (Image.open(photo_source).convert("RGB")
+                     if isinstance(photo_source, (str, Path))
+                     else photo_source.convert("RGB"))
+        except Exception:
+            photo = None
+    if photo is not None:
+        spread_y = int(H * 0.14)
+        spread_h = int(H * 0.72)
+        photo_w = int(W * 0.43)
+        photo_panel = ImageOps.fit(photo, (photo_w, spread_h), Image.LANCZOS,
+                                   centering=(0.5, 0.42)).convert("RGBA")
+        # Thin neutral paper edge, like the archival photograph/document pair
+        # visible in the reference; no captions, dates or provenance are added.
+        photo_frame = Image.new("RGBA", (photo_w + 18, spread_h + 18), (235, 232, 220, 255))
+        photo_frame.alpha_composite(photo_panel, (9, 9))
+        photo_frame = _with_shadow(photo_frame, (6, 9), 12, 0.40, 18)
+        photo_frame = photo_frame.rotate(0.6, resample=Image.BICUBIC, expand=True)
+        put(fr, photo_frame, W * 0.27 + (1 - q) * -W * 0.20,
+            H * 0.50, 1.0, a * out * q)
+        put(fr, page, W * 0.75 + (1 - q) * W * 0.22,
+            H * 0.50 + (1 - q) * 24, 0.96 + 0.04 * q, a * out * q)
+    else:
+        put(fr, page, W * 0.73 + (1 - q) * W * 0.24, H * 0.52 + (1 - q) * 24,
+            0.96 + 0.04 * q, a * out * q)
+
+
+
+def draw_identity_document(fr, sh, tl, t0, t1, a, ov):
+    """Reference-like archival identity paper; portrait and every field must be supplied."""
+    it = ov.get("it") or {}
+    source = it.get("photo_img")
+    if source is None:
+        return  # Never substitute the presenter, background frame, or a generated face.
+    try:
+        portrait = (Image.open(source).convert("RGB")
+                    if isinstance(source, (str, Path)) else source.convert("RGB"))
+    except Exception:
+        return
+    name = re.sub(r"\s+", " ", str(it.get("text") or it.get("name") or "")).strip()
+    fields = it.get("fields") or []
+    fields = [re.sub(r"\s+", " ", str(x)).strip() for x in fields if str(x).strip()]
+    if not name and not fields:
+        return
+    q = e_out(cl((tl - t0) / 0.48))
+    fade = 1.0 - cl((tl - (t1 - 0.35)) / 0.35)
+    if q <= 0.001 or fade <= 0.001:
+        return
+    # Pale, slightly aged document stock, matching the archival identity card
+    # visible in the reference frame. No fabricated agency masthead or ID data.
+    dw, dh = int(W * 0.68), int(H * 0.70)
+    page = Image.new("RGBA", (dw, dh), (205, 220, 211, 255))
+    pd = ImageDraw.Draw(page)
+    pd.rectangle((0, 0, dw - 1, dh - 1), outline=(105, 126, 116, 190), width=2)
+    pd.line((18, 17, dw - 18, 17), fill=(142, 157, 146, 160), width=1)
+    # Portrait occupies the right-hand block, as in the source identity paper.
+    pw, ph = int(dw * 0.30), int(dh * 0.62)
+    px, py = dw - pw - 24, int(dh * 0.17)
+    face = ImageOps.fit(portrait, (pw, ph), Image.LANCZOS, centering=(0.5, 0.38))
+    page.alpha_composite(face.convert("RGBA"), (px, py))
+    pd.rectangle((px - 3, py - 3, px + pw + 2, py + ph + 2), outline=(83, 99, 91, 230), width=2)
+    text_x, text_w = 26, px - 48
+    y = int(dh * 0.22)
+    if name:
+        nf = font_for(name, max(20, int(H * 0.040)), "cond" if name.isascii() else "title")
+        # Preserve the full supplied name by wrapping rather than truncating.
+        words, lines, line = name.split(), [], ""
+        probe = ImageDraw.Draw(Image.new("L", (2, 2)))
+        for word in words:
+            trial = (line + " " + word).strip()
+            if line and probe.textlength(trial, font=nf) > text_w:
+                lines.append(line)
+                line = word
+            else:
+                line = trial
+        if line:
+            lines.append(line)
+        for ln in lines[:3]:
+            pd.text((text_x, y), ln, font=nf, fill=(35, 51, 45, 255))
+            y += int(nf.size * 1.18)
+        pd.line((text_x, y + 4, min(px - 16, text_x + int(text_w * 0.48)), y + 4), fill=(91, 122, 103, 255), width=3)
+        y += 20
+    ff = font_for("Ag", max(14, int(H * 0.023)), "geom")
+    for field in fields[:5]:
+        # Field strings are rendered verbatim; no invented labels or values.
+        remaining = field
+        while remaining and y < dh - 22:
+            probe = ImageDraw.Draw(Image.new("L", (2, 2)))
+            cut = len(remaining)
+            while cut > 1 and probe.textlength(remaining[:cut], font=ff) > text_w:
+                cut -= 1
+            if cut < len(remaining):
+                space = remaining.rfind(" ", 0, cut)
+                if space > 0:
+                    cut = space
+            pd.text((text_x, y), remaining[:cut], font=ff, fill=(56, 68, 61, 255))
+            remaining = remaining[cut:].lstrip()
+            y += int(ff.size * 1.65)
+    # Subtle paper grain only; no seal, barcode, signature, date or official emblem.
+    page = _with_shadow(page, (5, 8), 11, 0.34, 18)
+    page = page.rotate(-0.35, resample=Image.BICUBIC, expand=True)
+    put(fr, page, W * 0.50 + (1 - q) * 0, H * 0.52 + (1 - q) * 35,
+        1.0, a * q * fade)
+
+
+def draw_dossier(fr, sh, tl, t0, t1, a, ov):
+    """Monochrome intelligence-file portrait treatment using only the current real scene image.
+    It is explicitly a visual reconstruction, not an authentic police / intelligence record."""
+    q = e_out(cl((tl - t0) / 0.58))
+    out = 1.0 - cl((tl - (t1 - 0.40)) / 0.40)
+    if q <= 0.001 or out <= 0.001:
+        return
+    src = fr.convert("RGB")
+    # A subdued, blurred copy of the current shot forms the dossier backdrop.
+    bg = ImageOps.fit(src, (W, H), Image.LANCZOS)
+    bg = ImageEnhance.Color(bg).enhance(0.12).filter(ImageFilter.GaussianBlur(13))
+    bg = ImageEnhance.Brightness(bg).enhance(0.30)
+    fr.paste(bg)
+    d = ImageDraw.Draw(fr)
+    d.rectangle((0, 0, W, 82), fill=(13, 17, 23))
+    d.rectangle((0, 78, W, 84), fill=(174, 39, 34))
+    title = text_layer("SUBJECT DOSSIER", load_font(30, "cond"), fill=(236, 231, 215), max_w=W-90)
+    put(fr, title, W*0.5, 40, 1.0, q*out)
+    # The image remains the source scene; only its presentation is changed.
+    cw, ch = int(W*0.43), int(H*0.66)
+    crop = ImageOps.fit(src, (cw, ch), Image.LANCZOS, centering=(0.5, 0.42))
+    crop = ImageOps.grayscale(crop).convert("RGB")
+    crop = ImageEnhance.Contrast(crop).enhance(1.18)
+    card = Image.new("RGBA", (cw+34, ch+92), (225, 222, 211, 255))
+    card.alpha_composite(crop.convert("RGBA"), (17, 16))
+    cd = ImageDraw.Draw(card)
+    cd.line((18, ch+27, cw+16, ch+27), fill=(80, 80, 76), width=2)
+    cap = text_layer("REFERENCE IMAGE / RECONSTRUCTION", load_font(16, "cond"), fill=(54, 55, 53), max_w=cw-18)
+    card.alpha_composite(cap, ((card.width-cap.width)//2, ch+42))
+    card = _with_shadow(card, (7, 10), 13, 0.46, 22)
+    put(fr, card, W*0.34 + (1-q)*-130, H*0.55, 1.0, q*out)
+    # Right-side file metadata is limited to supplied narration text; no fabricated ID / dates.
+    panel = Image.new("RGBA", (int(W*0.31), int(H*0.48)), (18, 23, 30, 238))
+    pd = ImageDraw.Draw(panel)
+    pd.rectangle((0, 0, 8, panel.height), fill=(180, 43, 36, 255))
+    raw = clean_short(str(ov.get("text") or "विषय परिचय"), 54)
+    lab = text_layer(raw, load_font(28, "head"), fill=(244, 239, 222), max_w=panel.width-48)
+    panel.alpha_composite(lab, (24, 28))
+    sub = text_layer("VISUAL RECONSTRUCTION", load_font(17, "cond"), fill=(218, 166, 104), max_w=panel.width-48)
+    panel.alpha_composite(sub, (24, panel.height-54))
+    put(fr, panel, W*0.77 + (1-q)*130, H*0.55, 1.0, q*out)
+
+
+def draw_event_timeline(fr, sh, tl, t0, t1, a, ov):
+    """Animated 3-5 event documentary timeline. Dates and captions come only from narration-backed event data."""
+    it = ov.get("it") or {}
+    events = [e for e in (it.get("events") or []) if isinstance(e, dict) and e.get("when") and e.get("what")][:5]
+    if len(events) < 3:
+        return
+    # A restrained dark lower-third panel keeps the underlying historical image visible.
+    panel_h = int(H * 0.31)
+    panel_y = H - panel_h
+    q = e_out(cl((tl - t0) / 0.65))
+    fade = 1.0 - cl((tl - (t1 - 0.42)) / 0.42)
+    alpha = int(218 * a * fade)
+    panel = Image.new("RGBA", (W, panel_h), (5, 8, 14, 0))
+    pd = ImageDraw.Draw(panel)
+    pd.rounded_rectangle((18, 8, W - 18, panel_h - 8), radius=20, fill=(5, 8, 14, alpha), outline=(210, 190, 155, int(100 * a * fade)), width=2)
+    panel.putalpha(ImageChops.multiply(panel.getchannel("A"), Image.new("L", panel.size, int(255 * q))))
+    put(fr, panel, W / 2, panel_y + panel_h / 2 + (1 - q) * 100, 1.0, 1.0)
+    # Draw timeline over the panel in screen coordinates.
+    yline = panel_y + int(panel_h * 0.40)
+    x0, x1 = int(W * 0.10), int(W * 0.90)
+    d = ImageDraw.Draw(fr, "RGBA")
+    d.line((x0, yline, x1, yline), fill=(235, 228, 210, int(210 * a * fade * q)), width=4)
+    n = len(events)
+    for idx, ev in enumerate(events):
+        x = int(x0 + (x1 - x0) * idx / max(1, n - 1))
+        start = t0 + 0.35 + idx * 0.62
+        prog = e_back(cl((tl - start) / 0.34))
+        if prog <= 0:
+            continue
+        col = (220, 55, 48)
+        r = int(10 + 7 * prog)
+        d.ellipse((x-r-3, yline-r-3, x+r+3, yline+r+3), fill=(245, 240, 226, int(230*a*fade*prog)))
+        d.ellipse((x-r, yline-r, x+r, yline+r), fill=col + (int(255*a*fade*prog),))
+        date = clean_short(ev.get("when"), 14)
+        what = clean_short(ev.get("what"), 22)
+        fdate = font_for(date, max(23, int(H * 0.043)), "serif" if all(ord(ch) < 0x250 for ch in date) else "cond")
+        fwhat = font_for(what, max(20, int(H * 0.034)), "serif" if all(ord(ch) < 0x250 for ch in what) else "title")
+        # Alternate captions above/below the rail to prevent collisions.
+        above = (idx % 2 == 0)
+        date_y = yline - int(panel_h * 0.23) if above else yline + int(panel_h * 0.12)
+        what_y = date_y + (fdate.size if above else fwhat.size + 8)
+        d.text((x, date_y), date, font=fdate, fill=(255, 218, 120, int(255*a*fade*prog)), anchor="mm", stroke_width=1, stroke_fill=(0,0,0,int(190*a*fade*prog)))
+        d.text((x, what_y), what, font=fwhat, fill=(245, 242, 235, int(245*a*fade*prog)), anchor="mm", stroke_width=1, stroke_fill=(0,0,0,int(190*a*fade*prog)))
+
+
+
+def draw_relationship_network(fr, sh, tl, t0, t1, a, ov):
+    """Reference-style dark relationship board: one central portrait/name and
+    surrounding person symbols connected by restrained dotted links.
+    Portrait imagery is used only when an actual image asset is supplied."""
+    it = ov.get("it") or {}
+    nodes = [n for n in (it.get("nodes") or [])[:13] if isinstance(n, dict) and n.get("name")]
+    edges = [e for e in (it.get("edges") or [])[:16] if isinstance(e, dict)]
+    if len(nodes) < 3 or not edges:
+        return
+    q = e_out(cl((tl - t0) / 0.62))
+    out = 1.0 - cl((tl - (t1 - 0.42)) / 0.42)
+    if q <= 0.001 or out <= 0.001:
+        return
+    layout_mode = str(it.get("layout") or "reference_board").lower()
+    bg = fr.filter(ImageFilter.GaussianBlur(max(2, int(H * 0.012))))
+    # The reference uses a distinct black rectangular relationship board over
+    # the live scene; do not black out the entire frame. Radial compatibility
+    # keeps its older full-frame dark treatment.
+    shade_alpha = 112 if layout_mode != "radial" else 198
+    shade = Image.new("RGBA", (W, H), (3, 6, 12, int(shade_alpha * a * out)))
+    base = Image.blend(fr.convert("RGB"), bg.convert("RGB"), 0.58)
+    fr.paste(Image.alpha_composite(base.convert("RGBA"), shade).convert("RGB"))
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer, "RGBA")
+    if layout_mode != "radial":
+        # Reference board is a tall, nearly-black rectangular panel with the
+        # original scene still visible as a narrow border around it.
+        panel = (int(W * 0.08), int(H * 0.07), int(W * 0.84), int(H * 0.995))
+        d.rectangle(panel, fill=(3, 5, 8, int(246 * a * out)),
+                    outline=(92, 99, 108, int(105 * a * out)), width=max(1, int(H * 0.002)))
+    heading = clean_short(str(ov.get("heading") or (ov.get("text") if layout_mode == "radial" else "" ) or ""), 28)
+    # The reference-board layout has no headline over the portraits; show one
+    # only when explicitly requested. Radial mode retains its previous title.
+    if heading and (layout_mode == "radial" or it.get("show_heading", False)):
+        title = text_layer(heading.upper(), font_for(heading.upper(), max(24, int(H * 0.043)), "cond"), fill=(246, 239, 220), max_w=int(W * 0.82))
+        put(fr, title, W * 0.5, H * (0.075 if layout_mode != "radial" else 0.105) - (1 - q) * 24, 1.0, a * out * q)
+    # Reference board composition: two featured portraits are offset from
+    # one another (upper-left and lower-centre), while the supporting people
+    # sit in loose rows around them. Keep radial layout available explicitly.
+    if layout_mode == "radial":
+        cx, cy = W * 0.5, H * 0.52
+        ring = min(W * 0.32, H * 0.34)
+        coords = [(cx, cy)]
+        for j in range(1, len(nodes)):
+            ang = -math.pi * 0.68 + (j - 1) * 2 * math.pi / max(1, len(nodes) - 1)
+            coords.append((cx + math.cos(ang) * ring, cy + math.sin(ang) * ring * 0.78))
+    else:
+        # Coordinates follow the observed board: primary portrait upper-left,
+        # secondary featured portrait lower-middle, people icons in loose rows.
+        board = [
+            # Two featured portraits: upper-left and lower-centre.
+            (0.263, 0.34), (0.399, 0.777),
+            # Supporting white person symbols distributed around them, as in
+            # the supplied reference crop (loose rows, not a radial orbit).
+            (0.103, 0.46), (0.232, 0.58), (0.369, 0.44),
+            (0.506, 0.46), (0.498, 0.237), (0.658, 0.256),
+            (0.650, 0.498), (0.734, 0.702), (0.612, 0.786),
+            (0.179, 0.814), (0.088, 0.981),
+        ]
+        coords = [(W*x, H*y) for x, y in board[:len(nodes)]]
+        # For boards with more than the reference's 13 positions, distribute
+        # overflow around the lower/side margins without covering either portrait.
+        for j in range(len(coords), len(nodes)):
+            k = j - len(board)
+            x = 0.18 + (k % 6) * 0.13
+            y = 0.84 if (k // 6) % 2 == 0 else 0.28
+            coords.append((W*x, H*y))
+        cx, cy = coords[0]
+    # Thin dotted connectors echo the reference's simple network diagram.
+    for j, edge in enumerate(edges):
+        try:
+            ia, ib = int(edge.get("a")), int(edge.get("b"))
+        except Exception:
+            continue
+        if not (0 <= ia < len(coords) and 0 <= ib < len(coords)) or ia == ib:
+            continue
+        reveal = e_out(cl((tl - t0 - 0.35 - j * 0.16) / 0.38))
+        if reveal <= 0:
+            continue
+        x1, y1 = coords[ia]; x2, y2 = coords[ib]
+        ex, ey = x1 + (x2 - x1) * reveal, y1 + (y2 - y1) * reveal
+        steps = max(2, int(math.hypot(ex - x1, ey - y1) / max(8, H * 0.018)))
+        for z in range(steps):
+            if z % 2 == 0:
+                u0, u1 = z / steps, min(1, (z + 0.58) / steps)
+                d.line((x1 + (ex - x1) * u0, y1 + (ey - y1) * u0,
+                        x1 + (ex - x1) * u1, y1 + (ey - y1) * u1),
+                       fill=(178, 185, 194, int(76 * a * out * reveal)), width=1)
+        # Show only an explicitly supplied relationship. Keep it close to
+        # the connector, on a compact dark plate, without inventing wording.
+        rel = clean_short(edge.get("label_hi"), 34)
+        if rel:
+            dx, dy = x2 - x1, y2 - y1
+            length = max(1.0, math.hypot(dx, dy))
+            # For links touching the central subject, move the label away
+            # from the central portrait and its role caption. Other links
+            # use their midpoint. Alternate the perpendicular side to reduce
+            # collisions when several relationships share a node.
+            if ia == 0 or ib == 0:
+                tmid = 0.68
+                mx, my = x1 + dx * tmid, y1 + dy * tmid
+                off = min(H * 0.068, length * 0.16)
+            else:
+                mx, my = (x1 + ex) * 0.5, (y1 + ey) * 0.5
+                # A link between two outer nodes can pass behind the central
+                # subject; place its label well to one side of that portrait.
+                off = H * 0.14
+            side = (-1 if j % 2 == 0 else 1) if not (ia == 0 or ib == 0) else -1
+            off *= side
+            lx = min(W * 0.84, max(W * 0.16, mx - (dy / length) * off))
+            ly = min(H * 0.88, max(H * 0.12, my + (dx / length) * off))
+            fs = max(12, int(H * 0.016))
+            rf = font_for(rel, fs, "cond")
+            rb = d.textbbox((0, 0), rel, font=rf)
+            rw, rh = rb[2] - rb[0], rb[3] - rb[1]
+            pad_x, pad_y = max(6, int(H * 0.008)), max(3, int(H * 0.004))
+            plate = (lx-rw/2-pad_x, ly-rh/2-pad_y, lx+rw/2+pad_x, ly+rh/2+pad_y)
+            d.rounded_rectangle(plate, radius=max(4, int(H * 0.008)),
+                                fill=(5, 10, 17, int(226 * a * out * reveal)),
+                                outline=(190, 199, 210, int(105 * a * out * reveal)), width=1)
+            d.text((lx, ly), rel, font=rf,
+                   fill=(247, 240, 220, int(250 * a * out * reveal)), anchor="mm")
+    # Outer nodes use a real portrait only when the exact entity has a
+    # licence-checked image (and a vision check when that service is available).
+    # Otherwise retain the reference's simple white person symbol.
+    for j, node in enumerate(nodes[1:], 1):
+        reveal = e_back(cl((tl - t0 - 0.22 - j * 0.20) / 0.38))
+        if reveal <= 0:
+            continue
+        x, y = coords[j]
+        # Reference person symbols are compact: roughly half the height of a featured portrait.
+        # Keep them small so the two portrait nodes remain the visual anchors.
+        r = max(11, int(H * ((0.024 if layout_mode != "radial" else 0.026) if len(nodes) <= 9 else (0.022 if layout_mode != "radial" else 0.023))))
+        alpha = int(238 * a * out * reveal)
+        node_photo = node.get("photo_img")
+        if isinstance(node_photo, Image.Image):
+            # The first outer portrait is a secondary featured person, as in
+            # the reference board; later portraits remain smaller supporting nodes.
+            # The reference's secondary portrait is only modestly larger than
+            # the person icons; the previous 0.16H radius obscured nearby nodes.
+            pr = max(24, int(H * (0.072 if j == 1 else 0.060)))
+            # Optional focal point lets the script keep a person's face in
+            # frame when the source portrait is not centred. Values are
+            # normalized image coordinates; absent metadata preserves the
+            # previous centred crop. Supported forms: photo_focus: [x, y],
+            # or photo_fx/photo_fy. No face detection or identity inference.
+            focus = node.get("photo_focus")
+            try:
+                if isinstance(focus, (list, tuple)) and len(focus) >= 2:
+                    focus_x, focus_y = float(focus[0]), float(focus[1])
+                else:
+                    focus_x = float(node.get("photo_fx", 0.5))
+                    focus_y = float(node.get("photo_fy", 0.5))
+                focus_x = min(0.95, max(0.05, focus_x))
+                focus_y = min(0.95, max(0.05, focus_y))
+            except (TypeError, ValueError):
+                focus_x, focus_y = 0.5, 0.5
+            # The reference board mixes a natural-colour upper portrait with
+            # a monochrome archival lower portrait. Apply a restrained tonal
+            # treatment per node; scripts may override it with photo_tone.
+            tone = str(node.get("photo_tone") or ("archive_bw" if j == 1 and layout_mode != "radial" else "colour")).lower()
+            source_portrait = node_photo.convert("RGB")
+            try:
+                brightness = float(node.get("photo_brightness", 1.06 if j == 1 else 1.02))
+                contrast = float(node.get("photo_contrast", 1.16 if j == 1 else 1.10))
+                brightness = min(1.35, max(0.70, brightness))
+                contrast = min(1.50, max(0.70, contrast))
+            except (TypeError, ValueError):
+                brightness, contrast = (1.06 if j == 1 else 1.02), (1.16 if j == 1 else 1.10)
+            if tone in ("bw", "b&w", "black_white", "black-and-white", "archive_bw", "monochrome"):
+                source_portrait = ImageOps.grayscale(source_portrait).convert("RGB")
+            elif tone in ("sepia", "archival_sepia"):
+                grey = ImageOps.grayscale(source_portrait)
+                source_portrait = ImageOps.colorize(grey, black="#211b16", white="#e4d5b7").convert("RGB")
+            # Saturation can be explicitly reduced without forcing monochrome.
+            elif tone in ("muted", "desaturated"):
+                source_portrait = ImageEnhance.Color(source_portrait).enhance(0.58)
+            source_portrait = ImageEnhance.Brightness(source_portrait).enhance(brightness)
+            source_portrait = ImageEnhance.Contrast(source_portrait).enhance(contrast)
+            face = ImageOps.fit(source_portrait, (pr*2, pr*2),
+                                Image.LANCZOS, centering=(focus_x, focus_y))
+            pm = Image.new("L", face.size, 0)
+            ImageDraw.Draw(pm).ellipse((1, 1, face.width-2, face.height-2), fill=255)
+            if j == 1 and layout_mode != "radial":
+                # The lower featured portrait in the reference has a dark,
+                # antique-gold ornamental circular frame. Keep the ornament
+                # restrained: two fine rings and small evenly spaced beads.
+                outer = pr + max(7, int(H * 0.010))
+                d.ellipse((x-outer, y-outer, x+outer, y+outer),
+                          fill=(24, 20, 17, alpha), outline=(166, 128, 66, alpha),
+                          width=max(2, int(H * 0.003)))
+                inner = pr + max(3, int(H * 0.005))
+                d.ellipse((x-inner, y-inner, x+inner, y+inner),
+                          outline=(218, 184, 112, alpha), width=max(1, int(H * 0.002)))
+                bead_r = max(2, int(H * 0.0032))
+                bead_ring = pr + max(5, int(H * 0.0075))
+                for bead_i in range(24):
+                    ang = 2 * math.pi * bead_i / 24
+                    bx = x + math.cos(ang) * bead_ring
+                    by = y + math.sin(ang) * bead_ring
+                    d.ellipse((bx-bead_r, by-bead_r, bx+bead_r, by+bead_r),
+                              fill=(226, 194, 128, alpha))
+            else:
+                # The upper featured portrait uses the plain pale circular
+                # edge visible in the reference, not a second ornate frame.
+                d.ellipse((x-pr-4, y-pr-4, x+pr+4, y+pr+4),
+                          fill=(242, 244, 247, alpha))
+            layer.paste(face.convert("RGBA"), (int(x-pr), int(y-pr)), pm)
+        else:
+            d.ellipse((x-r*0.38, y-r*1.20, x+r*0.38, y-r*0.44), fill=(242, 244, 247, alpha))
+            d.rounded_rectangle((x-r*0.88, y-r*0.30, x+r*0.88, y+r*0.92), radius=max(5, int(r*0.42)), fill=(242, 244, 247, alpha))
+        if layout_mode == "radial" or it.get("show_node_labels", False):
+            name = clean_short(node.get("name"), 22)
+            role = clean_short(node.get("role"), 24)
+            label = name if not role else name + " · " + role
+            lf = font_for(label, max(11, int(H * (0.014 if len(nodes) >= 10 else (0.016 if len(nodes) >= 7 else 0.018)))), "cond")
+            bb = d.textbbox((0, 0), label, font=lf)
+            tw = bb[2] - bb[0]
+            label_h = max(20, int(H * (0.027 if len(nodes) >= 10 else (0.031 if len(nodes) >= 7 else 0.035))))
+            label_y = min(H * 0.94, max(H * 0.08, y + r * 1.10))
+            label_w = min(W * (0.145 if len(nodes) >= 10 else 0.19), tw + 14)
+            d.rounded_rectangle((x-label_w/2, label_y, x+label_w/2, label_y+label_h), radius=5, fill=(4, 9, 16, int(205*a*out*reveal)))
+            d.text((x, label_y+label_h/2), label, font=lf, fill=(238, 240, 244, alpha), anchor="mm")
+    # Centre: use only a supplied portrait; otherwise show a clean circular name medallion.
+    centre = nodes[0]
+    portrait = centre.get("photo_img") or it.get("photo_img")
+    # Match the compact circular portrait in the source board, not a full-size avatar.
+    cr = max(34, int(H * (0.082 if layout_mode != "radial" else 0.085)))
+    reveal = e_back(cl((tl - t0 - 0.12) / 0.48))
+    if reveal > 0:
+        if isinstance(portrait, Image.Image):
+            # The primary portrait accepts the same explicit focal-point
+            # controls as outer portrait nodes; default remains a centred crop.
+            focus = centre.get("photo_focus", it.get("photo_focus"))
+            try:
+                if isinstance(focus, (list, tuple)) and len(focus) >= 2:
+                    focus_x, focus_y = float(focus[0]), float(focus[1])
+                else:
+                    focus_x = float(centre.get("photo_fx", it.get("photo_fx", 0.5)))
+                    focus_y = float(centre.get("photo_fy", it.get("photo_fy", 0.5)))
+                focus_x = min(0.95, max(0.05, focus_x))
+                focus_y = min(0.95, max(0.05, focus_y))
+            except (TypeError, ValueError):
+                focus_x, focus_y = 0.5, 0.5
+            centre_tone = str(centre.get("photo_tone", it.get("photo_tone", "colour"))).lower()
+            centre_image = portrait.convert("RGB")
+            if centre_tone in ("bw", "b&w", "black_white", "black-and-white", "archive_bw", "monochrome"):
+                centre_image = ImageOps.grayscale(centre_image).convert("RGB")
+            elif centre_tone in ("sepia", "archival_sepia"):
+                centre_image = ImageOps.colorize(ImageOps.grayscale(centre_image), black="#211b16", white="#e4d5b7").convert("RGB")
+            elif centre_tone in ("muted", "desaturated"):
+                centre_image = ImageEnhance.Color(centre_image).enhance(0.58)
+            try:
+                cb = min(1.35, max(0.70, float(centre.get("photo_brightness", it.get("photo_brightness", 1.02)))))
+                cc = min(1.50, max(0.70, float(centre.get("photo_contrast", it.get("photo_contrast", 1.10)))))
+            except (TypeError, ValueError):
+                cb, cc = 1.02, 1.10
+            centre_image = ImageEnhance.Contrast(ImageEnhance.Brightness(centre_image).enhance(cb)).enhance(cc)
+            im = ImageOps.fit(centre_image, (cr*2, cr*2),
+                              Image.LANCZOS, centering=(focus_x, focus_y))
+            mask = Image.new("L", im.size, 0)
+            ImageDraw.Draw(mask).ellipse((1, 1, im.width-2, im.height-2), fill=255)
+            # Main/upper portrait has a clean white circular border, while
+            # the lower featured portrait above carries the gold ornament.
+            d.ellipse((cx-cr-5, cy-cr-5, cx+cr+5, cy+cr+5),
+                      fill=(242, 244, 247, int(255*a*out*reveal)),
+                      outline=(255, 255, 255, int(250*a*out*reveal)),
+                      width=max(2, int(H * 0.003)))
+            layer.paste(im.convert("RGBA"), (int(cx-cr), int(cy-cr)), mask)
+        else:
+            d.ellipse((cx-cr, cy-cr, cx+cr, cy+cr), fill=(17, 28, 42, int(250*a*out*reveal)), outline=(238, 241, 245, int(245*a*out*reveal)), width=max(2, int(H*.004)))
+            nf = font_for(clean_short(centre.get("name"), 18), max(16, int(H*.026)), "cond")
+            d.text((cx, cy), clean_short(centre.get("name"), 18), font=nf, fill=(255, 247, 226, int(255*a*out*reveal)), anchor="mm")
+        # The centre label sits directly below the portrait/name medallion.
+        role = clean_short(centre.get("role"), 26)
+        if role and (layout_mode == "radial" or it.get("show_node_labels", False)):
+            rf = font_for(role, max(14, int(H*.019)), "cond")
+            d.text((cx, cy+cr+int(H*.025)), role, font=rf, fill=(220, 226, 233, int(245*a*out*reveal)), anchor="mm")
+    if fr.mode == "RGBA":
+        fr.alpha_composite(layer)
+    else:
+        fr.paste(Image.alpha_composite(fr.convert("RGBA"), layer).convert(fr.mode))
+
+
+def draw_mark(fr, sh, tl, t0, t1, a, ov):
+    """Animated documentary pointer: hand-drawn circle, underline or arrow aimed at a grounded image detail."""
+    it = ov.get("it") or {}
+    shape = str(it.get("shape") or "circle").lower()
+    if shape not in ("circle", "underline", "arrow"):
+        shape = "circle"
+    try:
+        sx, sy = _subj(sh)
+    except Exception:
+        sx, sy = (0.5, 0.5)
+    try:
+        fx = float(it.get("fx", sx)); fy = float(it.get("fy", sy))
+    except Exception:
+        fx, fy = sx, sy
+    fx, fy = min(0.92, max(0.08, fx)), min(0.88, max(0.10, fy))
+    tx, ty = int(fx * W), int(fy * H)
+    prog = e_out(cl((tl - t0 - 0.08) / max(0.25, min(0.75, (t1 - t0) * 0.24))))
+    fade = 1.0 - cl((tl - (t1 - 0.32)) / 0.32)
+    alpha = int(245 * a * fade * prog)
+    if alpha <= 1:
+        return
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    red = (239, 55, 48, alpha)
+    white = (255, 255, 255, int(alpha * 0.92))
+    width = max(4, int(H * 0.008))
+    if shape == "circle":
+        rx, ry = int(W * 0.075), int(H * 0.105)
+        # Slightly irregular double stroke gives a marker-drawn look.
+        box = (tx-rx, ty-ry, tx+rx, ty+ry)
+        d.arc(box, start=8, end=8 + int(345 * prog), fill=red, width=width)
+        if prog > 0.72:
+            d.arc((tx-rx+5, ty-ry+4, tx+rx-4, ty+ry-5), start=190, end=330, fill=white, width=max(2, width//3))
+    elif shape == "underline":
+        half = int(W * 0.095)
+        y = ty + int(H * 0.045)
+        endx = tx - half + int(2 * half * prog)
+        pts = [(tx-half, y), (tx-int(half*.45), y+4), (tx+int(half*.2), y-3), (endx, y+1)]
+        d.line(pts, fill=red, width=width+3, joint="curve")
+    else:
+        # Arrow starts from an uncluttered outer corner and terminates at the exact focal point.
+        candidates = [(int(W*.12), int(H*.18)), (int(W*.88), int(H*.18)), (int(W*.12), int(H*.80)), (int(W*.88), int(H*.80))]
+        ax, ay = max(candidates, key=lambda q: (q[0]-tx)**2 + (q[1]-ty)**2)
+        ex = int(ax + (tx-ax)*prog); ey = int(ay + (ty-ay)*prog)
+        d.line([(ax, ay), (ex, ey)], fill=(0,0,0,int(alpha*.55)), width=width+7)
+        d.line([(ax, ay), (ex, ey)], fill=red, width=width, joint="curve")
+        ang = math.atan2(ey-ay, ex-ax)
+        head = max(18, int(H*.035))
+        p1 = (ex-head*math.cos(ang-.52), ey-head*math.sin(ang-.52))
+        p2 = (ex-head*math.cos(ang+.52), ey-head*math.sin(ang+.52))
+        d.polygon([(ex,ey), p1, p2], fill=red)
+    label = clean_short(it.get("text") or "", 28)
+    if label and shape == "arrow":
+        sp = text_layer(label, font_for(label, max(22, int(H*.034)), "title"), fill=(255,255,255), stroke=3, stroke_fill=(15,15,18), shadow=(0,3,7,.75))
+        lx = min(max(sp.width/2+18, tx), W-sp.width/2-18)
+        ly = max(sp.height/2+18, min(H-sp.height/2-18, ty-int(H*.09)))
+        put(fr, sp, lx, ly, 1.0, alpha/255)
+    fr.alpha_composite(layer) if fr.mode == "RGBA" else fr.paste(Image.alpha_composite(fr.convert("RGBA"), layer).convert(fr.mode))
+
+
+def draw_callout(fr, sh, tl, t0, t1, a, ov):
+    """Reference object callouts: one label or a compact set of up to four labels linked to real pictured details."""
+    it = ov.get("it") or {}
+    rows = it.get("labels") if isinstance(it.get("labels"), list) else None
+    if not rows:
+        rows = [{"text": it.get("text") or ov.get("text") or "", "fx": it.get("fx", 0.5),
+                 "fy": it.get("fy", 0.5), "side": it.get("side", "auto"), "delay": 0.0}]
+    layer = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+    d = ImageDraw.Draw(layer)
+    size = max(17, int(H * 0.026))
+    pad_x, pad_y = max(12, int(H * 0.014)), max(7, int(H * 0.009))
+    placed = {"left": [], "right": [], "top": [], "bottom": []}
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    for row in rows[:4]:
+        label = clean_short(row.get("text"), 36)
+        if not label:
+            continue
+        try:
+            fx = min(0.92, max(0.08, float(row.get("fx", 0.5))))
+            fy = min(0.92, max(0.08, float(row.get("fy", 0.5))))
+            delay = max(0.0, min(2.5, float(row.get("delay", 0) or 0)))
+        except Exception:
+            continue
+        tx, ty = int(fx * W), int(fy * H)
+        side = str(row.get("side") or "auto")
+        if side == "auto":
+            side = "left" if fx > 0.52 else "right"
+        if side not in placed:
+            side = "right"
+        f = font_for(label.upper(), size, "cond")
+        tw = int(probe.textlength(label.upper(), font=f))
+        bw, bh = min(W - 40, tw + pad_x * 2), size + pad_y * 2
+        if side == "left":
+            bx = max(18, int(W * 0.045)); by = min(max(18, ty - bh - int(H * 0.055)), H - bh - 18)
+            ax, ay = bx + bw, by + bh / 2
+        elif side == "right":
+            bx = min(W - bw - 18, int(W * 0.955) - bw); by = min(max(18, ty - bh - int(H * 0.055)), H - bh - 18)
+            ax, ay = bx, by + bh / 2
+        elif side == "top":
+            bx = min(max(18, tx - bw / 2), W - bw - 18); by = max(18, int(H * 0.045))
+            ax, ay = bx + bw / 2, by + bh
+        else:
+            bx = min(max(18, tx - bw / 2), W - bw - 18); by = H - bh - int(H * 0.07)
+            ax, ay = bx + bw / 2, by
+        # Prevent labels sharing one edge from colliding vertically.
+        for prev_y in placed[side]:
+            if abs(by - prev_y) < bh + 10:
+                by = min(H - bh - 18, prev_y + bh + 10)
+        placed[side].append(by)
+        q = e_out(cl((tl - t0 - 0.08 - delay) / 0.48))
+        fade = 1.0 - cl((tl - (t1 - 0.28)) / 0.28)
+        alpha = int(238 * a * fade * q)
+        if alpha <= 1:
+            continue
+        d.rounded_rectangle((int(bx), int(by), int(bx + bw), int(by + bh)), radius=max(3, int(H * .004)),
+                             fill=(7, 10, 13, int(alpha * .78)), outline=(230, 232, 230, int(alpha * .75)),
+                             width=max(1, int(H * .0015)))
+        d.text((int(bx + pad_x), int(by + pad_y - size * .08)), label.upper(), font=f, fill=(250, 250, 245, alpha))
+        ex, ey = int(ax + (tx - ax) * q), int(ay + (ty - ay) * q)
+        d.line((int(ax), int(ay), ex, ey), fill=(5, 7, 10, int(alpha * .55)), width=max(3, int(H * .005)))
+        d.line((int(ax), int(ay), ex, ey), fill=(242, 242, 232, int(alpha * .9)), width=max(1, int(H * .0018)))
+        rr = max(4, int(H * .006))
+        d.ellipse((tx - rr, ty - rr, tx + rr, ty + rr), fill=(248, 248, 240, alpha), outline=(15, 18, 20, alpha), width=2)
+    if fr.mode == "RGBA":
+        fr.alpha_composite(layer)
+    else:
+        fr.paste(Image.alpha_composite(fr.convert("RGBA"), layer).convert(fr.mode))
+
+
 def draw_new_kind(fr, sh, tl, t0, t1, a, ov):
     k = ov["kind"]
     try:
-        {"lens": draw_lens, "sidelabel": draw_sidelabel, "bigtext": draw_bigtext, "tab": draw_tab, "glow": draw_glow, "desk": draw_desk}[k](fr, sh, tl, t0, t1, a, ov)
+        {"mark": draw_mark, "lens": draw_lens, "sidelabel": draw_sidelabel, "bigtext": draw_bigtext, "tab": draw_tab, "glow": draw_glow, "desk": draw_desk, "archive": draw_archive, "press": draw_press, "dossier": draw_dossier, "tline": draw_event_timeline, "network": draw_relationship_network, "chapter": draw_chapter, "photocollage": draw_photo_collage, "callout": draw_callout, "id_doc": draw_identity_document}[k](fr, sh, tl, t0, t1, a, ov)
     except Exception as e:  # noqa
         if not _VX.get("err_" + k):
             _VX["err_" + k] = 1
@@ -6522,10 +7858,10 @@ def draw_v2(fr, sh, tl, ov, pal, t0, t1):
 
 
 # =========================================================================== V3: guaranteed sources, auto word-detector, roll-out paper, keyframe-animated PNG
-ITEM_PRI = {"quote": 3, "note": 6, "srclist": 6, "feature": 6, "verdict": 5, "explain": 5, "action": 5, "name": 3, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2,
-            "measure": 4, "qmark": 3, "lens": 4, "beforeafter": 6, "compare": 5, "mark": 4, "chart": 6, "tline": 6, "hl": 5, "sidelabel": 5, "bigtext": 5, "tab": 3, "glow": 2, "desk": 6}
-ITEM_MIN = {"quote": 2.4, "year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "verdict": 3.4, "explain": 3.4, "srclist": 3.6, "action": 2.6, "name": 2.4, "feature": 5.0,
-            "measure": 3.0, "qmark": 2.2, "lens": 3.4, "beforeafter": 4.2, "compare": 5.0, "mark": 2.8, "chart": 5.0, "tline": 5.0, "hl": 2.8, "sidelabel": 3.0, "bigtext": 2.6, "tab": 2.2, "glow": 3.0, "desk": 4.5}
+ITEM_PRI = {"quote": 3, "note": 6, "srclist": 6, "feature": 6, "verdict": 5, "explain": 5, "action": 5, "name": 3, "person": 4, "year": 4, "stat": 3, "title": 3, "place": 3, "bubble": 2, "dialogue": 4,
+            "measure": 4, "qmark": 3, "lens": 4, "beforeafter": 6, "compare": 5, "mark": 4, "chart": 6, "tline": 6, "hl": 5, "sidelabel": 5, "bigtext": 5, "tab": 3, "glow": 2, "desk": 6, "archive": 6, "press": 8, "dossier": 6, "network": 7, "chapter": 3, "photocollage": 6, "callout": 4, "id_doc": 5}
+ITEM_MIN = {"quote": 2.4, "year": 2.8, "person": 2.6, "stat": 2.0, "title": 2.0, "place": 2.4, "bubble": 2.2, "dialogue": 2.4, "verdict": 3.4, "explain": 3.4, "srclist": 3.6, "action": 2.6, "name": 2.4, "feature": 5.0,
+            "measure": 3.0, "qmark": 2.2, "lens": 3.4, "beforeafter": 4.2, "compare": 5.0, "mark": 2.8, "chart": 5.0, "tline": 5.0, "hl": 2.8, "sidelabel": 3.0, "bigtext": 2.6, "tab": 2.2, "glow": 3.0, "desk": 4.5, "archive": 4.8, "press": 4.6, "dossier": 5.0, "network": 5.4, "chapter": 3.0, "photocollage": 4.8, "callout": 2.8, "id_doc": 4.8}
 
 
 def item_zones(it):
@@ -6536,12 +7872,16 @@ def item_zones(it):
         return {"B"}
     if k == "bubble":
         return {"T"}
+    if k == "dialogue":
+        return {"B"}
     if k == "sidelabel":
         return {"SL"}  # corners: shares the screen with a source card
     if k == "bigtext":
         return {"BT"}
     if k == "tab":
         return {"TAB"}
+    if k == "chapter":
+        return {"M"}
     return {"M"}  # person, stat, title, verdict, explain
 
 
@@ -6666,7 +8006,7 @@ def force_source_cards(scenes, topic=""):
     ph = _ph_scenes(scenes)
     if not ph or not SRC_PARAS or not GEMINI_KEY:
         return 0
-    has = lambda sc: any(isinstance(i, dict) and i.get("kind") == "note" for i in (sc.get("items") or []))
+    has = lambda sc: any(isinstance(i, dict) and i.get("kind") in ("note", "press") for i in (sc.get("items") or []))
     have = sum(1 for sc in ph if has(sc))
     target = max(2, (len(ph) + 1) // 2)
     need = target - have
@@ -6706,8 +8046,20 @@ Return ONLY JSON: {{"matches":[...]}}
             mk = clean_short(r.get("mark_en"), 70)
             if not mk or mk.lower() not in sp_["text"].lower():
                 mk = auto_mark(sp_["text"]) if fit == "direct" else ""
-            cands.append((0 if fit == "direct" else 1, sc, str(r.get("src")).strip(), {"w": w, "kind": "note", "text": window_text(sp_["text"], mk), "mark": mk,
-                                                                                    "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))}))
+            source_id = str(r.get("src")).strip()
+            # Use the full page treatment only for a substantial, directly matched
+            # source passage. The title/body/highlight are copied from the retrieved
+            # source, not composed from narration. Short passages remain compact notes.
+            if fit == "direct" and len(sp_.get("text", "").split()) >= 70 and (int(source_id.split(".")[0]) % 3 == 0 if source_id.split(".")[0].isdigit() else False):
+                rec = {"w": w, "kind": "press", "text": window_text(sp_["text"], mk),
+                       "title": sp_["title"].replace("|", "-")[:64],
+                       "paragraphs": [sp_["text"][:900]], "highlights": [mk] if mk else [],
+                       "highlight_color": "blue", "source_verified": True,
+                       "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))}
+            else:
+                rec = {"w": w, "kind": "note", "text": window_text(sp_["text"], mk), "mark": mk,
+                       "sub": sp_["title"].replace("|", "-")[:70], "dom": _dom(sp_.get("url", ""))}
+            cands.append((0 if fit == "direct" else 1, sc, source_id, rec))
     cands.sort(key=lambda c: c[0])
     added, used_src, used_sc = 0, set(), set()
     for _fit, sc, src, rec in cands:
@@ -6727,7 +8079,7 @@ def notes_from_declared_src(scenes, topic=""):
     """The script was written FROM real article passages and every scene names its passage ("src"). Here the source card of that passage is placed at the word where
     the narrator states the fact, and shows the article's own sentence (word for word) with the key words highlighted."""
     ph = [sc for sc in _ph_scenes(scenes) if str(sc.get("src") or "").strip() in SRC_PARAS]
-    has = lambda sc: any(isinstance(i, dict) and i.get("kind") == "note" for i in (sc.get("items") or []))
+    has = lambda sc: any(isinstance(i, dict) and i.get("kind") in ("note", "press") for i in (sc.get("items") or []))
     todo = [sc for sc in ph if not has(sc)]
     if not todo or not GEMINI_KEY:
         return 0
@@ -7254,7 +8606,7 @@ def item_zones(it):
     return {"M"}
 
 
-QUICK_KINDS = {"year", "place", "name", "person", "stat", "bubble", "quote", "verdict", "explain", "action", "qmark", "mark", "lens", "measure"}
+QUICK_KINDS = {"year", "place", "name", "person", "stat", "bubble", "dialogue", "quote", "verdict", "explain", "action", "qmark", "mark", "lens", "measure"}
 
 
 def schedule_items(items, dur):
@@ -7284,16 +8636,19 @@ def schedule_items(items, dur):
                     else:
                         a["t1"] = b["t0"] - 0.05
                     continue
-                nt = a["t0"] + ma
+                nt = a["t0"] + ma + 0.05  # retain the full minimum read time after the safety gap
                 room = nt + mb <= dur - 0.1
-                if room and nt - b["t0"] <= (1.5 if kb in ("note", "srclist", "feature") else 0.0):
+                if room and nt - b["t0"] <= (1.5 if kb in ("note", "srclist", "feature", "press", "archive", "photocollage", "network", "id_doc") else 0.0):
                     b["t0"], b["t1"] = nt, min(dur - 0.1, nt + max(mb, b["span"]))
                     moved = True
                 elif pb > pa:
+                    # Never cut a reading-heavy card below its minimum display time.
+                    # If the higher-priority item cannot wait briefly, drop the new
+                    # item instead of flashing the existing document/grid too quickly.
                     if shown < 0.5:
                         placed.remove(a)
                     else:
-                        a["t1"] = b["t0"] - 0.05
+                        ok = False
                     continue
                 elif room and nt - b["t0"] <= 1.2:
                     b["t0"], b["t1"] = nt, min(dur - 0.1, nt + max(mb, b["span"]))
@@ -7308,8 +8663,8 @@ def schedule_items(items, dur):
     return placed
 
 
-DRAW_LAYER = {"quote": 1, "action": 0, "explain": 0, "feature": 0, "verdict": 1, "stat": 1, "person": 2, "name": 2, "place": 2, "year": 3, "bubble": 3, "note": 4, "srclist": 4,
-              "lens": 0, "beforeafter": 0, "measure": 1, "qmark": 1, "mark": 1, "compare": 2, "chart": 2, "tline": 3, "hl": 3, "sidelabel": 2, "bigtext": 3, "tab": 3, "glow": 2, "desk": 3}
+DRAW_LAYER = {"quote": 1, "action": 0, "explain": 0, "feature": 0, "verdict": 1, "stat": 1, "person": 2, "name": 2, "place": 2, "year": 3, "bubble": 3, "dialogue": 4, "note": 4, "srclist": 4,
+              "lens": 0, "beforeafter": 0, "measure": 1, "qmark": 1, "mark": 1, "compare": 2, "chart": 2, "tline": 3, "hl": 3, "sidelabel": 2, "bigtext": 3, "tab": 3, "glow": 2, "desk": 3, "archive": 3, "press": 3, "dossier": 3, "network": 3, "chapter": 2, "photocollage": 3, "callout": 2, "id_doc": 3}
 
 
 # ---- year: always at the bottom (slider with ticks when the year is known, else a pill)
@@ -7431,7 +8786,7 @@ def _name_card(text, n, size):
     key = ("nm2", text, n, size)
     if key in _CARDS:
         return _CARDS[key]
-    f = font_for(text, size, "title")
+    f = font_for(text, size, "cond" if text.isascii() else "title")
     probe = ImageDraw.Draw(Image.new("L", (4, 4)))
     full_w = int(probe.textlength(text, font=f)) + 60
     h = int(size * 1.45)
@@ -7447,21 +8802,96 @@ def _name_card(text, n, size):
 
 
 def draw_name(fr, tl, t0, a, ov, sh=None):
-    """Reference 8:35 (SUMITRA): the name is typed letter by letter (about 0.06 s per letter) on a red strip, white condensed capitals, next to the person at chest height."""
+    """Compact reference-style identity strip; all caption facts must come from narration."""
     it = ov.get("it") or {}
-    text = str(it.get("text") or "").strip()
+    text = re.sub(r"\s+", " ", str(it.get("text") or "")).strip()
     if not text:
         return
     if text.isascii():
         text = text.upper()
-    text = text[:16]
-    size = int(H * 0.098)
-    n = max(1, min(len(text), 1 + int((tl - t0) / 0.06)))
-    spr = _name_card(text, n, size)
-    full = _name_card(text, len(text), size)
+    text = text[:32]
+    role = re.sub(r"\s+", " ", str(it.get("sub") or "")).strip()[:64]
+    # Reference identity cards use a bold name, a short lime underline and a smaller role line.
+    # The earlier red-strip style remains available when explicitly requested by an old script.
+    if str(it.get("style") or "reference").lower() == "red":
+        size = int(H * 0.098)
+        n = max(1, min(len(text), 1 + int((tl - t0) / 0.06)))
+        spr = _name_card(text[:16], n, size)
+        full = _name_card(text[:16], len(text[:16]), size)
+        sx = _subj(sh)[0] if sh else 0.5
+        cx = min(max(sx * W + 0.16 * W, full.width / 2 + 0.04 * W), W - full.width / 2 - 0.04 * W)
+        q = cl((tl - t0) / 0.25)
+        put(fr, spr, cx - full.width / 2 + spr.width / 2, H * 0.685, 1.0, a)
+        if role:
+            rf = font_for(role, max(16, int(H * 0.027)), "geom" if role.isascii() else "sub")
+            probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+            rw = min(int(W * 0.40), int(probe.textlength(role, font=rf)) + 34)
+            rh = max(34, int(H * 0.052))
+            panel = Image.new("RGBA", (rw, rh), (8, 12, 14, 220))
+            pd = ImageDraw.Draw(panel)
+            pd.rectangle((0, 0, 5, rh), fill=(166, 198, 72, 255))
+            shown = role
+            while shown and probe.textlength(shown, font=rf) > rw - 26:
+                shown = shown[:-1]
+            pd.text((15, max(0, (rh - rf.size) // 2 - 1)), shown, font=rf, fill=(228, 231, 216, 255))
+            put(fr, panel, cx, H * 0.765, 1.0, a * q)
+        return
+
+    name_font = font_for(text, max(22, int(H * 0.055)), "cond" if text.isascii() else "title")
+    probe = ImageDraw.Draw(Image.new("L", (4, 4)))
+    max_w = int(W * 0.42)
+    # Wrap on word boundaries instead of cutting off a person's name mid-word.
+    words, lines, line = text.split(), [], ""
+    for word in words:
+        trial = (line + " " + word).strip()
+        if line and probe.textlength(trial, font=name_font) > max_w:
+            lines.append(line)
+            line = word
+        else:
+            line = trial
+    if line:
+        lines.append(line)
+    lines = lines[:2]
+    widths = [probe.textlength(line, font=name_font) for line in lines]
+    panel_w = min(max_w + 28, max(210, int(max(widths, default=0)) + 34))
+    name_h = max(32, int(name_font.size * 0.9))
+    role_font = font_for(role, max(15, int(H * 0.024)), "geom" if role.isascii() else "sub") if role else None
+    role_h = max(25, int(H * 0.045)) if role else 0
+    panel_h = name_h * len(lines) + 12 + role_h + (8 if role else 0)
+    panel = Image.new("RGBA", (panel_w, panel_h), (5, 9, 12, 198))
+    pd = ImageDraw.Draw(panel)
+    y = 5
+    for j, line in enumerate(lines):
+        fill = (255, 218, 74, 255) if j == 0 else (245, 245, 238, 255)
+        pd.text((14, y), line, font=name_font, fill=fill, stroke_width=1, stroke_fill=(0, 0, 0, 180))
+        y += name_h
+    pd.rounded_rectangle((14, y + 1, min(panel_w - 14, 14 + max(52, int(max(widths, default=60) * 0.46))), y + 5), radius=2, fill=(164, 202, 76, 255))
+    y += 11
+    if role and role_font:
+        # Shrink to fit, preserving the complete factual role text.
+        while role_font.size > 13 and probe.textlength(role, font=role_font) > panel_w - 28:
+            role_font = font_for(role, role_font.size - 1, "geom" if role.isascii() else "sub")
+        pd.text((14, y), role, font=role_font, fill=(222, 228, 218, 255))
+    side = str(it.get("label_side") or "auto").lower()
     sx = _subj(sh)[0] if sh else 0.5
-    cx = min(max(sx * W + 0.16 * W, full.width / 2 + 0.04 * W), W - full.width / 2 - 0.04 * W)
-    put(fr, spr, cx - full.width / 2 + spr.width / 2, H * 0.71, 1.0, a)
+    # In the reference, the identity plate sits in the clear space opposite the
+    # portrait/subject. Avoid placing the name over a face when the subject is
+    # already positioned toward either edge of the frame.
+    if side == "auto":
+        side = "left" if sx >= 0.52 else "right"
+    if side == "left":
+        cx = panel_w / 2 + W * 0.045
+    elif side == "right":
+        cx = W - panel_w / 2 - W * 0.045
+    else:
+        cx = min(max(sx * W, panel_w / 2 + W * 0.035), W - panel_w / 2 - W * 0.035)
+    try:
+        label_y = float(it.get("label_y", 0.76))
+    except (TypeError, ValueError):
+        label_y = 0.76
+    cy = H * min(0.90, max(0.58, label_y))
+    q = e_out(cl((tl - t0) / 0.32))
+    put(fr, panel, cx + (1 - q) * 35, cy, 1.0, a * q)
 
 
 # ---- feature call-out: the subject's picture, straight arrows from its parts to round pictures at the side
@@ -7549,7 +8979,7 @@ def notes_for_entities(scenes):
                 continue
             hit = next(((k, v) for k, v in SRC_PARAS.items() if ent in v["title"].lower() and k not in used), None) or \
                 next(((k, v) for k, v in SRC_PARAS.items() if ent in v["text"].lower() and k not in used), None)
-            if not hit or any(isinstance(x, dict) and x.get("kind") == "note" and abs(x.get("w", -9) - it["w"]) < 12 for x in have):
+            if not hit or any(isinstance(x, dict) and x.get("kind") in ("note", "press") and abs(x.get("w", -9) - it["w"]) < 12 for x in have):
                 continue
             k, v = hit
             used.add(k)
@@ -7744,9 +9174,9 @@ def auto_overlays(scenes):
 
 
 def overlay_pass(scenes, topic=""):
-    """Gemini detector over every word: year, place (+ its region), name (person / animal / thing), real person card, stat, verdict, PNG explain / action, feature call-out, bubble."""
+    """Gemini detector over every word: year, place (+ its region), name (person / animal / thing), real person card, stat, verdict, PNG explain / action, feature call-out, speech bubble and lower dialogue caption."""
     ph = [(i, sc) for i, sc in enumerate(scenes) if sc["type"] == "photo" and sc.get("wt") and len(sc["wt"]) == len(sc["narration_hi"].split())]
-    n_add = {k: 0 for k in ("year", "place", "name", "person", "stat", "verdict", "explain", "action", "feature", "bubble", "quote")}
+    n_add = {k: 0 for k in ("year", "place", "name", "person", "stat", "verdict", "explain", "action", "feature", "bubble", "dialogue", "quote")}
     seen_names = set()
     for a in range(0, len(ph), 5):
         batch = ph[a:a + 5]
@@ -7755,14 +9185,15 @@ def overlay_pass(scenes, topic=""):
 Go through EVERY word of EACH scene and detect everything below that is really spoken (up to 6 helpers per scene; never two on the same word; each exactly on the word where it is spoken):
 - "year": a date / year / period. {{"w":..,"kind":"year","text_hi":"as spoken","year_num":1984 or null,"month":12 or null}} (year_num only for a real year 1000-2100).
 - "place": EVERY named city / village / district / state / country / forest / river / mountain / university campus. {{"w":..,"kind":"place","text_hi":"the place as spoken (big)","sub_hi":"the bigger region it lies in: city -> state, state -> country, village -> district or state, else empty"}}
-- "name": the FIRST time a person, animal species, object or organisation is named (a girl called Sumitra, a lion, a university). {{"w":..,"kind":"name","text_hi":"the name as spoken","sub_hi":"what it is in 1-2 words, e.g. लड़की, वैज्ञानिक, शेर, संस्था, or empty"}}. Never repeat a name.
+- "name": the FIRST time a person, animal species, object or organisation is named (a girl called Sumitra, a lion, a university). {{"w":..,"kind":"name","text_hi":"the name as spoken","sub_hi":"a short role/identity caption ONLY if the narration explicitly states it, otherwise empty","style":"reference","label_side":"auto|left|right"}}. Use a compact reference-style name strip with yellow/white name text, a short lime underline and a small factual role line. Never repeat a name; never infer a person's job, affiliation or identity.
 - "person": a REAL, notable public person (scientist, author, leader). {{"w":..,"kind":"person","text_hi":"name as spoken","entity_en":"exact English Wikipedia title"}}. Never for private people or story characters.
 - "stat": a striking short duration / number / count ("३ महीने", "४५ मिनट"). {{"w":..,"kind":"stat","text_hi":"1-3 words"}}
 - "verdict": false / true, myth / fact, did / did not. {{"w":..,"kind":"verdict","text_hi":"","circles":[{{"query_en":"1-3 English words, a REAL photo","mark":"cross" or "tick","label_hi":"1-2 words"}}]}} 2-3 circles.
 - "explain": a concrete thing, part or tool that is clearer as a clean cut-out PNG. {{"w":..,"kind":"explain","text_hi":"label 1-3 words","query_en":"1-3 English words naming the REAL object","anim":"pop|slide|drop|zoom|spin"}}. Abstract idea -> a concrete symbol (time = clock, money = coins, justice = scales, danger = warning sign, knowledge = book, idea = light bulb).
 - "action": something MOVING or doing a visible action. {{"w":..,"kind":"action","text_hi":"","query_en":"the real moving thing","pose_en":"e.g. lion running","verb":"run|walk|swim|fly|jump|fall|rise|approach|retreat|spin|shake|grow","dir":"right|left|toward|away|up|down"}}
 - "feature": the narrator lists SPECIAL FEATURES / abilities / parts of ONE subject. {{"w":..,"kind":"feature","text_hi":"","query_en":"the subject","pose_en":"subject, side view","features":[{{"label_hi":"short Hindi label","part_en":"the body part / detail in English"}}]}} 2-4 features, at most one per video.
-- "bubble": the narrator quotes what a person said. {{"w":..,"kind":"bubble","text_hi":"the quoted words, max 6","side":"left" or "right"}}
+- "bubble": use ONLY when the quoted words are visibly spoken by a character shown in the reenactment image; compact white speech balloon near that character, with a small tail pointing toward them. {{"w":..,"kind":"bubble","text_hi":"the exact quoted words, max 6","side":"left" or "right"}}
+- "dialogue": use for a short exact spoken line shown as a lower dialogue caption over a reenactment/documentary still, when a speech balloon would cover the character or no clear speaking face is visible. Keep it to the exact quoted words (max 12 words); never paraphrase or invent. {{"w":..,"kind":"dialogue","text_hi":"exact words spoken","speaker_hi":"speaker name only if explicitly stated"}}. Do not use both bubble and dialogue for the same line.
 - "quote": a short dramatic line, prediction, threat or promise (max 7 words) that deserves BIG text at the right of the screen. {{"w":..,"kind":"quote","text_hi":"the line"}} (at most 2 per scene)
 Return ONLY JSON: {{"scenes":[{{"i":0,"items":[]}}]}}
 {listing}"""
@@ -7914,7 +9345,11 @@ def draw_ov(fr, sh, tl, pal):
                 cw_ = max(2, int(su.width * pu))
                 put(fr, su.crop((0, 0, cw_, su.height)), cx - (su.width - cw_) / 2, cy, 1.0, a)
         return
-    spr = ov_sprite(ov["kind"], ov["text"], ov.get("mark", ""), pal)
+    sprite_text = ov["text"]
+    if ov["kind"] == "dialogue":
+        speaker = str(ov.get("speaker_hi") or (ov.get("it") or {}).get("speaker_hi") or sh.get("dialogue_speaker_hi") or "").strip()
+        sprite_text = (speaker + "|" if speaker else "") + sprite_text
+    spr = ov_sprite(ov["kind"], sprite_text, ov.get("mark", ""), pal)
     q = e_back((tl - t0) / 0.4)
     a = cl((tl - t0) * 6) * (1 - cl((tl - (t1 - 0.25)) / 0.25))
     if ov["kind"] == "place":
@@ -7937,13 +9372,18 @@ def draw_ov(fr, sh, tl, pal):
             sx_, sy_ = sh["subj"]
         except Exception:  # noqa
             sx_, sy_ = 0.5, 0.5
-        spk = (ov.get("it") or {}).get("side") or ""
-        ax = {"left": 0.30, "right": 0.70}.get(spk, sx_) * W  # the bubble's tail points at the speaker
-        tail = "R" if (ax > W * 0.62) else "L"
+        it_meta = ov.get("it") or {}
+        spk = ov.get("side") or it_meta.get("side") or sh.get("bubble_side") or ""
+        ax = {"left": 0.30, "right": 0.70}.get(spk, sx_) * W
+        tail = "R" if ax > W * 0.58 else "L"
         spr = ov_sprite("bubble", ov["text"], tail, pal)
-        cx = ax + (spr.width / 2 - 34) if tail == "L" else ax - (spr.width / 2 - 34)
-        cy = max(spr.height / 2 + 20, (sy_ - 0.17) * H - spr.height / 2 - 24)
-        cx = min(max(cx, spr.width / 2 + 14), W - spr.width / 2 - 14)
+        # Anchor the tail tip to the chosen speaker side; shift inward only if needed.
+        cx = ax + spr.width / 2 if tail == "L" else ax - spr.width / 2
+        cx = min(max(cx, spr.width / 2 + 2), W - spr.width / 2 - 2)
+        cy = max(spr.height / 2 + 18, min(H * 0.43, (sy_ - 0.20) * H - spr.height * 0.30))
+    elif ov["kind"] == "dialogue":
+        cx = W * 0.50 + (1 - cl(q)) * 70
+        cy = H * 0.84
     elif ov["kind"] == "note":
         cx, cy = W - 30 - spr.width / 2, 40 + spr.height / 2 - (1 - cl(q)) * 160
     else:
@@ -7998,7 +9438,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
     if sc.get("items") and wt_:
         rr = ctx["rnd"]
         for k_, it in enumerate(sc["items"]):
-            if (REF_ONLY and it["kind"] in REF_BLOCK) or (REF_ONLY and it["kind"] == "name" and not name_ok(it.get("text"))) or it["kind"] not in ITEM_KINDS or (it["kind"] in ("explain", "action", "feature") and it.get("png_img") is None) or (it["kind"] == "beforeafter" and it.get("img2") is None):
+            if (REF_ONLY and it["kind"] in REF_BLOCK) or (REF_ONLY and it["kind"] == "name" and not name_ok(it.get("text"))) or it["kind"] not in ITEM_KINDS or (it["kind"] in ("explain", "action", "feature") and it.get("png_img") is None) or (it["kind"] == "beforeafter" and it.get("img2") is None) or (it["kind"] == "id_doc" and it.get("photo_img") is None):
                 continue
             w_ = min(it["w"], len(wt_) - 1)
             t0_ = max(0.1, wt_[w_][0] - 0.08)
@@ -8006,13 +9446,25 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
                 t0_ = max(0.1, dur - ITEM_KINDS[it["kind"]] - 0.3)
             items.append({"t0": t0_, "t1": min(dur - 0.1, t0_ + (it.get("span") or ITEM_KINDS[it["kind"]])), "span": it.get("span") or ITEM_KINDS[it["kind"]], "slot": ITEM_SLOT[it["kind"]], "it": it,
                           "ps": {"phase": rr.uniform(0, 6), "pop_side": -1 if k_ % 2 == 0 else 1, "popup": it.get("popup_img"),
+                                 "collage_imgs": ([{"img": qsh.get("img"), "label": qsh.get("label", "")} for qsh in shots if qsh.get("img") is not None] if it["kind"] in ("photocollage", "archive") else []),
                                  "ov": None if it["kind"] == "popup" else {"kind": it["kind"], "text": (it["text"] + "|" + it.get("sub", "")) if it["kind"] in ("place", "note") else it.get("text", ""), "mark": it.get("mark", ""), "it": it}}})
         items = schedule_items(items, dur)  # helpers share the screen only when they use different areas; none is shown shorter than its reading time
         items.sort(key=lambda x: DRAW_LAYER.get(x["it"]["kind"], 2))  # pictures under, text cards on top
         for x_ in items:
             x_["ps"]["dur"] = max(0.4, x_["t1"] - x_["t0"])
-            if x_["it"]["kind"] in ("verdict", "explain", "person", "stat", "action", "feature", "name", "qmark", "compare", "chart", "hl"):
+            kind_ = x_["it"]["kind"]
+            if kind_ in ("verdict", "explain", "person", "stat", "action", "feature", "name", "qmark", "compare", "chart", "hl"):
                 events.append((x_["t0"], "pop", 0.6))
+            # Sound is attached to the exact visual event, not laid continuously under narration.
+            # Gains stay deliberately low; SFX remain opt-in through the existing SFX=1 setting.
+            if kind_ in ("note", "srclist", "year", "quote"):
+                events.append((x_["t0"], "paper_rustle", 0.30 if kind_ != "quote" else 0.20))
+            elif kind_ in ("hl", "mark"):
+                events.append((x_["t0"] + 0.08, "marker_swipe", 0.26))
+            elif kind_ in ("person", "name"):
+                events.append((x_["t0"], "camera_shutter", 0.22))
+            elif kind_ in ("place",):
+                events.append((x_["t0"], "map_ping", 0.28))
 
     def draw(t):
         idx = 0
@@ -8026,7 +9478,7 @@ def make_photo_draw(sc, dur, speech_dur, ctx, events, pal):
             if idx - 1 not in ends:
                 ends[idx - 1] = shot_frame(shots[idx - 1], shots[idx - 1]["dur"])
             fr = blend_trans(ends[idx - 1], fr, tl / sh["tdur"], sh["trans"])
-        fr = fx_apply(fr, t, int(t * FPS), sh["phase"])
+        fr = fx_apply(fr, t, int(t * FPS), sh["phase"], look=sh.get("grade") or sc.get("grade") or "natural")
         dust.draw(fr, t)
         for k_w in sc.get("kw") or ():  # the picture gives a small punch-in on every key word the narrator says
             u_ = (t - k_w["t"]) / 0.38
@@ -8099,7 +9551,7 @@ def quick_text(s, size, fill, stroke=0, stroke_fill=(255, 255, 255), role="title
     if key not in _qt:
         if len(_qt) > 600:
             _qt.clear()
-        _qt[key] = text_layer(s, load_font(size, role), fill=fill, fill2=fill2, stroke=stroke, stroke_fill=stroke_fill,
+        _qt[key] = text_layer(s, font_for(s, size, role), fill=fill, fill2=fill2, stroke=stroke, stroke_fill=stroke_fill,
                               shadow=(0, 5, 5, 0.35) if stroke else None)
     return _qt[key]
 
@@ -8109,22 +9561,49 @@ BAR_COLS = [(255, 120, 40), (30, 140, 255), (40, 190, 120), (235, 70, 120)]
 
 # ---- render one scene to a silent mp4
 def pick_transition(i, sc, prev_sc, ctx):
+    """Choose a story-matched transition; avoid repeating the same conspicuous
+    transition three scenes in a row. Explicit director choices remain authoritative."""
     rnd = ctx["rnd"]
+    history = ctx.setdefault("transition_history", [])
+
+    def remember(result):
+        name, duration = result
+        if name != "none":
+            history.append(name)
+            del history[:-2]
+        return result
+
     if i == 0:
-        return "fade", 0.7
+        return remember(("fade", 0.7))
+
     hint = sc.get("transition")
+    if REF_ONLY and hint and hint not in REF_TRANSITIONS:
+        hint = None
     if hint == "cut":
-        return "none", 0.0
-    if hint in ("slide_l", "slide_r", "slide_u", "slide_d"):
-        return hint, 0.6
-    if hint in ("fade", "zoom", "whip", "wipe", "circle", "flash"):
-        return hint, 0.55 if hint == "flash" else 0.5
+        return remember(("none", 0.0))
+    allowed_hints = REF_TRANSITIONS if REF_ONLY else set(TRANS_NAMES)
+    if hint in allowed_hints:
+        duration = 0.6 if hint.startswith("slide_") else (0.55 if hint == "flash" else TRANS_DUR.get(hint, 0.5))
+        return remember((hint, duration))
+
     if i == 1:
-        return "flash", 0.55
+        candidate = "slide_l" if REF_ONLY else "flash"
+        return remember((candidate, 0.6 if REF_ONLY else 0.55))
+
     if sc["type"] in EXPLAINERS or (prev_sc and prev_sc["type"] in EXPLAINERS):
-        return rnd.choice(["wipe", "fade", "fade", "zoom"]), 0.5
-    _k = rnd.choice(TRANS_BY_TONE.get(sc.get("tone"), SLIDE_MIX))
-    return _k, (0.9 if _k == "pandark" else TRANS_DUR.get(_k, 0.6))
+        pool = ["slide_l", "slide_r", "fade", "zoom"] if REF_ONLY else ["wipe", "fade", "zoom"]
+    else:
+        pool = list(TRANS_BY_TONE.get(sc.get("tone"), SLIDE_MIX))
+        if REF_ONLY:
+            pool = [name for name in pool if name in REF_TRANSITIONS]
+    # Filter automatic choices only; deliberate director choices above stay intact.
+    if len(history) >= 2 and history[-1] == history[-2]:
+        alternatives = [name for name in pool if name != history[-1]]
+        if alternatives:
+            pool = alternatives
+    chosen = rnd.choice(pool) if pool else ("slide_l" if REF_ONLY else "fade")
+    duration = 0.5 if sc["type"] in EXPLAINERS or (prev_sc and prev_sc["type"] in EXPLAINERS) else (0.9 if chosen == "pandark" else TRANS_DUR.get(chosen, 0.6))
+    return remember((chosen, duration))
 
 
 # ---- map / globe / route animation and layered cross-section (drawn in code, no pictures needed)
@@ -8198,9 +9677,165 @@ def get_land():
     except Exception as e:  # noqa
         log("map data download failed:", type(e).__name__)
     if not rings:
+        # Basemap ships a real low-resolution coastline dataset with many Python
+        # environments. Prefer those geographic polygons over the hand-drawn
+        # continent fallback when the Natural Earth download is unavailable.
+        try:
+            from mpl_toolkits.basemap import Basemap
+            bm = Basemap(projection="cyl", llcrnrlon=-180, urcrnrlon=180,
+                         llcrnrlat=-80, urcrnrlat=80, resolution="c")
+            for polygon in bm.landpolygons:
+                ring = np.asarray(polygon.get_coords(), dtype=np.float64)
+                if len(ring) >= 4 and np.isfinite(ring).all():
+                    rings.append(ring[:, :2])
+            if rings:
+                src = "basemap-lowres"
+        except Exception as exc:
+            log("offline coastline fallback unavailable:", type(exc).__name__)
+    if not rings:
         rings = [np.array(r, dtype=np.float64) for r in LAND_FALLBACK]
     _C["land"], _C["land_src"] = rings, src
     return rings
+
+
+COUNTRY_URL = "https://raw.githubusercontent.com/nvkelso/natural-earth-vector/master/geojson/ne_110m_admin_0_countries.geojson"
+
+
+def get_country_shapes():
+    """Load real Natural Earth admin-0 polygons for country fills and political borders.
+
+    Returns [] when the optional boundary dataset is unavailable; the base coastline
+    map remains usable and no country shapes are guessed.
+    """
+    if "countries" in _C:
+        return _C["countries"]
+    shapes = []
+    cache = ROOT / "countries_admin0.json"
+    data = None
+    try:
+        if cache.exists():
+            data = json.loads(cache.read_text(encoding="utf-8"))
+        elif os.environ.get("NO_LAND_DOWNLOAD") != "1":
+            response = requests.get(COUNTRY_URL, timeout=35, headers={"User-Agent": "HSE-Maker-Documentary-Map/1.0"})
+            if response.ok:
+                data = response.json()
+                try:
+                    cache.write_text(json.dumps(data), encoding="utf-8")
+                except Exception:
+                    pass
+        if data:
+            np = _np()
+            for feature in data.get("features", []):
+                geom = feature.get("geometry") or {}
+                coords = geom.get("coordinates", [])
+                polygons = coords if geom.get("type") == "MultiPolygon" else [coords] if geom.get("type") == "Polygon" else []
+                rings = []
+                for polygon in polygons:
+                    if polygon and polygon[0]:
+                        ring = np.asarray(polygon[0], dtype=np.float64)[:, :2]
+                        if len(ring) >= 4:
+                            rings.append(ring)
+                if rings:
+                    props = feature.get("properties") or {}
+                    shapes.append({
+                        "name": str(props.get("ADMIN") or props.get("NAME") or ""),
+                        "rings": rings,
+                        "bounds": (min(float(r[:, 0].min()) for r in rings), min(float(r[:, 1].min()) for r in rings),
+                                   max(float(r[:, 0].max()) for r in rings), max(float(r[:, 1].max()) for r in rings)),
+                    })
+    except Exception as exc:
+        log("country boundary data unavailable:", type(exc).__name__)
+    if not shapes:
+        np = _np()
+        # Offline fallback: some Python distributions bundle the Natural Earth
+        # low-resolution country polygons with pyogrio test fixtures. Use the
+        # actual polygon identities when present; otherwise retain boundary-only
+        # Basemap lines and never guess country fills.
+        local_candidates = []
+        for root in sys.path:
+            try:
+                candidate = Path(root) / "pyogrio" / "tests" / "fixtures" / "naturalearth_lowres" / "naturalearth_lowres.shp"
+                if candidate.exists():
+                    local_candidates.append(candidate)
+            except Exception:
+                continue
+        for local_shp in local_candidates:
+            try:
+                import fiona
+                with fiona.open(str(local_shp)) as src:
+                    for feature in src:
+                        geom = feature.get("geometry") or {}
+                        coords = geom.get("coordinates", [])
+                        polygons = coords if geom.get("type") == "MultiPolygon" else [coords] if geom.get("type") == "Polygon" else []
+                        rings = []
+                        for polygon in polygons:
+                            if polygon and polygon[0]:
+                                ring = np.asarray(polygon[0], dtype=np.float64)[:, :2]
+                                if len(ring) >= 4 and np.isfinite(ring).all():
+                                    rings.append(ring)
+                        if rings:
+                            props = dict(feature.get("properties") or {})
+                            shapes.append({
+                                "name": str(props.get("ADMIN") or props.get("name") or props.get("NAME") or ""),
+                                "iso3": str(props.get("ISO_A3") or props.get("iso_a3") or ""),
+                                "rings": rings,
+                                "bounds": (min(float(r[:, 0].min()) for r in rings), min(float(r[:, 1].min()) for r in rings),
+                                           max(float(r[:, 0].max()) for r in rings), max(float(r[:, 1].max()) for r in rings)),
+                            })
+                if shapes:
+                    log(f"country boundaries: loaded {len(shapes)} offline Natural Earth polygons from {local_shp.name}")
+                    break
+            except Exception as exc:
+                log("local country polygon fallback unavailable:", type(exc).__name__)
+    _C["countries"] = shapes
+    return shapes
+
+
+def get_country_border_lines():
+    """Offline fallback for political borders when Natural Earth admin-0 GeoJSON is absent.
+
+    Basemap ships a low-resolution country-boundary dataset with many Python installs.
+    It provides boundary linework only (not country identities/fills), so this fallback
+    never guesses which country should be highlighted.
+    """
+    if "country_border_lines" in _C:
+        return _C["country_border_lines"]
+    lines = []
+    try:
+        from mpl_toolkits.basemap import Basemap
+        bm = Basemap(projection="cyl", llcrnrlon=-180, urcrnrlon=180,
+                     llcrnrlat=-80, urcrnrlat=80, resolution="c")
+        segments, _ = bm._readboundarydata("countries")
+        for segment in segments:
+            pts = [(float(lon), float(lat)) for lon, lat in segment
+                   if -180.5 <= float(lon) <= 180.5 and -90 <= float(lat) <= 90]
+            if len(pts) >= 2:
+                lines.append(pts)
+    except Exception as exc:
+        log("offline country border fallback unavailable:", type(exc).__name__)
+    _C["country_border_lines"] = lines
+    return lines
+
+
+def _point_in_country(lon, lat, ring):
+    """Ray-cast point-in-polygon test on longitude/latitude coordinates."""
+    inside = False
+    x, y = float(lon), float(lat)
+    j = len(ring) - 1
+    for i in range(len(ring)):
+        xi, yi = float(ring[i][0]), float(ring[i][1])
+        xj, yj = float(ring[j][0]), float(ring[j][1])
+        if ((yi > y) != (yj > y)) and (x < (xj - xi) * (y - yi) / ((yj - yi) or 1e-12) + xi):
+            inside = not inside
+        j = i
+    return inside
+
+
+def _country_contains(shape, lon, lat):
+    x0, y0, x1, y1 = shape["bounds"]
+    if not (x0 - 1e-6 <= lon <= x1 + 1e-6 and y0 - 1e-6 <= lat <= y1 + 1e-6):
+        return False
+    return any(_point_in_country(lon, lat, ring) for ring in shape["rings"])
 
 
 def gc_points(a, b, n=40):
@@ -8287,6 +9922,8 @@ ISO3 = {"IN": "IND", "PK": "PAK", "BD": "BGD", "NP": "NPL", "LK": "LKA", "BT": "
 def real_terrain_ground(pts, regs, CW, CH, to_px, lon_lat_of):
     """REAL ground: NASA GIBS satellite relief (public domain) + real district/state borders from geoBoundaries.
     Returns (RGBA canvas, [(label, px, py)] or None on any problem -> caller falls back to the drawn terrain."""
+    if os.environ.get("NO_MAP_DOWNLOAD") == "1":
+        return None
     np = _np()
     try:
         lo_a, la_a = lon_lat_of(0, 0)
@@ -8422,7 +10059,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         return CW / 2 + ((o - lon0) * kx - xc) * sc_, CH / 2 + (-(a - lat0) - yc) * sc_
     pp = [to_px(*q) for q in pts]
     centres = [to_px(r["lat"], r["lon"]) for r in regs]
-    names = [r.get("label_hi") for r in regs]
+    names = [r.get("label_en") or r.get("label_hi") for r in regs]
     rnd = random.Random(int(abs(lat0 * 1000 + lon0 * 77)))
     while len(centres) < 4:  # anonymous extra patches so the ground never looks like one flat block
         a_ = rnd.random() * 6.28
@@ -8482,7 +10119,7 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
             if dd < 330:
                 ux_, uy_ = ((cx - px_) / dd, (cy - py_) / dd) if dd > 1 else (0.0, -1.0)
                 cx, cy = px_ + ux_ * 340, py_ + uy_ * 340
-        lay = text_layer(nm.upper() if nm.isascii() else nm, load_font(150, "title"), fill=(255, 255, 255), stroke=3, stroke_fill=(30, 30, 30))
+        lay = text_layer(nm.upper() if nm.isascii() else nm, load_font(150, "serif" if nm.isascii() else "title"), fill=(255, 255, 255), stroke=3, stroke_fill=(30, 30, 30))
         lay = lay.rotate(-10 if int(cx) % 2 else 8, expand=True, resample=Image.BICUBIC)
         sh = Image.new("RGBA", lay.size, (0, 0, 0, 0))
         sh.putalpha(lay.getchannel("A").filter(ImageFilter.GaussianBlur(6)).point(lambda v: int(v * 0.6)))
@@ -8533,7 +10170,8 @@ def make_terrain_draw(sc, dur, speech_dur, pal, events):
         kpos = (arc[mid_i][0] - nx / nn * 44, arc[mid_i][1] - ny / nn * 44)  # keep the text above the line
     tags = []
     for p_ in pins:
-        lay = text_layer('"' + p_["label_hi"] + '"', load_font(34, "label"), fill=(40, 30, 0))
+        place_label = p_.get("label_en") or p_["label_hi"]
+        lay = text_layer(place_label, load_font(34, "geo" if place_label.isascii() else "label"), fill=(40, 30, 0))
         w_, h_ = lay.width + 34, lay.height + 18
         tg = Image.new("RGBA", (w_, h_), (0, 0, 0, 0))
         bx = Image.new("RGBA", (w_, h_), (255, 214, 10, 255))
@@ -8646,7 +10284,7 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
         spread_ = max([hav_km((a_["lat"], a_["lon"]), (b_["lat"], b_["lon"])) for a_ in m["pins"] for b_ in m["pins"]] or [0.0])
     except Exception:  # noqa
         spread_ = 0.0
-    if m["pins"] and spread_ < 6000 and os.environ.get("TERRAIN_ONLY", "1") != "0":  # only the tilted terrain map, no satellite / globe look
+    if m["pins"] and spread_ < 6000 and os.environ.get("TERRAIN_ONLY", "0") == "1":  # optional forced terrain mode; default follows the director-selected flat/globe/terrain style
         m2 = dict(m, mode="terrain", route=len(m["pins"]) >= 2)
         return make_terrain_draw(dict(sc, map=m2), dur, speech_dur, pal, events)
     if m.get("mode") == "terrain" and len(m["pins"]) >= 2:
@@ -8657,23 +10295,48 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
     pts = [(p["lat"], p["lon"]) for p in pins]
     lats, lons = [p[0] for p in pts], [p[1] for p in pts]
     span_lon = max(lons) - min(lons)
-    if mode == "globe" and (span_lon > 110 or (max(lats) - min(lats)) > 90):
-        mode = "flat"
+    # An explicit globe selection must remain a globe even for intercontinental
+    # routes. Globe mode is specifically useful when longitude/latitude spans are
+    # large; silently downgrading it to flat breaks the director's scene choice.
     land = get_land()
-    base = bg_base(tuple(pal["top"]), tuple(pal["bottom"]))
-    bubbles = _bubbles()
+    country_shapes = get_country_shapes()
+    country_border_lines = get_country_border_lines() if not country_shapes else []
+    # If only boundary linework is available, do not colour whole continents as
+    # though a named country had been identified. Use neutral land and retain
+    # the actual political borders plus explicitly placed map pins.
+    land_fill = (112, 24, 34, 255) if country_shapes else (56, 78, 101, 255)
+    land_outline = (65, 15, 25, 255) if country_shapes else (150, 172, 196, 255)
+    highlighted_country_ids = set()
+    for pin_index, (pin_lat, pin_lon) in enumerate(pts):
+        for shape_index, shape in enumerate(country_shapes):
+            if _country_contains(shape, pin_lon, pin_lat):
+                highlighted_country_ids.add(shape_index)
+                break
+    # The supplied reference map is full-frame, dark and edge-to-edge (not a floating rounded card).
+    base = Image.new("RGBA", (W, H), (5, 13, 28, 255))
+    bubbles = []
     head = head_sprite(sc["headline_hi"], pal) if sc.get("headline_hi") else None
     pin_img = pin_sprite(pal)
-    labels = [lower_third(p["label_hi"], pal) if False else text_layer(p["label_hi"], load_font(34, "label"), fill=(255, 255, 255)) for p in pins]
-    label_pills = []
-    for lay in labels:
-        w, h = lay.width + 36, lay.height + 14
-        pl = Image.new("RGBA", (w, h), (0, 0, 0, 0))
-        col = Image.new("RGBA", (w, h), tuple(pal["ink"]) + (255,))
-        col.putalpha(rounded_mask((w, h), h // 2))
-        pl.alpha_composite(col)
-        pl.alpha_composite(lay, ((w - lay.width) // 2, (h - lay.height) // 2))
-        label_pills.append(pl)
+    # Compact direct-on-map typography, like the supplied documentary reference.
+    # Prefer an explicitly supplied English place name; never auto-translate a label.
+    map_label_texts = [p.get("label_en") or p["label_hi"] for p in pins]
+    labels = [text_layer(txt,
+                         load_font(23, "geo") if all(ord(ch) < 0x250 for ch in txt) else load_font(23, "title"),
+                         fill=(250, 250, 248), stroke=1, stroke_fill=(7, 13, 24))
+              for txt in map_label_texts]
+    # Optional historical/person/family photographs attached to a location, as seen in the reference map.
+    map_insets = []
+    for inset in (m.get("insets") or [])[:1]:
+        try:
+            source = inset.get("image")
+            im = Image.open(source).convert("RGB") if isinstance(source, (str, Path)) else source.convert("RGB")
+            if im is None:
+                continue
+            map_insets.append({**inset, "_img": im.copy()})
+        except Exception:
+            continue
+    # Reference labels sit directly on the map; no rounded UI pills or special destination badge.
+    label_pills = labels
     # path through the pins
     path = []
     for a, b in zip(pts, pts[1:]):
@@ -8689,7 +10352,7 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
     if dur < 6.0:  # the sentence is short: the whole animation must finish inside it
         t_start, t_end = min(1.9, 0.22 * dur), max(min(1.9, 0.22 * dur) + 0.7, min(dur - 0.5, speech_dur * 0.85))
     else:
-        t_start, t_end = 1.9, max(3.2, min(dur - 1.2, speech_dur * 0.85))
+        t_start, t_end = 1.9, max(3.2, min(dur - 1.2, speech_dur * 0.90))
     if route:
         pin_t = [first_pin] + [t_start + (t_end - t_start) * (k / max(1.0, total_km)) for k in pin_km[1:]]
     else:
@@ -8710,8 +10373,28 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
     if pin_t[-1] > dur - 1.0 and dur > 1.5:  # never let a pin drop after the sentence is over
         f_ = max(0.3, (dur - 1.0) / pin_t[-1])
         pin_t = [t_ * f_ for t_ in pin_t]
+    # Tie country highlighting to the same spoken-beat timing as its location pin.
+    # If multiple pins belong to one country, reveal it on the earliest matching pin.
+    country_reveal_at = {}
+    for pin_index, (pin_lat, pin_lon) in enumerate(pts):
+        for shape_index, shape in enumerate(country_shapes):
+            if _country_contains(shape, pin_lon, pin_lat):
+                country_reveal_at[shape_index] = min(country_reveal_at.get(shape_index, float("inf")), pin_t[pin_index])
+                break
+
+    def country_visual_style(shape_index, frame_time):
+        """Return a progressively revealed red highlight or the neutral blue neighbour fill."""
+        if shape_index not in country_reveal_at:
+            return (126, 24, 34, 238), (70, 15, 24, 245)
+        reveal = cl((frame_time - country_reveal_at[shape_index]) / 0.72)
+        # The reference highlights the named/target region in blue against red neighbouring land.
+        start_rgb, end_rgb = (126, 24, 34), (24, 62, 205)
+        rgb = tuple(int(a + (b - a) * e_out(reveal)) for a, b in zip(start_rgb, end_rgb))
+        alpha = int(238 + (250 - 238) * e_out(reveal))
+        edge_alpha = int(220 + (255 - 220) * e_out(reveal))
+        return (*rgb, alpha), (18, 28, 86, edge_alpha)
     for t in pin_t:
-        events.append((t, "pop", 0.8))
+        events.append((t, "map_ping", 0.48))
     events.append((0.2, "whoosh_soft", 0.8))
     if route:
         for k in range(int((t_end - t_start) / 0.12)):
@@ -8722,8 +10405,8 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
     ux = sum(math.cos(math.radians(a)) * math.cos(math.radians(o)) for a, o in pts)
     uy = sum(math.cos(math.radians(a)) * math.sin(math.radians(o)) for a, o in pts)
     mid_lon = math.degrees(math.atan2(uy, ux))
-    R, gcx, gcy = 228, W / 2, 322
-    PW, PH, PX, PY = 1160, 428, 60, 94
+    R, gcx, gcy = 228, W / 2, H / 2
+    PW, PH, PX, PY = W, H, 0, 0
     ocean_sprite = {}
     if mode == "globe":
         D = 2 * R + 40
@@ -8800,11 +10483,11 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
 
     def draw(t):
         fr = base.copy()
-        _draw_bubbles(fr, bubbles, t)
         if head is not None:
             put(fr, head, W / 2, 62, 1.0, cl(t * 2.5))
         screen = []  # (x, y, visible) of each pin at 1x
         route_pts = []
+        route_directions = []  # screen-space arrowhead at the moving route tip
         if mode == "globe":
             c = centre(t)
             put(fr, ocean_sprite["glow"], gcx, gcy, 1.0, 0.8)
@@ -8850,7 +10533,26 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
                 y = np.where(hid, y / n * R * 0.999, y)
                 poly = [((R + a) * k, (R - b) * k) for a, b in zip(x, y)]
                 if len(poly) > 2:
-                    dr.polygon(poly, fill=(120, 196, 96, 255), outline=(70, 140, 70, 255))
+                    dr.polygon(poly, fill=land_fill, outline=land_outline)
+            # Keep country identity fills consistent in globe mode as well as flat mode.
+            # Only polygons matched from the actual admin-0 dataset are filled; the
+            # boundary-only offline fallback never assigns a country identity.
+            for shape_index, shape in enumerate(country_shapes):
+                fill, outline = country_visual_style(shape_index, t)
+                for ring in shape.get("rings", []):
+                    if len(ring) < 4:
+                        continue
+                    x, y, cc = proj_globe(ring[:, 1], ring[:, 0], c)
+                    if not (cc > 0).any():
+                        continue
+                    n = np.hypot(x, y)
+                    n[n < 1e-6] = 1e-6
+                    hidden = cc <= 0
+                    x = np.where(hidden, x / n * R * 0.999, x)
+                    y = np.where(hidden, y / n * R * 0.999, y)
+                    poly = [((R + a) * k, (R - b) * k) for a, b in zip(x, y)]
+                    if len(poly) > 2:
+                        dr.polygon(poly, fill=fill, outline=outline)
             if route and len(path) > 1:
                 prog = cl((t - t_start) / (t_end - t_start)) * total_km
                 seg = []
@@ -8862,14 +10564,20 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
                         seg.append(((R + x[0]) * k, (R - y[0]) * k))
                     else:
                         if len(seg) > 1:
-                            dr.line(seg, fill=(255, 255, 255, 255), width=14)
-                            dr.line(seg, fill=tuple(pal["accent"]) + (255,), width=8)
+                            dr.line(seg, fill=(10, 42, 132, 205), width=24, joint="curve")
+                            dr.line(seg, fill=(245, 248, 255, 235), width=12, joint="curve")
+                            dr.line(seg, fill=(28, 83, 220, 255), width=6, joint="curve")
                         seg = []
                 if len(seg) > 1:
-                    dr.line(seg, fill=(255, 255, 255, 255), width=14)
-                    dr.line(seg, fill=tuple(pal["accent"]) + (255,), width=8)
+                    dr.line(seg, fill=(10, 42, 132, 205), width=24, joint="curve")
+                    dr.line(seg, fill=(245, 248, 255, 235), width=12, joint="curve")
+                    dr.line(seg, fill=(28, 83, 220, 255), width=6, joint="curve")
                 if t >= t_start and seg:
-                    route_pts.append(((seg[-1][0]) / k + gcx - R, (seg[-1][1]) / k + gcy - R))
+                    hx, hy = (seg[-1][0]) / k + gcx - R, (seg[-1][1]) / k + gcy - R
+                    route_pts.append((hx, hy))
+                    if len(seg) >= 2:
+                        px0, py0 = (seg[-2][0]) / k + gcx - R, (seg[-2][1]) / k + gcy - R
+                        route_directions.append((hx, hy, math.atan2(hy-py0, hx-px0)))
             cv = cv.reduce(k)
             sphere = ocean_sprite["img"].copy()
             sphere.alpha_composite(cv)
@@ -8879,28 +10587,62 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
             put(fr, sphere, gcx, gcy, 1.0, 1.0)
             for la, lo in pts:
                 x, y, cc = proj_globe(np.array([la]), np.array([lo]), c)
-                screen.append((gcx + x[0], gcy - y[0], cc[0] > 0.08))
+                # Fade destination markers and their labels as they approach the
+                # globe horizon instead of abruptly popping on/off at a hard cutoff.
+                # Negative-facing points remain hidden on the far side of the sphere.
+                face_alpha = cl((float(cc[0]) + 0.035) / 0.20)
+                screen.append((gcx + x[0], gcy - y[0], float(cc[0]) > -0.035, face_alpha))
         else:
             cx_, cy_, hl_ = flat_view(t)
             sc_ = (PW / 2) / hl_
             k = 2
-            cv = Image.new("RGB", (PW * k, PH * k), (150, 205, 245))
+            cv = Image.new("RGB", (PW * k, PH * k), (7, 18, 38))
             dr = ImageDraw.Draw(cv, "RGBA")
 
             def fp(lat, lon):
                 return ((PW / 2 + (lon - cx_) * sc_) * k, (PH / 2 - (lat - cy_) * sc_) * k)
             step = 30 if hl_ > 60 else (10 if hl_ > 20 else 5)
             for gl in range(-90, 91, step):
-                dr.line([fp(gl, -180), fp(gl, 180)], fill=(255, 255, 255, 90), width=2)
+                dr.line([fp(gl, -180), fp(gl, 180)], fill=(205, 220, 235, 24), width=2)
             for gl in range(-180, 181, step):
-                dr.line([fp(-90, gl), fp(90, gl)], fill=(255, 255, 255, 90), width=2)
+                dr.line([fp(-90, gl), fp(90, gl)], fill=(205, 220, 235, 24), width=2)
             for ring in land:
                 poly = [fp(b, a) for a, b in ring]
                 xs = [p[0] for p in poly]
                 ys = [p[1] for p in poly]
                 if max(xs) < 0 or min(xs) > PW * k or max(ys) < 0 or min(ys) > PH * k:
                     continue
-                dr.polygon(poly, fill=(120, 196, 96, 255), outline=(70, 140, 70, 255))
+                dr.polygon(poly, fill=land_fill, outline=land_outline)
+            # Country fills and thin political boundaries, matching the reference's
+            # red highlighted countries and blue/white neighbouring map treatment.
+            if country_shapes:
+                view_lon = hl_ * 2.0
+                view_lat = view_lon * (PH / PW)
+                lon_min, lon_max = cx_ - view_lon, cx_ + view_lon
+                lat_min, lat_max = cy_ - view_lat, cy_ + view_lat
+                for shape_index, shape in enumerate(country_shapes):
+                    bx0, by0, bx1, by1 = shape["bounds"]
+                    if bx1 < lon_min or bx0 > lon_max or by1 < lat_min or by0 > lat_max:
+                        continue
+                    for ring in shape["rings"]:
+                        poly = [fp(float(lat), float(lon)) for lon, lat in ring]
+                        xs = [pt[0] for pt in poly]
+                        ys = [pt[1] for pt in poly]
+                        if max(xs) < 0 or min(xs) > PW * k or max(ys) < 0 or min(ys) > PH * k:
+                            continue
+                        fill, outline = country_visual_style(shape_index, t)
+                        dr.polygon(poly, fill=fill, outline=outline)
+            elif country_border_lines:
+                # Offline boundary-only fallback: retain country borders without
+                # fabricating country fills or assigning an unverified country identity.
+                for border_line in country_border_lines:
+                    poly = [fp(float(lat), float(lon)) for lon, lat in border_line]
+                    if len(poly) >= 2:
+                        xs = [pt[0] for pt in poly]
+                        ys = [pt[1] for pt in poly]
+                        if max(xs) < 0 or min(xs) > PW * k or max(ys) < 0 or min(ys) > PH * k:
+                            continue
+                        dr.line(poly, fill=(235, 243, 250, 205), width=3, joint="curve")
             if route and len(path) > 1:
                 prog = cl((t - t_start) / (t_end - t_start)) * total_km
                 seg = []
@@ -8909,41 +10651,146 @@ def make_map_draw(sc, dur, speech_dur, pal, events):
                         break
                     seg.append(fp(la, lo))
                 if len(seg) > 1:
-                    dr.line(seg, fill=(255, 255, 255, 255), width=14, joint="curve")
-                    dr.line(seg, fill=tuple(pal["accent"]) + (255,), width=8, joint="curve")
+                    dr.line(seg, fill=(10, 42, 132, 205), width=24, joint="curve")
+                    dr.line(seg, fill=(245, 248, 255, 235), width=12, joint="curve")
+                    dr.line(seg, fill=(28, 83, 220, 255), width=6, joint="curve")
                 if t >= t_start and seg:
-                    route_pts.append((PX + seg[-1][0] / k, PY + seg[-1][1] / k))
+                    hx, hy = PX + seg[-1][0] / k, PY + seg[-1][1] / k
+                    route_pts.append((hx, hy))
+                    if len(seg) >= 2:
+                        px0, py0 = PX + seg[-2][0] / k, PY + seg[-2][1] / k
+                        route_directions.append((hx, hy, math.atan2(hy-py0, hx-px0)))
             panel = cv.reduce(k).convert("RGBA")
-            pm = rounded_mask((PW, PH), 30)
-            panel.putalpha(pm)
-            border = Image.new("RGBA", (PW + 12, PH + 12), (255, 255, 255, 255))
-            border.putalpha(rounded_mask((PW + 12, PH + 12), 36))
-            put(fr, border, PX + PW / 2, PY + PH / 2, 1.0, 1.0)
-            put(fr, panel, PX + PW / 2, PY + PH / 2, 1.0, 1.0)
+            # Full-bleed geographic frame, matching the reference montage rather than a UI card.
+            fr.alpha_composite(panel, (PX, PY))
             for la, lo in pts:
                 x, y = fp(la, lo)
                 inside = 0 <= x <= PW * k and 0 <= y <= PH * k
-                screen.append((PX + x / k, PY + y / k, inside))
-        for i, (x, y, vis) in enumerate(screen):
+                screen.append((PX + x / k, PY + y / k, inside, 1.0))
+        # Place location labels around their pins while avoiding collisions between
+        # nearby cities/countries. The previous fixed up/down alternation could stack
+        # labels when several pins were geographically close together.
+        placed_label_boxes = []
+        for i, (x, y, vis, face_alpha) in enumerate(screen):
             q = t - pin_t[i]
-            if q < 0 or not vis:
+            if q < 0 or not vis or face_alpha <= 0.01:
                 continue
             drop = lerp(-70, 0, e_out(q / 0.35))
-            ring_r = 1.0 + (q % 1.4) / 1.4 * 1.6
             nxt = pin_t[i + 1] if i + 1 < len(pin_t) else None
-            old = 0.0 if nxt is None else cl((t - nxt) / 0.5) * (1 - cl((t - t_out + 0.2) / 0.6))  # earlier pins shrink away while the camera follows the new one
-            put(fr, soft_circle(22, (255, 255, 255), 0.5), x, y - 18, ring_r, 0.6 * (1 - (q % 1.4) / 1.4) * cl(q * 3) * (1 - old))
-            put(fr, pin_img, x, y - 20 + drop, e_back(q / 0.4) * (1 - 0.3 * old), cl(q * 6))
-            ly = y - 62 if i % 2 == 0 else y + 22
-            put(fr, label_pills[i], x, ly + drop * 0.3, 1.0 - 0.25 * old, cl((q - 0.15) * 4) * (1 - 0.85 * old))
-        for (x, y) in route_pts:
-            put(fr, soft_circle(14, (255, 255, 255), 1.0), x, y, 1.0 + 0.1 * math.sin(t * 9), 1.0)
-        if route:
-            prog = cl((t - t_start) / (t_end - t_start)) * total_km
-            if t > t_start - 0.1:
-                txt = f"≈ {prog:,.0f} किमी"
-                put(fr, quick_text(txt, 54, tuple(pal["accent"]), stroke=8, stroke_fill=(255, 255, 255), role="label"),
-                    230 if mode == "globe" else W / 2, 505 if mode == "globe" else 92 + PH - 28, 1.0, cl((t - t_start + 0.1) * 4))
+            old = 0.0 if nxt is None else cl((t - nxt) / 0.5) * (1 - cl((t - t_out + 0.2) / 0.6))
+            marker = ImageDraw.Draw(fr)
+            mr = 6.5 * e_back(q / 0.4)
+            marker.ellipse((x-mr, y-18+drop-mr, x+mr, y-18+drop+mr),
+                           fill=(255, 204, 72, int(255 * cl(q * 6) * face_alpha)),
+                           outline=(255, 255, 255, int(245 * face_alpha)), width=2)
+
+            pill = label_pills[i]
+            lw, lh = pill.size
+            candidates = [
+                (x, y - 66), (x, y + 48),
+                (x - lw * 0.58, y - 24), (x + lw * 0.58, y - 24),
+                (x, y - 104), (x, y + 82),
+            ]
+            if route:
+                # On a journey map, keep place names beside the route rather than
+                # sitting directly on top of its blue line.
+                candidates = [candidates[2], candidates[3], candidates[0],
+                              candidates[4], candidates[1], candidates[5]]
+            elif i % 2:
+                candidates = candidates[1:2] + candidates[0:1] + candidates[2:]
+            chosen_xy = None
+            best_score = float("inf")
+            best_box = None
+            for lx, ly in candidates:
+                lx = min(W - lw / 2 - 10, max(lw / 2 + 10, lx))
+                ly = min(H - lh / 2 - 10, max(lh / 2 + 10, ly))
+                box = (lx - lw / 2 - 7, ly - lh / 2 - 5, lx + lw / 2 + 7, ly + lh / 2 + 5)
+                overlap_score = 0.0
+                for b in placed_label_boxes:
+                    ox = max(0.0, min(box[2], b[2]) - max(box[0], b[0]))
+                    oy = max(0.0, min(box[3], b[3]) - max(box[1], b[1]))
+                    overlap_score += ox * oy
+                # Reserve the compass area in the upper-right corner.
+                hud = (W - 150, 58, W - 20, 164)
+                ox = max(0.0, min(box[2], hud[2]) - max(box[0], hud[0]))
+                oy = max(0.0, min(box[3], hud[3]) - max(box[1], hud[1]))
+                hud_score = ox * oy * 2.5
+                distance_score = math.hypot(lx - x, ly - y) * 0.035
+                score = overlap_score * 4.0 + hud_score + distance_score
+                if score < best_score:
+                    best_score, chosen_xy, best_box = score, (lx, ly), box
+                if overlap_score <= 0.01 and hud_score <= 0.01:
+                    break
+            if chosen_xy is None:
+                chosen_xy = (min(W - lw / 2 - 10, max(lw / 2 + 10, x)),
+                             min(H - lh / 2 - 10, max(lh / 2 + 10, y - 66)))
+                best_box = (chosen_xy[0] - lw / 2 - 7, chosen_xy[1] - lh / 2 - 5,
+                            chosen_xy[0] + lw / 2 + 7, chosen_xy[1] + lh / 2 + 5)
+            if best_box is not None:
+                placed_label_boxes.append(best_box)
+            # Once a place has been introduced, keep its label visible for the rest
+            # of the map shot, matching the reference where all named regions remain labelled.
+            put(fr, pill, chosen_xy[0], chosen_xy[1] + drop * 0.3,
+                1.0, cl((q - 0.15) * 4) * face_alpha)
+        # Small archival/person/family photo insets: rectangular or circular crops,
+        # attached to their actual geographic coordinates with the reference's yellow underline.
+        for inset_index, inset in enumerate(map_insets[:1]):
+            if mode == "globe":
+                ix, iy, iz = proj_globe(np.array([inset["lat"]]), np.array([inset["lon"]]), c)
+                if float(iz[0]) <= -0.015:
+                    continue
+                anchor_x, anchor_y = gcx + float(ix[0]), gcy - float(iy[0])
+                face = cl((float(iz[0]) + 0.035) / 0.20)
+            else:
+                px_, py_ = fp(inset["lat"], inset["lon"])
+                anchor_x, anchor_y = PX + px_ / k, PY + py_ / k
+                face = 1.0 if 0 <= anchor_x <= W and 0 <= anchor_y <= H else 0.0
+            if face <= 0.01:
+                continue
+            # Reveal with the nearest pin's spoken beat; no independent decorative animation.
+            nearest = min(range(len(pins)), key=lambda j: hav_km((pins[j]["lat"], pins[j]["lon"]), (inset["lat"], inset["lon"])))
+            iq = e_out(cl((t - pin_t[nearest] - 0.10) / 0.42))
+            if iq <= 0.01:
+                continue
+            is_circle = inset.get("shape") == "circle"
+            # Match the actual reference proportions: a wider archival still with a thin
+            # yellow underline, or a larger circular family portrait with a red name ribbon.
+            iw, ih = (136, 136) if is_circle else (216, 122)
+            crop_x = float(inset.get("crop_x", 0.5))
+            crop_y = float(inset.get("crop_y", 0.45))
+            crop_x = min(1.0, max(0.0, crop_x))
+            crop_y = min(1.0, max(0.0, crop_y))
+            photo = ImageOps.fit(inset["_img"], (iw, ih), Image.LANCZOS,
+                                 centering=(crop_x, crop_y)).convert("RGBA")
+            if is_circle:
+                mask = Image.new("L", (iw, ih), 0)
+                ImageDraw.Draw(mask).ellipse((2, 2, iw - 2, ih - 2), fill=255)
+                photo.putalpha(mask)
+                # The reference circle has its red family/name strip across the lower portion.
+                ribbon = Image.new("RGBA", (iw, ih), (0, 0, 0, 0))
+                rd = ImageDraw.Draw(ribbon)
+                ribbon_top = 94
+                rd.rectangle((2, ribbon_top, iw - 2, ih - 8), fill=(154, 26, 35, 242))
+                rlab = text_layer(inset["label_hi"], font_for(inset["label_hi"], 17, "label"),
+                                  fill=(255, 255, 255), max_w=iw - 14)
+                ribbon.alpha_composite(rlab, ((iw - rlab.width) // 2,
+                                              ribbon_top + max(0, (ih - 8 - ribbon_top - rlab.height) // 2)))
+                ribbon.putalpha(ImageChops.multiply(ribbon.getchannel("A"), mask))
+                photo = Image.alpha_composite(photo, ribbon)
+            # The rectangular archival inset has no card frame or extra caption in the reference.
+            side = -1 if anchor_x > W * 0.62 else 1
+            x_offset = 132 if is_circle else 244
+            y_offset = 88 if is_circle else 62
+            cx = min(W - iw / 2 - 10, max(iw / 2 + 10, anchor_x + side * x_offset))
+            cy = min(H - ih / 2 - 12, max(ih / 2 + 12, anchor_y - y_offset - inset_index * 8))
+            fr.alpha_composite(photo, (int(cx - iw / 2), int(cy - ih / 2)))
+            if not is_circle:
+                dd = ImageDraw.Draw(fr)
+                dd.rectangle((int(cx - iw / 2), int(cy + ih / 2 + 3),
+                              int(cx + iw / 2), int(cy + ih / 2 + 8)),
+                             fill=(245, 195, 55, int(255 * iq * face)))
+        # Reference map treatment uses a restrained blue route and small yellow place markers.
+        # No extra compass, scale HUD, animated chevron, target pulse or oversized distance counter.
         return fr
     return draw
 
@@ -8959,10 +10806,141 @@ SK_THEMES = {
 }
 
 
+def make_multi_draw(sc, dur, speech_dur, pal):
+    """Animated documentary split-screen: reveal 2-3 real-photo panels on the spoken beats."""
+    items = [x for x in (sc.get("items") or []) if x.get("image")]
+    if len(items) < 2:
+        # A malformed/incomplete split scene must never crash the render.
+        def fallback(t):
+            fr = Image.new("RGB", (W, H), (12, 14, 20))
+            d = ImageDraw.Draw(fr)
+            d.rectangle((0, 0, W, 9), fill=tuple(pal.get("accent", (210, 45, 40))))
+            return fr
+        return fallback
+    n = min(3, len(items))
+    # The supplied reference repeatedly uses a full-frame two-photo spread
+    # with a clean diagonal white divider. Use it for exactly two subjects;
+    # retain the existing three-panel treatment when three are named.
+    if n == 2:
+        panels = []
+        for it in items[:2]:
+            try:
+                im = Image.open(it["image"]).convert("RGB") if isinstance(it["image"], (str, Path)) else it["image"].convert("RGB")
+                im = ImageOps.fit(im, (W, H), Image.LANCZOS)
+            except Exception:
+                im = Image.new("RGB", (W, H), (25, 28, 38))
+            # Keep photographs documentary-real; only a restrained bottom
+            # gradient is added to support the spoken subject labels.
+            im = im.convert("RGBA")
+            shade = Image.new("RGBA", (W, H), (0, 0, 0, 0))
+            sd = ImageDraw.Draw(shade)
+            for yy in range(H - 210, H):
+                aa = int(155 * (yy - (H - 210)) / 210)
+                sd.line((0, yy, W, yy), fill=(0, 0, 0, aa))
+            panels.append(Image.alpha_composite(im, shade))
+        # Left panel occupies the upper-left side; right panel the lower-right.
+        # This diagonal matches the white angled cuts visible in the reference.
+        mask = Image.new("L", (W * 2, H * 2), 0)
+        ImageDraw.Draw(mask).polygon([(0, 0), (int(W * 1.10), 0),
+                                      (int(W * 0.90), H * 2), (0, H * 2)], fill=255)
+        mask = mask.resize((W, H), Image.Resampling.LANCZOS)
+        labels = []
+        for it in items[:2]:
+            label = clean_short(it.get("label_hi") or it.get("query_en") or "", 42)
+            labels.append(text_layer(label, load_font(44, "head"), fill=(255, 255, 255),
+                                     stroke=2, stroke_fill=(15, 12, 12),
+                                     shadow=(0, 3, 6, 0.85), max_w=int(W * 0.38)))
+        def draw_diagonal(t):
+            fr = Image.new("RGB", (W, H), (8, 10, 16))
+            # Reveal both real-photo panels together, rather than inventing
+            # extra motion or effects not visible in the supplied reference.
+            starts = [float(x.get("t", 0.0) or 0.0) for x in items[:2]]
+            q = cl((t - min(starts)) / 0.42)
+            q = e_back(q) if q > 0 else 0
+            if q <= 0:
+                return fr
+            comp = Image.composite(panels[0], panels[1], mask).convert("RGB")
+            if q < 1:
+                reveal = Image.new("L", (W, H), 0)
+                ImageDraw.Draw(reveal).rectangle((0, 0, W, int(H * q)), fill=255)
+                fr.paste(comp, (0, 0), reveal)
+            else:
+                fr = comp
+            # Narrow white diagonal seam, no glow or decorative badge.
+            dd = ImageDraw.Draw(fr)
+            dd.line([(int(W * 0.55), 0), (int(W * 0.45), H)], fill=(245, 245, 238), width=7)
+            for idx, (it, lab) in enumerate(zip(items[:2], labels)):
+                st = starts[idx]
+                a = cl((t - st - 0.30) / 0.28)
+                if a > 0 and lab.width:
+                    x = int(W * (0.22 if idx == 0 else 0.78))
+                    y = H - 88
+                    put(fr, lab, x, y, 1.0, a)
+            if sc.get("vs"):
+                d2 = ImageDraw.Draw(fr)
+                d2.rounded_rectangle((W // 2 - 34, H // 2 - 28, W // 2 + 34, H // 2 + 28), 14,
+                                     fill=(175, 24, 30), outline=(255, 235, 210), width=2)
+                d2.text((W // 2, H // 2), "VS", font=load_font(34, "head"), fill=(255, 255, 255), anchor="mm")
+            return fr
+        return draw_diagonal
+    gap = 12
+    margin = 34
+    panel_w = (W - 2 * margin - gap * (n - 1)) // n
+    panel_h = H - 150
+    y0 = 54
+    panels = []
+    for i, it in enumerate(items[:n]):
+        try:
+            im = Image.open(it["image"]).convert("RGB") if isinstance(it["image"], (str, Path)) else it["image"].convert("RGB")
+            im = ImageOps.fit(im, (panel_w, panel_h), Image.LANCZOS)
+        except Exception:
+            im = Image.new("RGB", (panel_w, panel_h), (25, 28, 38))
+        # restrained dark documentary frame and soft bottom gradient for readable labels
+        overlay = Image.new("RGBA", im.size, (0, 0, 0, 0))
+        od = ImageDraw.Draw(overlay)
+        for yy in range(panel_h - 190, panel_h):
+            aa = int(190 * (yy - (panel_h - 190)) / 190)
+            od.line((0, yy, panel_w, yy), fill=(0, 0, 0, aa))
+        im = Image.alpha_composite(im.convert("RGBA"), overlay)
+        label = clean_short(it.get("label_hi") or it.get("query_en") or "", 42)
+        lab = text_layer(label, load_font(42, "head"), fill=(255, 255, 255), stroke=2,
+                         stroke_fill=(20, 10, 10), shadow=(0, 3, 6, 0.8), max_w=panel_w - 44)
+        panels.append((im, lab, float(it.get("t", 0.0) or 0.0)))
+
+    def draw(t):
+        fr = Image.new("RGB", (W, H), (8, 10, 16))
+        d = ImageDraw.Draw(fr)
+        d.rectangle((0, 0, W, 9), fill=tuple(pal.get("accent", (210, 45, 40))))
+        for i, (im, lab, start) in enumerate(panels):
+            x = margin + i * (panel_w + gap)
+            q = cl((t - start) / 0.48)
+            q = e_back(q) if q > 0 else 0
+            if q <= 0:
+                continue
+            # each panel grows from a narrow sliver, then holds with a gentle camera push
+            ww = max(2, int(panel_w * q))
+            crop = im.crop((0, 0, ww, panel_h))
+            fr.paste(crop.convert("RGB"), (x, y0))
+            ImageDraw.Draw(fr).rectangle((x, y0, x + ww - 1, y0 + panel_h - 1), outline=(220, 205, 175), width=2)
+            if q > 0.72:
+                a = cl((q - 0.72) / 0.28)
+                put(fr, lab, x + panel_w / 2, y0 + panel_h - 64, 1.0, a)
+        if sc.get("vs") and n == 2:
+            d = ImageDraw.Draw(fr)
+            d.rounded_rectangle((W // 2 - 38, H // 2 - 34, W // 2 + 38, H // 2 + 34), 20,
+                                fill=(175, 24, 30), outline=(255, 235, 210), width=3)
+            vf = load_font(38, "head")
+            d.text((W // 2, H // 2), "VS", font=vf, fill=(255, 255, 255), anchor="mm")
+        return fr
+    return draw
+
+
 def _make_draw(sc, dur, sp, pal, ctx, events):
     typ = sc["type"]
     if typ == "map":
         return make_map_draw(sc, dur, sp, pal, events)
+    if typ == "multi":
+        return make_multi_draw(sc, dur, sp, pal)
     return make_photo_draw(sc, dur, sp, ctx, events, pal)
 
 
@@ -10205,15 +12183,101 @@ def make_visuals(scenes, imgdir):
         if el_ > 125 and not LOCAL_SD["dead"]:
             LOCAL_SD["dead"] = True
             log("time guard: slow local AI pictures off")
-        if sc["type"] == "photo":
-            for n_, it in enumerate(sc.get("items") or []):
-                if it["kind"] == "person" and it.get("photo_img") is None:
+        if sc["type"] == "map":
+            mp = sc.get("map") or {}
+            for n_, inset in enumerate((mp.get("insets") or [])[:1]):
+                if inset.get("image") is not None:
+                    continue
+                ip = imgdir / f"{i:03d}_map_inset{n_}.png"
+                requested += 1
+                CF_STATE["used"] += 1
+                try:
+                    # Map insets imitate archival/person/family photographs from the reference.
+                    # Use only an actual openly licensed Wikimedia photograph here; never invent
+                    # a historical-looking portrait or family image when the real source is absent.
+                    subject = inset.get("entity_en") or inset.get("query_en", "")
+                    if wiki_real_photo(subject, ip, (1920, 1080)) and verify_image(ip, subject):
+                        inset["image"] = ip
+                        pool.append(ip)
+                        scene_imgs.append(ip)
+                    else:
+                        failed += 1
+                        log(f"no verified real map inset photo found for scene {i + 1}: {inset.get('label_hi', '')}; inset skipped")
+                except Exception as e:
+                    failed += 1
+                    log("map inset real-photo lookup failed:", type(e).__name__, str(e)[:100])
+        elif sc["type"] == "multi":
+            words = sc.get("narration_hi", "").split()
+            wt = sc.get("wt") or []
+            its = [x for x in (sc.get("items") or []) if isinstance(x, dict)][:3]
+            for n_, it in enumerate(its):
+                # Place each panel at the spoken word when timing is available; otherwise stagger evenly.
+                if it.get("t") is None:
                     try:
-                        pp_ = imgdir / f"{i:03d}_i{n_}_person.png"
+                        wi = int(it.get("w", round(n_ * max(1, len(words) - 1) / max(1, len(its) - 1))))
+                        it["t"] = float(wt[min(max(0, wi), len(wt) - 1)][0]) if wt else float(sc.get("speech_dur", sc.get("dur", 6.0))) * n_ / max(1, len(its))
+                    except Exception:
+                        it["t"] = float(sc.get("speech_dur", sc.get("dur", 6.0))) * n_ / max(1, len(its))
+                if it.get("image"):
+                    continue
+                pp = clean_short(it.get("prompt_en") or ("realistic documentary photograph of " + it.get("query_en", "")), 500)
+                q = clean_short(it.get("query_en", ""), 100)
+                ip = imgdir / f"{i:03d}_multi{n_}.png"
+                requested += 1
+                CF_STATE["used"] += 1
+                try:
+                    if gen_image(pp, ip, "photo", query=q, entity=clean_short(it.get("entity_en", ""), 100)):
+                        it["image"] = ip
+                        pool.append(ip)
+                        scene_imgs.append(ip)
+                    else:
+                        failed += 1
+                        fill = pick_fill(pool, uses, prev_img, scene_imgs)
+                        if fill is None:
+                            fill = emergency_picture(ip, i * 10 + n_)
+                        it["image"] = fill
+                except Exception as e:
+                    failed += 1
+                    log("split panel image failed:", type(e).__name__, str(e)[:100])
+                    fill = pick_fill(pool, uses, prev_img, scene_imgs) or emergency_picture(ip, i * 10 + n_)
+                    it["image"] = fill
+            sc["items"] = its
+        elif sc["type"] == "photo":
+            for n_, it in enumerate(sc.get("items") or []):
+                if it["kind"] in ("person", "id_doc") and it.get("photo_img") is None:
+                    try:
+                        pp_ = imgdir / f"{i:03d}_i{n_}_{it['kind']}.png"
                         if person_photo(it.get("entity_en", ""), pp_):
-                            it["photo_img"] = Image.open(pp_).convert("RGB")
+                            if verify_image(pp_, it.get("entity_en", "")):
+                                it["photo_img"] = Image.open(pp_).convert("RGB")
                     except Exception as e:  # noqa
                         log("person photo failed:", type(e).__name__, str(e)[:100])
+                if it["kind"] == "press" and it.get("photo_entity_en") and it.get("photo_img") is None:
+                    # Optional photo/document spread: use only an exact, script-supplied
+                    # entity and a verified real Wikimedia image. No guessed person/photo.
+                    try:
+                        photo_entity = clean_short(it.get("photo_entity_en"), 100)
+                        photo_path = imgdir / f"{i:03d}_i{n_}_press_photo.jpg"
+                        if photo_entity and wiki_real_photo(photo_entity, photo_path, (1920, 1080)) and verify_image(photo_path, photo_entity):
+                            it["photo_img"] = Image.open(photo_path).convert("RGB")
+                    except Exception as e:  # noqa
+                        log("press spread photo skipped:", type(e).__name__, str(e)[:90])
+                if it["kind"] == "network":
+                    # Resolve portraits only for exact English entity names supplied
+                    # in the script. A missing/uncertain portrait leaves the reference
+                    # silhouette in place; no relationship or identity is guessed.
+                    for node_ix, node in enumerate((it.get("nodes") or [])[:9]):
+                        if not isinstance(node, dict) or node.get("photo_img") is not None:
+                            continue
+                        entity = clean_short(node.get("entity_en"), 100)
+                        if not entity:
+                            continue
+                        try:
+                            pp_ = imgdir / f"{i:03d}_i{n_}_network_node{node_ix}.jpg"
+                            if person_photo(entity, pp_) and verify_image(pp_, entity):
+                                node["photo_img"] = Image.open(pp_).convert("RGB")
+                        except Exception as e:  # noqa
+                            log("network node portrait skipped:", entity, type(e).__name__, str(e)[:90])
                 if it["kind"] == "feature" and it.get("png_img") is None and EXPLAIN_MAX[0] > 1:
                     EXPLAIN_MAX[0] -= 2
                     try:
