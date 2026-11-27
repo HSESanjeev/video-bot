@@ -863,6 +863,19 @@
    "voice": "gemini Charon",
    "youtube_id": null,
    "facebook_id": null
+  },
+  {
+   "date": "2026-11-27T00:37:37+00:00",
+   "topic_en": "Operation Meghdoot (1984): How the Indian Army Preempted Pakistan to Capture the Highest Battlefield on Earth at Siachen",
+   "title_hi": "ऑपरेशन मेघदूत: दुनिया की सबसे ऊंची जंग की कहानी",
+   "category": "story",
+   "style": "kahani",
+   "theme": "sky",
+   "mood": "epic",
+   "seconds": 120,
+   "voice": "gemini Charon",
+   "youtube_id": null,
+   "facebook_id": null
   }
  ]
 }
